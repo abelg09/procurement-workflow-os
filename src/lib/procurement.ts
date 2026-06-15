@@ -18,7 +18,6 @@ export const STATUSES = [
   "Rashid Auto Approved",
   "Rashid Declined",
   "Dr. Masjid Review",
-  "Dr. Masjid Declined",
   "Edlyn Confirmation",
   "Purchase in Progress",
   "Invoice Uploaded",
@@ -50,7 +49,7 @@ export const WORKFLOW_STAGES: Array<{
   {
     id: 3,
     key: "dr-masjid",
-    label: "Dr. Masjid Approval",
+    label: "Dr. Masjid Review",
     ownerRole: "Dr. Masjid",
   },
   {
@@ -237,8 +236,7 @@ export type WorkflowAction =
   | { type: "mona-clarify"; comment: string }
   | { type: "rashid-approve"; comment?: string }
   | { type: "rashid-decline"; declineReason: string }
-  | { type: "dr-approve"; comment?: string }
-  | { type: "dr-decline"; declineReason: string }
+  | { type: "dr-review"; comment?: string }
   | { type: "edlyn-confirm"; comment?: string }
   | { type: "edlyn-upload-invoice"; invoice: InvoiceDetails; comment?: string }
   | { type: "aileen-clear-invoice"; financeNotes?: string }
@@ -635,8 +633,8 @@ export const seedNotifications: NotificationRecord[] = [
     id: "notice-2",
     userId: drMasjid.id,
     requestId: "PR-102",
-    title: "Approval pending",
-    body: "PR-102 is waiting for Dr. Masjid approval.",
+    title: "Review pending",
+    body: "PR-102 is waiting for Dr. Masjid review.",
     type: "assigned",
     read: false,
     createdAt: "2026-06-12T09:20:00.000Z",
@@ -680,7 +678,6 @@ export function getStageIndex(stage: WorkflowStage) {
 export function isDeclined(status: RequestStatus) {
   return (
     status === "Rashid Declined" ||
-    status === "Dr. Masjid Declined" ||
     status === "Sent Back for Clarification"
   );
 }
@@ -719,9 +716,9 @@ export function getPendingAction(request: ProcurementRequest) {
     case "Rashid Review":
       return "Rashid to approve or decline";
     case "Dr. Masjid Review":
-      return "Dr. Masjid to approve or decline";
+      return "Dr. Masjid to review and forward to Edlyn";
     case "Rashid Auto Approved":
-      return "Dr. Masjid to approve or decline";
+      return "Dr. Masjid to review and forward to Edlyn";
     case "Edlyn Confirmation":
       return "Edlyn to confirm item details";
     case "Purchase in Progress":
@@ -738,7 +735,6 @@ export function getPendingAction(request: ProcurementRequest) {
     case "Completed":
       return "No pending action";
     case "Rashid Declined":
-    case "Dr. Masjid Declined":
       return "Decline reason recorded; Mona to review";
     case "Sent Back for Clarification":
       return "Employee to clarify request";
@@ -928,7 +924,7 @@ export function transitionRequest(
             userId: assignee.id,
             requestId,
             title: "Auto-approved request ready",
-            body: `${editable.id} was auto approved at Rashid stage and is ready for Dr. Masjid.`,
+            body: `${editable.id} was auto approved at Rashid stage and is ready for Dr. Masjid review.`,
             type: "approved",
           },
           dateTime,
@@ -990,9 +986,9 @@ export function transitionRequest(
         {
           userId: assignee.id,
           requestId,
-          title: "Approval required",
-          body: `${editable.id} is ready for Dr. Masjid approval.`,
-          type: "approved",
+          title: "Review required",
+          body: `${editable.id} is ready for Dr. Masjid review.`,
+          type: "assigned",
         },
         dateTime,
       );
@@ -1021,7 +1017,7 @@ export function transitionRequest(
       );
       break;
     }
-    case "dr-approve": {
+    case "dr-review": {
       if (!canAct(["Dr. Masjid Review", "Rashid Auto Approved"], "Dr. Masjid")) {
         return state;
       }
@@ -1029,7 +1025,7 @@ export function transitionRequest(
       editable.status = "Edlyn Confirmation";
       editable.stage = "edlyn";
       editable.previousResponsibleId = actor.id;
-      actionLabel = "Dr. Masjid approved request";
+      actionLabel = "Dr. Masjid completed review";
       comment = workflowAction.comment;
       addNotification(
         nextState.notifications,
@@ -1037,36 +1033,8 @@ export function transitionRequest(
           userId: assignee.id,
           requestId,
           title: "Purchase task assigned",
-          body: `${editable.id} is approved and ready for item confirmation.`,
-          type: "approved",
-        },
-        dateTime,
-      );
-      break;
-    }
-    case "dr-decline": {
-      if (
-        !canAct(["Dr. Masjid Review", "Rashid Auto Approved"], "Dr. Masjid") ||
-        !hasText(workflowAction.declineReason)
-      ) {
-        return state;
-      }
-      const fallback = requireRoleUser(state.users, "Mona");
-      const previousResponsible =
-        getUserById(state.users, editable.previousResponsibleId ?? "") ?? fallback;
-      editable.status = "Dr. Masjid Declined";
-      editable.stage = "dr-masjid";
-      editable.assigneeId = previousResponsible.id;
-      actionLabel = "Dr. Masjid declined request";
-      declineReason = workflowAction.declineReason;
-      addNotification(
-        nextState.notifications,
-        {
-          userId: previousResponsible.id,
-          requestId,
-          title: "Request declined",
-          body: `${editable.id} was declined by Dr. Masjid: ${declineReason}`,
-          type: "declined",
+          body: `${editable.id} has been reviewed by Dr. Masjid and is ready for item confirmation.`,
+          type: "assigned",
         },
         dateTime,
       );
@@ -1351,8 +1319,14 @@ export function createDailyReminderNotifications(state: ProcurementState) {
       {
         userId: request.assigneeId,
         requestId: request.id,
-        title: "Daily approval reminder",
-        body: `${request.id} is still pending your approval.`,
+        title:
+          request.status === "Dr. Masjid Review"
+            ? "Daily review reminder"
+            : "Daily approval reminder",
+        body:
+          request.status === "Dr. Masjid Review"
+            ? `${request.id} is still pending your review.`
+            : `${request.id} is still pending your approval.`,
         type: "reminder",
       },
       dateTime,
@@ -1460,37 +1434,57 @@ export function serializeState(state: ProcurementState) {
 }
 
 export function parseState(serialized: string | null) {
-  const migrateNames = (state: ProcurementState): ProcurementState => ({
-    ...state,
-    users: state.users.map((user) =>
-      user.name === "Layla Hassan" ? { ...user, name: "Abel Gonsalves" } : user,
-    ),
-    requests: state.requests.map((request) => ({
-      ...request,
-      department:
-        request.department === "IT"
-          ? "Engineering"
-          : request.department === "Facilities"
-            ? "Operations"
-            : request.department,
-      employeeName:
-        request.employeeName === "Layla Hassan"
-          ? "Abel Gonsalves"
-          : request.employeeName === "Omar Farouk"
-            ? "Bilal G"
-            : request.employeeName,
-    })),
-    auditLogs: state.auditLogs.map((log) => ({
-      ...log,
-      userName: log.userName === "Layla Hassan" ? "Abel Gonsalves" : log.userName,
-    })),
-    notifications: state.notifications.map((notification) => ({
-      ...notification,
-      body: notification.body
-        .replaceAll("Layla Hassan", "Abel Gonsalves")
-        .replaceAll("Omar Farouk", "Bilal G"),
-    })),
-  });
+  const migrateNames = (state: ProcurementState): ProcurementState => {
+    const drMasjidUser = state.users.find((user) => user.role === "Dr. Masjid");
+
+    return {
+      ...state,
+      users: state.users.map((user) =>
+        user.name === "Layla Hassan" ? { ...user, name: "Abel Gonsalves" } : user,
+      ),
+      requests: state.requests.map((request) => {
+        const deprecatedDrDecline = String(request.status) === "Dr. Masjid Declined";
+
+        return {
+          ...request,
+          department:
+            request.department === "IT"
+              ? "Engineering"
+              : request.department === "Facilities"
+                ? "Operations"
+                : request.department,
+          employeeName:
+            request.employeeName === "Layla Hassan"
+              ? "Abel Gonsalves"
+              : request.employeeName === "Omar Farouk"
+                ? "Bilal G"
+                : request.employeeName,
+          status: deprecatedDrDecline ? "Dr. Masjid Review" : request.status,
+          stage: deprecatedDrDecline ? "dr-masjid" : request.stage,
+          assigneeId:
+            deprecatedDrDecline && drMasjidUser
+              ? drMasjidUser.id
+              : request.assigneeId,
+        };
+      }),
+      auditLogs: state.auditLogs.map((log) => ({
+        ...log,
+        userName: log.userName === "Layla Hassan" ? "Abel Gonsalves" : log.userName,
+      })),
+      notifications: state.notifications.map((notification) => ({
+        ...notification,
+        title:
+          notification.title === "Approval pending" &&
+          notification.body.includes("Dr. Masjid")
+            ? "Review pending"
+            : notification.title,
+        body: notification.body
+          .replaceAll("Layla Hassan", "Abel Gonsalves")
+          .replaceAll("Omar Farouk", "Bilal G")
+          .replaceAll("Dr. Masjid approval", "Dr. Masjid review"),
+      })),
+    };
+  };
 
   if (!serialized) {
     return migrateNames(initialState);

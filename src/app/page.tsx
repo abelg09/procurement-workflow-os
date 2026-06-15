@@ -922,37 +922,19 @@ function ActionPanel({
         {["Dr. Masjid Review", "Rashid Auto Approved"].includes(request.status) &&
         canUse("Dr. Masjid") ? (
           <div className="grid gap-3">
-            <TextArea
-              placeholder="Decline reason is required when declining"
-              value={declineReason}
-              onChange={(event) => setDeclineReason(event.target.value)}
-            />
-            <div className="flex flex-wrap gap-2">
-              <IconButton
-                icon={<CheckCircle2 className="h-4 w-4" />}
-                onClick={() => {
-                  onTransition(request.id, { type: "dr-approve", comment });
-                  clearText();
-                }}
-                variant="success"
-              >
-                Approve
-              </IconButton>
-              <IconButton
-                disabled={!declineReason.trim()}
-                icon={<XCircle className="h-4 w-4" />}
-                onClick={() => {
-                  onTransition(request.id, {
-                    type: "dr-decline",
-                    declineReason,
-                  });
-                  clearText();
-                }}
-                variant="danger"
-              >
-                Decline
-              </IconButton>
+            <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+              Dr. Masjid reviews the request details only. Approval decisions remain with Rashid.
             </div>
+            <IconButton
+              icon={<CheckCircle2 className="h-4 w-4" />}
+              onClick={() => {
+                onTransition(request.id, { type: "dr-review", comment });
+                clearText();
+              }}
+              variant="success"
+            >
+              Complete review
+            </IconButton>
           </div>
         ) : null}
 
@@ -1878,7 +1860,7 @@ function Dashboard({
       tone: "bg-slate-100 text-slate-700",
     },
     {
-      label: "Pending approvals",
+      label: "Pending approvals/reviews",
       value: metrics.pendingApprovals,
       icon: <Clock className="h-4 w-4" />,
       tone: "bg-amber-100 text-amber-700",

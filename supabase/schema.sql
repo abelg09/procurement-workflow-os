@@ -24,7 +24,6 @@ create type request_status as enum (
   'Rashid Auto Approved',
   'Rashid Declined',
   'Dr. Masjid Review',
-  'Dr. Masjid Declined',
   'Edlyn Confirmation',
   'Purchase in Progress',
   'Invoice Uploaded',
