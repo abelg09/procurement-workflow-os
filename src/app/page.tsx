@@ -72,6 +72,10 @@ import {
 } from "@/lib/procurement";
 
 const STORAGE_KEY = "procurement-workflow-state-v1";
+const PUBLIC_BASE_PATH =
+  process.env.NEXT_PUBLIC_GITHUB_PAGES === "true"
+    ? "/procurement-workflow-os"
+    : "";
 const hasSupabaseClientConfig = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
 );
@@ -2047,7 +2051,7 @@ export default function Home() {
                 alt="SULMI"
                 className="h-8 w-full object-contain"
                 height={36}
-                src="/sulmi-logo.svg"
+                src={`${PUBLIC_BASE_PATH}/sulmi-logo.svg`}
                 unoptimized
                 width={130}
               />
