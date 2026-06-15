@@ -1,6 +1,6 @@
 # Procurement Workflow OS
 
-Internal procurement workflow MVP built with Next.js, TypeScript, Tailwind, and Supabase-ready data structures.
+Internal procurement workflow application built with Next.js, TypeScript, Tailwind, and Supabase-ready data structures.
 
 ## Run
 
@@ -18,11 +18,11 @@ pnpm lint
 pnpm build
 ```
 
-## Demo Roles
+## Local Preview Accounts
 
-Use the role switcher in the header to act as:
+Use the active account selector in the header to validate each role workspace:
 
-- Employee: Layla Hassan
+- Employee: Abel Gonsalves
 - Mona
 - Rashid
 - Dr. Masjid
@@ -39,8 +39,9 @@ Use the role switcher in the header to act as:
 - Internal notification center and 3 PM reminder simulation
 - Full audit trail
 - Admin role/user editing, reassignment, CSV export, and Excel export
-- Procurement Assistant chatbot with deterministic database-backed answers
+- Procurement Assistant chatbot with deterministic procurement-data answers
 - Supabase schema in `supabase/schema.sql`
+- Admin system-readiness checks for database, authentication, and reminder deployment
 
 ## Supabase
 
@@ -52,4 +53,4 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-Apply `supabase/schema.sql` to a Supabase project. The current MVP runs immediately with seeded local demo data and localStorage persistence until real Supabase credentials are connected.
+Apply `supabase/schema.sql` to a Supabase project. The public GitHub Pages deployment runs as a static browser workspace; connect Supabase credentials and host the Next.js server routes for production database persistence, authentication, storage, and scheduled reminders.

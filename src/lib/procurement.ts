@@ -886,6 +886,12 @@ export function transitionRequest(
   let declineReason: string | undefined;
   let uploadedInvoiceReference: string | undefined;
 
+  const canAct = (statuses: RequestStatus[], role: Role) =>
+    statuses.includes(editable.status) &&
+    actor.role === role &&
+    editable.assigneeId === actor.id;
+  const hasText = (value?: string) => Boolean(value?.trim());
+
   const assignTo = (role: Role) => {
     const assignee = requireRoleUser(state.users, role);
     editable.assigneeId = assignee.id;
@@ -905,6 +911,9 @@ export function transitionRequest(
 
   switch (workflowAction.type) {
     case "mona-approve": {
+      if (!canAct(["Mona Review"], "Mona")) {
+        return state;
+      }
       comment = workflowAction.comment;
       if (editable.estimatedAmount < 300) {
         const assignee = assignTo("Dr. Masjid");
@@ -945,6 +954,9 @@ export function transitionRequest(
       break;
     }
     case "mona-clarify": {
+      if (!canAct(["Mona Review"], "Mona") || !hasText(workflowAction.comment)) {
+        return state;
+      }
       editable.status = "Sent Back for Clarification";
       editable.stage = "mona";
       editable.assigneeId = editable.submittedById;
@@ -964,6 +976,9 @@ export function transitionRequest(
       break;
     }
     case "rashid-approve": {
+      if (!canAct(["Rashid Review"], "Rashid")) {
+        return state;
+      }
       const assignee = assignTo("Dr. Masjid");
       editable.status = "Dr. Masjid Review";
       editable.stage = "dr-masjid";
@@ -984,6 +999,9 @@ export function transitionRequest(
       break;
     }
     case "rashid-decline": {
+      if (!canAct(["Rashid Review"], "Rashid") || !hasText(workflowAction.declineReason)) {
+        return state;
+      }
       const assignee = assignTo("Mona");
       editable.status = "Rashid Declined";
       editable.stage = "rashid";
@@ -1004,6 +1022,9 @@ export function transitionRequest(
       break;
     }
     case "dr-approve": {
+      if (!canAct(["Dr. Masjid Review", "Rashid Auto Approved"], "Dr. Masjid")) {
+        return state;
+      }
       const assignee = assignTo("Edlyn");
       editable.status = "Edlyn Confirmation";
       editable.stage = "edlyn";
@@ -1024,6 +1045,12 @@ export function transitionRequest(
       break;
     }
     case "dr-decline": {
+      if (
+        !canAct(["Dr. Masjid Review", "Rashid Auto Approved"], "Dr. Masjid") ||
+        !hasText(workflowAction.declineReason)
+      ) {
+        return state;
+      }
       const fallback = requireRoleUser(state.users, "Mona");
       const previousResponsible =
         getUserById(state.users, editable.previousResponsibleId ?? "") ?? fallback;
@@ -1046,6 +1073,9 @@ export function transitionRequest(
       break;
     }
     case "edlyn-confirm": {
+      if (!canAct(["Edlyn Confirmation"], "Edlyn")) {
+        return state;
+      }
       editable.status = "Purchase in Progress";
       editable.stage = "edlyn";
       editable.assigneeId = actor.id;
@@ -1054,6 +1084,15 @@ export function transitionRequest(
       break;
     }
     case "edlyn-upload-invoice": {
+      if (
+        !canAct(["Purchase in Progress"], "Edlyn") ||
+        !hasText(workflowAction.invoice.invoiceNumber) ||
+        !hasText(workflowAction.invoice.uploadedInvoiceFile) ||
+        !Number.isFinite(workflowAction.invoice.invoiceAmount) ||
+        workflowAction.invoice.invoiceAmount <= 0
+      ) {
+        return state;
+      }
       const assignee = assignTo("Aileen");
       editable.status = "Aileen Finance Review";
       editable.stage = "aileen";
@@ -1076,6 +1115,9 @@ export function transitionRequest(
       break;
     }
     case "aileen-clear-invoice": {
+      if (!canAct(["Aileen Finance Review"], "Aileen") || !editable.invoice) {
+        return state;
+      }
       const assignee = assignTo("Edlyn");
       editable.status = "Invoice Cleared";
       editable.stage = "edlyn";
@@ -1114,6 +1156,9 @@ export function transitionRequest(
       break;
     }
     case "edlyn-confirm-order": {
+      if (!canAct(["Invoice Cleared"], "Edlyn")) {
+        return state;
+      }
       editable.status = "Order Confirmed";
       editable.stage = "edlyn";
       editable.assigneeId = actor.id;
@@ -1134,6 +1179,9 @@ export function transitionRequest(
       break;
     }
     case "edlyn-receive-item": {
+      if (!canAct(["Order Confirmed"], "Edlyn")) {
+        return state;
+      }
       const assignee = assignTo("Aileen");
       editable.status = "Item Received";
       editable.stage = "aileen";
@@ -1154,6 +1202,9 @@ export function transitionRequest(
       break;
     }
     case "aileen-close": {
+      if (!canAct(["Item Received"], "Aileen")) {
+        return state;
+      }
       editable.status = "Completed";
       editable.stage = "aileen";
       editable.assigneeId = actor.id;
@@ -1174,6 +1225,9 @@ export function transitionRequest(
       break;
     }
     case "admin-reassign": {
+      if (actor.role !== "Admin") {
+        return state;
+      }
       const assignee = getUserById(state.users, workflowAction.assigneeId);
       if (!assignee) {
         return state;

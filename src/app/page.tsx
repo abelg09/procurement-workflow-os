@@ -64,6 +64,7 @@ import {
   makeId,
   markNotificationRead,
   nowIso,
+  nextRequestId,
   parseState,
   serializeState,
   submitProcurementRequest,
@@ -71,6 +72,9 @@ import {
 } from "@/lib/procurement";
 
 const STORAGE_KEY = "procurement-workflow-state-v1";
+const hasSupabaseClientConfig = Boolean(
+  process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+);
 
 type View = "dashboard" | "new-request" | "notifications" | "admin";
 
@@ -124,6 +128,12 @@ const money = (amount: number, currency = "AED") =>
 
 const classNames = (...values: Array<string | false | null | undefined>) =>
   values.filter(Boolean).join(" ");
+
+const defaultRequiredByDate = () => {
+  const date = new Date();
+  date.setDate(date.getDate() + 5);
+  return date.toISOString().slice(0, 10);
+};
 
 function IconButton({
   children,
@@ -305,7 +315,7 @@ function buildAttachmentReferences(files: FileList | null, type: AttachmentRefer
     id: makeId("file"),
     name: file.name,
     type,
-    path: `local-demo/${type}/${file.name}`,
+    path: `procurement-files/${type}/${file.name}`,
     uploadedAt: nowIso(),
   }));
 }
@@ -315,7 +325,7 @@ function RequestForm({
   onSubmit,
 }: {
   currentUser: UserProfile;
-  onSubmit: (draft: ProcurementRequestDraft) => void;
+  onSubmit: (draft: ProcurementRequestDraft) => string | void;
 }) {
   const [employeeName, setEmployeeName] = useState(
     currentUser.role === "Employee" ? currentUser.name : "",
@@ -334,7 +344,7 @@ function RequestForm({
   const [vendorName, setVendorName] = useState("");
   const [reasonForPurchase, setReasonForPurchase] = useState("");
   const [priority, setPriority] = useState<(typeof PRIORITIES)[number]>("Normal");
-  const [requiredByDate, setRequiredByDate] = useState("2026-06-20");
+  const [requiredByDate, setRequiredByDate] = useState(defaultRequiredByDate);
   const [attachments, setAttachments] = useState<AttachmentReference[]>([]);
   const [vendorContact, setVendorContact] = useState("");
   const [vendorCompany, setVendorCompany] = useState("");
@@ -346,16 +356,55 @@ function RequestForm({
   const [websiteLink, setWebsiteLink] = useState("");
   const [eBrochureLink, setEBrochureLink] = useState("");
   const [businessLocation, setBusinessLocation] = useState("");
+  const [formError, setFormError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    onSubmit({
+    const amountValue = Number(estimatedAmount);
+    const quantityValue = Number(quantity);
+    const dueDate = requiredByDate ? new Date(`${requiredByDate}T00:00:00`) : null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    setSuccessMessage("");
+
+    if (!employeeName.trim()) {
+      setFormError("Employee name is required.");
+      return;
+    }
+    if (!itemName.trim()) {
+      setFormError("Item name is required.");
+      return;
+    }
+    if (!Number.isFinite(quantityValue) || quantityValue < 1) {
+      setFormError("Quantity must be at least 1.");
+      return;
+    }
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      setFormError("Enter an estimated amount greater than 0.");
+      return;
+    }
+    if (currency === "Other" && !customCurrency.trim()) {
+      setFormError("Enter the currency when selecting Other.");
+      return;
+    }
+    if (!dueDate || Number.isNaN(dueDate.getTime())) {
+      setFormError("Required by date is required.");
+      return;
+    }
+    if (dueDate < today) {
+      setFormError("Required by date cannot be in the past.");
+      return;
+    }
+
+    const requestId = onSubmit({
       employeeName,
       department,
       itemName,
       itemDescription,
-      quantity,
-      estimatedAmount: Number(estimatedAmount || 0),
+      quantity: quantityValue,
+      estimatedAmount: amountValue,
       currency: currency === "Other" ? customCurrency || "Other" : currency,
       vendorName,
       reasonForPurchase,
@@ -375,17 +424,45 @@ function RequestForm({
         businessLocation,
       },
     });
+    setFormError("");
+    setSuccessMessage(
+      `${requestId ?? "Request"} submitted to Mona for first review.`,
+    );
     setItemName("");
     setItemDescription("");
     setQuantity(1);
     setEstimatedAmount("");
+    setCurrency("AED");
+    setCustomCurrency("");
     setVendorName("");
     setReasonForPurchase("");
+    setPriority("Normal");
+    setRequiredByDate(defaultRequiredByDate());
     setAttachments([]);
+    setVendorContact("");
+    setVendorCompany("");
+    setTrnNumber("");
+    setTradeLicense("");
+    setBankDetails("");
+    setVatRegistration("");
+    setOwnerDocument("");
+    setWebsiteLink("");
+    setEBrochureLink("");
+    setBusinessLocation("");
   };
 
   return (
     <form className="grid gap-6" onSubmit={handleSubmit}>
+      {formError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
+          {formError}
+        </div>
+      ) : null}
+      {successMessage ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium text-emerald-800">
+          {successMessage}
+        </div>
+      ) : null}
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-5 flex items-center gap-2">
           <ClipboardList className="h-5 w-5 text-blue-700" />
@@ -668,48 +745,56 @@ function RequestsTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filtered.map((request) => (
-              <tr
-                className={classNames(
-                  "cursor-pointer transition hover:bg-blue-50/60",
-                  selectedRequestId === request.id ? "bg-blue-50" : "bg-white",
-                )}
-                key={request.id}
-                onClick={() => onSelect(request.id)}
-              >
-                <td className="px-4 py-3">
-                  <p className="font-bold text-slate-950">{request.id}</p>
-                  <p className="mt-1 max-w-52 truncate text-slate-500">
-                    {request.employeeName} - {request.itemName}
-                  </p>
-                </td>
-                <td className="px-4 py-3">
-                  {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
-                </td>
-                <td className="px-4 py-3">{getAssigneeName(request, users)}</td>
-                <td className="px-4 py-3 font-semibold">
-                  {money(request.estimatedAmount, request.currency)}
-                </td>
-                <td className="px-4 py-3">
-                  <StatusBadge status={request.status} />
-                </td>
-                <td className="px-4 py-3">
-                  {request.invoice ? (
-                    <span className="text-emerald-700">{request.invoice.invoiceNumber}</span>
-                  ) : (
-                    <span className="text-amber-700">Pending</span>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  <span className="line-clamp-2 max-w-72 text-slate-600">
-                    {getPendingAction(request)}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-slate-500">
-                  {formatDateTime(request.updatedAt)}
+            {filtered.length === 0 ? (
+              <tr>
+                <td className="px-4 py-8 text-center text-sm text-slate-500" colSpan={8}>
+                  No procurement requests match the current filters.
                 </td>
               </tr>
-            ))}
+            ) : (
+              filtered.map((request) => (
+                <tr
+                  className={classNames(
+                    "cursor-pointer transition hover:bg-blue-50/60",
+                    selectedRequestId === request.id ? "bg-blue-50" : "bg-white",
+                  )}
+                  key={request.id}
+                  onClick={() => onSelect(request.id)}
+                >
+                  <td className="px-4 py-3">
+                    <p className="font-bold text-slate-950">{request.id}</p>
+                    <p className="mt-1 max-w-52 truncate text-slate-500">
+                      {request.employeeName} - {request.itemName}
+                    </p>
+                  </td>
+                  <td className="px-4 py-3">
+                    {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
+                  </td>
+                  <td className="px-4 py-3">{getAssigneeName(request, users)}</td>
+                  <td className="px-4 py-3 font-semibold">
+                    {money(request.estimatedAmount, request.currency)}
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={request.status} />
+                  </td>
+                  <td className="px-4 py-3">
+                    {request.invoice ? (
+                      <span className="text-emerald-700">{request.invoice.invoiceNumber}</span>
+                    ) : (
+                      <span className="text-amber-700">Pending</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="line-clamp-2 max-w-72 text-slate-600">
+                      {getPendingAction(request)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-slate-500">
+                    {formatDateTime(request.updatedAt)}
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
@@ -1288,12 +1373,98 @@ function downloadBlob(content: BlobPart, filename: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
+function SystemReadiness({
+  hasSupabaseConfig,
+  onClearWorkspace,
+}: {
+  hasSupabaseConfig: boolean;
+  onClearWorkspace: () => void;
+}) {
+  const items = [
+    {
+      label: "Database",
+      value: hasSupabaseConfig ? "Supabase configured" : "Browser workspace active",
+      detail: hasSupabaseConfig
+        ? "Requests can be wired to the Supabase project."
+        : "Requests are stored in this browser until Supabase credentials are connected.",
+      ready: hasSupabaseConfig,
+    },
+    {
+      label: "Authentication",
+      value: hasSupabaseConfig ? "Supabase Auth ready" : "Role workspace mode",
+      detail: hasSupabaseConfig
+        ? "Role records are prepared for Supabase Auth profiles."
+        : "Use the active account selector while running this static build.",
+      ready: hasSupabaseConfig,
+    },
+    {
+      label: "Reminders",
+      value: "3 PM reminder route prepared",
+      detail: "Daily reminder delivery is available when hosted with server routes or Supabase schedules.",
+      ready: true,
+    },
+  ];
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Shield className="h-5 w-5 text-blue-700" />
+            <h3 className="text-base font-bold text-slate-950">System readiness</h3>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            Operational checks for moving this workflow from browser storage into a hosted Supabase deployment.
+          </p>
+        </div>
+        <IconButton
+          icon={<RefreshCcw className="h-4 w-4" />}
+          onClick={onClearWorkspace}
+          variant="secondary"
+        >
+          Clear browser workspace
+        </IconButton>
+      </div>
+      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        {items.map((item) => (
+          <div
+            className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+            key={item.label}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                {item.label}
+              </p>
+              <span
+                className={classNames(
+                  "rounded-md px-2 py-1 text-xs font-semibold",
+                  item.ready
+                    ? "bg-emerald-100 text-emerald-800"
+                    : "bg-amber-100 text-amber-800",
+                )}
+              >
+                {item.ready ? "Ready" : "Action needed"}
+              </span>
+            </div>
+            <p className="mt-3 text-sm font-bold text-slate-950">{item.value}</p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">{item.detail}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AdminPanel({
   state,
   setState,
+  hasSupabaseConfig,
+  onClearWorkspace,
 }: {
   state: ProcurementState;
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
+  hasSupabaseConfig: boolean;
+  onClearWorkspace: () => void;
 }) {
   const [requestId, setRequestId] = useState(state.requests[0]?.id ?? "");
   const [assigneeId, setAssigneeId] = useState(state.users[0]?.id ?? "");
@@ -1332,6 +1503,11 @@ function AdminPanel({
 
   return (
     <section className="grid gap-5">
+      <SystemReadiness
+        hasSupabaseConfig={hasSupabaseConfig}
+        onClearWorkspace={onClearWorkspace}
+      />
+
       <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
@@ -1503,7 +1679,7 @@ function ProcurementAssistant({
           <h2 className="text-base font-bold text-slate-950">Procurement Assistant</h2>
         </div>
         <p className="mt-1 text-sm text-slate-500">
-          Database-backed answers for status, approvals, invoices, and stuck requests.
+          Procurement data answers for status, approvals, invoices, and stuck requests.
         </p>
       </div>
       <div className="grid max-h-[460px] gap-3 overflow-y-auto p-4">
@@ -1644,15 +1820,12 @@ function EmployeePortal({
       <RequestForm
         currentUser={currentUser}
         onSubmit={(draft) => {
-          const nextId = `PR-${
-            Math.max(
-              ...state.requests.map((request) => Number(request.id.replace("PR-", ""))),
-            ) + 1
-          }`;
+          const nextId = nextRequestId(state.requests);
           setState((current) =>
             submitProcurementRequest(current, draft, currentUser.id),
           );
           setSelectedRequestId(nextId);
+          return nextId;
         }}
       />
 
@@ -1851,7 +2024,14 @@ export default function Home() {
           },
         ];
 
-  const resetDemo = () => {
+  const clearBrowserWorkspace = () => {
+    if (
+      !window.confirm(
+        "Clear browser workspace data and reload the starter procurement records?",
+      )
+    ) {
+      return;
+    }
     setState(initialState);
     setSelectedRequestId("PR-102");
     window.localStorage.removeItem(STORAGE_KEY);
@@ -1886,7 +2066,10 @@ export default function Home() {
                 {currentUser.name} - Employee
               </div>
             ) : (
-              <>
+              <div className="grid min-w-72 gap-1">
+                <span className="text-xs font-semibold uppercase text-slate-500">
+                  Active account
+                </span>
                 <SelectInput
                   aria-label="Signed in user"
                   value={currentUser.id}
@@ -1906,14 +2089,7 @@ export default function Home() {
                     </option>
                   ))}
                 </SelectInput>
-                <IconButton
-                  icon={<RefreshCcw className="h-4 w-4" />}
-                  onClick={resetDemo}
-                  variant="secondary"
-                >
-                  Reset demo
-                </IconButton>
-              </>
+              </div>
             )}
           </div>
         </div>
@@ -1970,17 +2146,13 @@ export default function Home() {
           <RequestForm
             currentUser={currentUser}
             onSubmit={(draft) => {
+              const nextId = nextRequestId(state.requests);
               setState((current) =>
                 submitProcurementRequest(current, draft, currentUser.id),
               );
-              setSelectedRequestId(
-                `PR-${Math.max(
-                  ...state.requests.map((request) =>
-                    Number(request.id.replace("PR-", "")),
-                  ),
-                ) + 1}`,
-              );
+              setSelectedRequestId(nextId);
               setView("dashboard");
+              return nextId;
             }}
           />
         ) : null}
@@ -1997,7 +2169,12 @@ export default function Home() {
         ) : null}
 
         {view === "admin" && currentUser.role === "Admin" ? (
-          <AdminPanel setState={setState} state={state} />
+          <AdminPanel
+            hasSupabaseConfig={hasSupabaseClientConfig}
+            onClearWorkspace={clearBrowserWorkspace}
+            setState={setState}
+            state={state}
+          />
         ) : null}
       </div>
     </main>
