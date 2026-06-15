@@ -34,6 +34,8 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
   AuditLog,
   AttachmentReference,
+  CURRENCIES,
+  DEPARTMENTS,
   InvoiceDetails,
   NotificationRecord,
   PAYMENT_TERMS,
@@ -319,13 +321,16 @@ function RequestForm({
     currentUser.role === "Employee" ? currentUser.name : "",
   );
   const [department, setDepartment] = useState(
-    currentUser.role === "Employee" ? currentUser.department : "",
+    DEPARTMENTS.includes(currentUser.department as (typeof DEPARTMENTS)[number])
+      ? currentUser.department
+      : "Operations",
   );
   const [itemName, setItemName] = useState("");
   const [itemDescription, setItemDescription] = useState("");
   const [quantity, setQuantity] = useState(1);
-  const [estimatedAmount, setEstimatedAmount] = useState(0);
-  const [currency, setCurrency] = useState("AED");
+  const [estimatedAmount, setEstimatedAmount] = useState("");
+  const [currency, setCurrency] = useState<(typeof CURRENCIES)[number]>("AED");
+  const [customCurrency, setCustomCurrency] = useState("");
   const [vendorName, setVendorName] = useState("");
   const [reasonForPurchase, setReasonForPurchase] = useState("");
   const [priority, setPriority] = useState<(typeof PRIORITIES)[number]>("Normal");
@@ -350,8 +355,8 @@ function RequestForm({
       itemName,
       itemDescription,
       quantity,
-      estimatedAmount,
-      currency,
+      estimatedAmount: Number(estimatedAmount || 0),
+      currency: currency === "Other" ? customCurrency || "Other" : currency,
       vendorName,
       reasonForPurchase,
       priority,
@@ -373,7 +378,7 @@ function RequestForm({
     setItemName("");
     setItemDescription("");
     setQuantity(1);
-    setEstimatedAmount(0);
+    setEstimatedAmount("");
     setVendorName("");
     setReasonForPurchase("");
     setAttachments([]);
@@ -391,7 +396,11 @@ function RequestForm({
             <TextInput value={employeeName} onChange={(event) => setEmployeeName(event.target.value)} required />
           </Field>
           <Field label="Department" required>
-            <TextInput value={department} onChange={(event) => setDepartment(event.target.value)} required />
+            <SelectInput value={department} onChange={(event) => setDepartment(event.target.value)} required>
+              {DEPARTMENTS.map((item) => (
+                <option key={item}>{item}</option>
+              ))}
+            </SelectInput>
           </Field>
           <Field label="Item name" required>
             <TextInput value={itemName} onChange={(event) => setItemName(event.target.value)} required />
@@ -407,16 +416,36 @@ function RequestForm({
           </Field>
           <Field label="Estimated amount" required>
             <TextInput
+              inputMode="decimal"
               min={0}
-              type="number"
+              pattern="[0-9]*[.]?[0-9]*"
+              placeholder="Enter amount"
+              type="text"
               value={estimatedAmount}
-              onChange={(event) => setEstimatedAmount(Number(event.target.value))}
+              onChange={(event) =>
+                setEstimatedAmount(event.target.value.replace(/[^\d.]/g, ""))
+              }
               required
             />
           </Field>
-          <Field label="Currency">
-            <TextInput value={currency} onChange={(event) => setCurrency(event.target.value || "AED")} />
+          <Field label="Currency" required>
+            <SelectInput value={currency} onChange={(event) => setCurrency(event.target.value as typeof currency)} required>
+              {CURRENCIES.map((item) => (
+                <option key={item}>{item}</option>
+              ))}
+            </SelectInput>
           </Field>
+          {currency === "Other" ? (
+            <Field label="Other currency" required>
+              <TextInput
+                maxLength={12}
+                placeholder="Enter currency"
+                value={customCurrency}
+                onChange={(event) => setCustomCurrency(event.target.value.toUpperCase())}
+                required
+              />
+            </Field>
+          ) : null}
           <Field label="Vendor name">
             <TextInput value={vendorName} onChange={(event) => setVendorName(event.target.value)} />
           </Field>

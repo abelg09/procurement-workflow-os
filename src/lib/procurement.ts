@@ -82,6 +82,20 @@ export type PaymentTerm = (typeof PAYMENT_TERMS)[number];
 export const PRIORITIES = ["Low", "Normal", "High", "Urgent"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
+export const DEPARTMENTS = [
+  "Marketing",
+  "Operations",
+  "Engineering",
+  "Sales",
+  "Finance",
+  "HR",
+] as const;
+
+export type Department = (typeof DEPARTMENTS)[number];
+
+export const CURRENCIES = ["AED", "USD", "EUR", "GBP", "SAR", "INR", "Other"] as const;
+export type Currency = (typeof CURRENCIES)[number];
+
 export type UserProfile = {
   id: string;
   name: string;
@@ -397,7 +411,7 @@ export const seedRequests: ProcurementRequest[] = [
   {
     id: "PR-103",
     employeeName: "Bilal G",
-    department: "IT",
+    department: "Engineering",
     itemName: "Laptop docking stations",
     itemDescription: "USB-C docks for hybrid desks.",
     quantity: 3,
@@ -426,7 +440,7 @@ export const seedRequests: ProcurementRequest[] = [
   {
     id: "PR-104",
     employeeName: "Mariam Noor",
-    department: "Facilities",
+    department: "Operations",
     itemName: "Pantry water filters",
     itemDescription: "Replacement cartridges and fittings for pantry filtration.",
     quantity: 6,
@@ -1399,6 +1413,12 @@ export function parseState(serialized: string | null) {
     ),
     requests: state.requests.map((request) => ({
       ...request,
+      department:
+        request.department === "IT"
+          ? "Engineering"
+          : request.department === "Facilities"
+            ? "Operations"
+            : request.department,
       employeeName:
         request.employeeName === "Layla Hassan"
           ? "Abel Gonsalves"
