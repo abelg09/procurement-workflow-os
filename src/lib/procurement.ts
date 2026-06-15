@@ -1,0 +1,1408 @@
+export const ROLES = [
+  "Employee",
+  "Mona",
+  "Rashid",
+  "Dr. Masjid",
+  "Edlyn",
+  "Aileen",
+  "Admin",
+] as const;
+
+export type Role = (typeof ROLES)[number];
+
+export const STATUSES = [
+  "Draft",
+  "Submitted",
+  "Mona Review",
+  "Rashid Review",
+  "Rashid Auto Approved",
+  "Rashid Declined",
+  "Dr. Masjid Review",
+  "Dr. Masjid Declined",
+  "Edlyn Confirmation",
+  "Purchase in Progress",
+  "Invoice Uploaded",
+  "Aileen Finance Review",
+  "Invoice Cleared",
+  "Order Confirmed",
+  "Item Received",
+  "Completed",
+  "Sent Back for Clarification",
+] as const;
+
+export type RequestStatus = (typeof STATUSES)[number];
+
+export type WorkflowStage =
+  | "mona"
+  | "rashid"
+  | "dr-masjid"
+  | "edlyn"
+  | "aileen";
+
+export const WORKFLOW_STAGES: Array<{
+  id: number;
+  key: WorkflowStage;
+  label: string;
+  ownerRole: Role;
+}> = [
+  { id: 1, key: "mona", label: "Mona Review", ownerRole: "Mona" },
+  { id: 2, key: "rashid", label: "Rashid Approval", ownerRole: "Rashid" },
+  {
+    id: 3,
+    key: "dr-masjid",
+    label: "Dr. Masjid Approval",
+    ownerRole: "Dr. Masjid",
+  },
+  {
+    id: 4,
+    key: "edlyn",
+    label: "Edlyn Purchase and Item Confirmation",
+    ownerRole: "Edlyn",
+  },
+  {
+    id: 5,
+    key: "aileen",
+    label: "Aileen Finance Documentation",
+    ownerRole: "Aileen",
+  },
+];
+
+export const PAYMENT_TERMS = [
+  "COD",
+  "15 days credit",
+  "30 days credit",
+  "60 days credit",
+  "90 days credit",
+  "Bank transfer",
+  "LC",
+] as const;
+
+export type PaymentTerm = (typeof PAYMENT_TERMS)[number];
+
+export const PRIORITIES = ["Low", "Normal", "High", "Urgent"] as const;
+export type Priority = (typeof PRIORITIES)[number];
+
+export type UserProfile = {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  department: string;
+  active: boolean;
+};
+
+export type AttachmentReference = {
+  id: string;
+  name: string;
+  type: "request" | "vendor" | "invoice";
+  path: string;
+  uploadedAt: string;
+};
+
+export type VendorDetails = {
+  contactPerson: string;
+  companyName: string;
+  trnNumber: string;
+  tradeLicense: string;
+  bankDetails: string;
+  vatRegistration: string;
+  ownerDocument: string;
+  websiteLink: string;
+  eBrochureLink: string;
+  businessLocation: string;
+};
+
+export type InvoiceDetails = {
+  invoiceNumber: string;
+  invoiceAmount: number;
+  invoiceDate: string;
+  vendor: string;
+  uploadedInvoiceFile: string;
+  paymentTerms: PaymentTerm;
+  financeNotes: string;
+  clearedAt?: string;
+};
+
+export type ProcurementRequest = {
+  id: string;
+  employeeName: string;
+  department: string;
+  itemName: string;
+  itemDescription: string;
+  quantity: number;
+  estimatedAmount: number;
+  currency: string;
+  vendorName: string;
+  reasonForPurchase: string;
+  priority: Priority;
+  requiredByDate: string;
+  attachments: AttachmentReference[];
+  vendor: VendorDetails;
+  invoice?: InvoiceDetails;
+  status: RequestStatus;
+  stage: WorkflowStage;
+  assigneeId: string;
+  submittedById: string;
+  previousResponsibleId?: string;
+  orderConfirmedAt?: string;
+  itemReceivedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AuditLog = {
+  id: string;
+  requestId: string;
+  userId: string;
+  userName: string;
+  action: string;
+  dateTime: string;
+  previousStatus: RequestStatus;
+  newStatus: RequestStatus;
+  comment?: string;
+  declineReason?: string;
+  uploadedInvoiceReference?: string;
+  assignedPerson?: string;
+};
+
+export type NotificationRecord = {
+  id: string;
+  userId: string;
+  requestId: string;
+  title: string;
+  body: string;
+  type:
+    | "assigned"
+    | "approved"
+    | "declined"
+    | "invoice"
+    | "finance"
+    | "order"
+    | "received"
+    | "closed"
+    | "reminder"
+    | "system";
+  read: boolean;
+  createdAt: string;
+};
+
+export type ChatbotMessage = {
+  id: string;
+  userId: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+};
+
+export type ProcurementState = {
+  users: UserProfile[];
+  requests: ProcurementRequest[];
+  auditLogs: AuditLog[];
+  notifications: NotificationRecord[];
+  chatbotMessages: ChatbotMessage[];
+};
+
+export type ProcurementRequestDraft = Omit<
+  ProcurementRequest,
+  | "id"
+  | "status"
+  | "stage"
+  | "assigneeId"
+  | "submittedById"
+  | "previousResponsibleId"
+  | "orderConfirmedAt"
+  | "itemReceivedAt"
+  | "completedAt"
+  | "createdAt"
+  | "updatedAt"
+>;
+
+export type WorkflowAction =
+  | { type: "mona-approve"; comment?: string }
+  | { type: "mona-clarify"; comment: string }
+  | { type: "rashid-approve"; comment?: string }
+  | { type: "rashid-decline"; declineReason: string }
+  | { type: "dr-approve"; comment?: string }
+  | { type: "dr-decline"; declineReason: string }
+  | { type: "edlyn-confirm"; comment?: string }
+  | { type: "edlyn-upload-invoice"; invoice: InvoiceDetails; comment?: string }
+  | { type: "aileen-clear-invoice"; financeNotes?: string }
+  | { type: "edlyn-confirm-order"; comment?: string }
+  | { type: "edlyn-receive-item"; comment?: string }
+  | { type: "aileen-close"; comment?: string }
+  | { type: "admin-reassign"; assigneeId: string; comment?: string };
+
+const emptyVendor: VendorDetails = {
+  contactPerson: "",
+  companyName: "",
+  trnNumber: "",
+  tradeLicense: "",
+  bankDetails: "",
+  vatRegistration: "",
+  ownerDocument: "",
+  websiteLink: "",
+  eBrochureLink: "",
+  businessLocation: "",
+};
+
+export const seedUsers: UserProfile[] = [
+  {
+    id: "user-employee",
+    name: "Layla Hassan",
+    email: "layla.hassan@example.com",
+    role: "Employee",
+    department: "Operations",
+    active: true,
+  },
+  {
+    id: "user-mona",
+    name: "Mona",
+    email: "mona@example.com",
+    role: "Mona",
+    department: "Procurement",
+    active: true,
+  },
+  {
+    id: "user-rashid",
+    name: "Rashid",
+    email: "rashid@example.com",
+    role: "Rashid",
+    department: "Management",
+    active: true,
+  },
+  {
+    id: "user-dr-masjid",
+    name: "Dr. Masjid",
+    email: "dr.masjid@example.com",
+    role: "Dr. Masjid",
+    department: "Executive Office",
+    active: true,
+  },
+  {
+    id: "user-edlyn",
+    name: "Edlyn",
+    email: "edlyn@example.com",
+    role: "Edlyn",
+    department: "Purchasing",
+    active: true,
+  },
+  {
+    id: "user-aileen",
+    name: "Aileen",
+    email: "aileen@example.com",
+    role: "Aileen",
+    department: "Finance",
+    active: true,
+  },
+  {
+    id: "user-admin",
+    name: "Admin",
+    email: "admin@example.com",
+    role: "Admin",
+    department: "Systems",
+    active: true,
+  },
+];
+
+const roleUser = (role: Role, users: UserProfile[] = seedUsers) => {
+  const user = users.find((candidate) => candidate.role === role);
+  if (!user) {
+    throw new Error(`Missing seeded user for ${role}`);
+  }
+  return user;
+};
+
+const mona = roleUser("Mona");
+const rashid = roleUser("Rashid");
+const drMasjid = roleUser("Dr. Masjid");
+const edlyn = roleUser("Edlyn");
+const aileen = roleUser("Aileen");
+const employee = roleUser("Employee");
+
+export const seedRequests: ProcurementRequest[] = [
+  {
+    id: "PR-101",
+    employeeName: "Layla Hassan",
+    department: "Operations",
+    itemName: "Ergonomic office chairs",
+    itemDescription: "Four mesh-back ergonomic chairs for the operations room.",
+    quantity: 4,
+    estimatedAmount: 2200,
+    currency: "AED",
+    vendorName: "Workspace Gulf",
+    reasonForPurchase: "Replace damaged seating used by the scheduling team.",
+    priority: "Normal",
+    requiredByDate: "2026-06-20",
+    attachments: [],
+    vendor: {
+      ...emptyVendor,
+      contactPerson: "Nadia Khan",
+      companyName: "Workspace Gulf",
+      trnNumber: "100245819300003",
+      websiteLink: "https://workspace.example.com",
+      businessLocation: "Dubai Investment Park",
+    },
+    invoice: {
+      invoiceNumber: "INV-9001",
+      invoiceAmount: 2160,
+      invoiceDate: "2026-06-10",
+      vendor: "Workspace Gulf",
+      uploadedInvoiceFile: "invoice-pr-101.pdf",
+      paymentTerms: "30 days credit",
+      financeNotes: "Booked under operations furniture budget.",
+      clearedAt: "2026-06-11T12:15:00.000Z",
+    },
+    status: "Completed",
+    stage: "aileen",
+    assigneeId: aileen.id,
+    submittedById: employee.id,
+    previousResponsibleId: edlyn.id,
+    orderConfirmedAt: "2026-06-11T13:30:00.000Z",
+    itemReceivedAt: "2026-06-13T08:45:00.000Z",
+    completedAt: "2026-06-13T09:10:00.000Z",
+    createdAt: "2026-06-08T07:10:00.000Z",
+    updatedAt: "2026-06-13T09:10:00.000Z",
+  },
+  {
+    id: "PR-102",
+    employeeName: "Layla Hassan",
+    department: "Operations",
+    itemName: "Barcode scanner",
+    itemDescription: "Wireless scanner for inventory receiving counter.",
+    quantity: 2,
+    estimatedAmount: 1250,
+    currency: "AED",
+    vendorName: "TechGate Supplies",
+    reasonForPurchase: "Speed up incoming stock checks and reduce entry errors.",
+    priority: "High",
+    requiredByDate: "2026-06-18",
+    attachments: [],
+    vendor: {
+      ...emptyVendor,
+      contactPerson: "Imran Shah",
+      companyName: "TechGate Supplies",
+      trnNumber: "100398711200003",
+      bankDetails: "Emirates NBD, AE070331234567890123456",
+      businessLocation: "Al Quoz, Dubai",
+    },
+    status: "Dr. Masjid Review",
+    stage: "dr-masjid",
+    assigneeId: drMasjid.id,
+    submittedById: employee.id,
+    previousResponsibleId: rashid.id,
+    createdAt: "2026-06-10T06:45:00.000Z",
+    updatedAt: "2026-06-12T09:20:00.000Z",
+  },
+  {
+    id: "PR-103",
+    employeeName: "Omar Farouk",
+    department: "IT",
+    itemName: "Laptop docking stations",
+    itemDescription: "USB-C docks for hybrid desks.",
+    quantity: 3,
+    estimatedAmount: 780,
+    currency: "AED",
+    vendorName: "ByteLine Trading",
+    reasonForPurchase: "Support shared workstations for visiting staff.",
+    priority: "Normal",
+    requiredByDate: "2026-06-24",
+    attachments: [],
+    vendor: {
+      ...emptyVendor,
+      contactPerson: "Nour Salem",
+      companyName: "ByteLine Trading",
+      websiteLink: "https://byteline.example.com",
+      businessLocation: "Business Bay",
+    },
+    status: "Rashid Review",
+    stage: "rashid",
+    assigneeId: rashid.id,
+    submittedById: employee.id,
+    previousResponsibleId: mona.id,
+    createdAt: "2026-06-14T06:15:00.000Z",
+    updatedAt: "2026-06-14T09:00:00.000Z",
+  },
+  {
+    id: "PR-104",
+    employeeName: "Mariam Noor",
+    department: "Facilities",
+    itemName: "Pantry water filters",
+    itemDescription: "Replacement cartridges and fittings for pantry filtration.",
+    quantity: 6,
+    estimatedAmount: 240,
+    currency: "AED",
+    vendorName: "AquaPro",
+    reasonForPurchase: "Scheduled maintenance for pantry water quality.",
+    priority: "Low",
+    requiredByDate: "2026-06-19",
+    attachments: [],
+    vendor: {
+      ...emptyVendor,
+      contactPerson: "Sameer Iqbal",
+      companyName: "AquaPro",
+      businessLocation: "Sharjah Industrial Area",
+    },
+    status: "Purchase in Progress",
+    stage: "edlyn",
+    assigneeId: edlyn.id,
+    submittedById: employee.id,
+    previousResponsibleId: drMasjid.id,
+    createdAt: "2026-06-12T05:30:00.000Z",
+    updatedAt: "2026-06-14T11:10:00.000Z",
+  },
+  {
+    id: "PR-105",
+    employeeName: "Fatima Ali",
+    department: "Finance",
+    itemName: "Cheque printer toner",
+    itemDescription: "MICR toner cartridge for finance printer.",
+    quantity: 1,
+    estimatedAmount: 420,
+    currency: "AED",
+    vendorName: "OfficeLine",
+    reasonForPurchase: "Maintain cheque printing continuity.",
+    priority: "Urgent",
+    requiredByDate: "2026-06-16",
+    attachments: [],
+    vendor: {
+      ...emptyVendor,
+      contactPerson: "George Mathew",
+      companyName: "OfficeLine",
+      vatRegistration: "VAT-448201",
+      businessLocation: "Deira",
+    },
+    invoice: {
+      invoiceNumber: "OL-2104",
+      invoiceAmount: 418,
+      invoiceDate: "2026-06-14",
+      vendor: "OfficeLine",
+      uploadedInvoiceFile: "ol-2104.pdf",
+      paymentTerms: "COD",
+      financeNotes: "",
+    },
+    status: "Aileen Finance Review",
+    stage: "aileen",
+    assigneeId: aileen.id,
+    submittedById: employee.id,
+    previousResponsibleId: edlyn.id,
+    createdAt: "2026-06-11T08:05:00.000Z",
+    updatedAt: "2026-06-14T13:45:00.000Z",
+  },
+  {
+    id: "PR-106",
+    employeeName: "Layla Hassan",
+    department: "Operations",
+    itemName: "Whiteboard markers",
+    itemDescription: "Assorted marker packs for meeting rooms.",
+    quantity: 10,
+    estimatedAmount: 180,
+    currency: "AED",
+    vendorName: "QuickOffice",
+    reasonForPurchase: "Meeting room supplies are depleted.",
+    priority: "Normal",
+    requiredByDate: "2026-06-17",
+    attachments: [],
+    vendor: {
+      ...emptyVendor,
+      contactPerson: "Rita Dias",
+      companyName: "QuickOffice",
+      businessLocation: "Dubai Silicon Oasis",
+    },
+    status: "Mona Review",
+    stage: "mona",
+    assigneeId: mona.id,
+    submittedById: employee.id,
+    createdAt: "2026-06-15T05:30:00.000Z",
+    updatedAt: "2026-06-15T05:30:00.000Z",
+  },
+  {
+    id: "PR-107",
+    employeeName: "Hassan Saeed",
+    department: "Marketing",
+    itemName: "Event display stand",
+    itemDescription: "Portable display frame for conference booth.",
+    quantity: 1,
+    estimatedAmount: 1500,
+    currency: "AED",
+    vendorName: "BrandWorks",
+    reasonForPurchase: "Requested for an event that was later cancelled.",
+    priority: "Low",
+    requiredByDate: "2026-06-25",
+    attachments: [],
+    vendor: {
+      ...emptyVendor,
+      contactPerson: "Leena Joseph",
+      companyName: "BrandWorks",
+      businessLocation: "JLT",
+    },
+    status: "Rashid Declined",
+    stage: "rashid",
+    assigneeId: mona.id,
+    submittedById: employee.id,
+    previousResponsibleId: mona.id,
+    createdAt: "2026-06-09T10:30:00.000Z",
+    updatedAt: "2026-06-10T07:35:00.000Z",
+  },
+];
+
+export const seedAuditLogs: AuditLog[] = [
+  {
+    id: "audit-101-1",
+    requestId: "PR-101",
+    userId: employee.id,
+    userName: employee.name,
+    action: "Submitted request",
+    dateTime: "2026-06-08T07:10:00.000Z",
+    previousStatus: "Draft",
+    newStatus: "Mona Review",
+    assignedPerson: "Mona",
+  },
+  {
+    id: "audit-102-1",
+    requestId: "PR-102",
+    userId: mona.id,
+    userName: mona.name,
+    action: "Mona approved request",
+    dateTime: "2026-06-11T08:10:00.000Z",
+    previousStatus: "Mona Review",
+    newStatus: "Rashid Review",
+    assignedPerson: "Rashid",
+  },
+  {
+    id: "audit-102-2",
+    requestId: "PR-102",
+    userId: rashid.id,
+    userName: rashid.name,
+    action: "Rashid approved request",
+    dateTime: "2026-06-12T09:20:00.000Z",
+    previousStatus: "Rashid Review",
+    newStatus: "Dr. Masjid Review",
+    assignedPerson: "Dr. Masjid",
+  },
+  {
+    id: "audit-105-1",
+    requestId: "PR-105",
+    userId: edlyn.id,
+    userName: edlyn.name,
+    action: "Uploaded invoice",
+    dateTime: "2026-06-14T13:45:00.000Z",
+    previousStatus: "Purchase in Progress",
+    newStatus: "Aileen Finance Review",
+    uploadedInvoiceReference: "ol-2104.pdf",
+    assignedPerson: "Aileen",
+  },
+  {
+    id: "audit-107-1",
+    requestId: "PR-107",
+    userId: rashid.id,
+    userName: rashid.name,
+    action: "Rashid declined request",
+    dateTime: "2026-06-10T07:35:00.000Z",
+    previousStatus: "Rashid Review",
+    newStatus: "Rashid Declined",
+    declineReason: "Event budget is frozen after cancellation.",
+    assignedPerson: "Mona",
+  },
+];
+
+export const seedNotifications: NotificationRecord[] = [
+  {
+    id: "notice-1",
+    userId: rashid.id,
+    requestId: "PR-103",
+    title: "Approval pending",
+    body: "PR-103 is waiting for Rashid approval.",
+    type: "assigned",
+    read: false,
+    createdAt: "2026-06-14T09:00:00.000Z",
+  },
+  {
+    id: "notice-2",
+    userId: drMasjid.id,
+    requestId: "PR-102",
+    title: "Approval pending",
+    body: "PR-102 is waiting for Dr. Masjid approval.",
+    type: "assigned",
+    read: false,
+    createdAt: "2026-06-12T09:20:00.000Z",
+  },
+  {
+    id: "notice-3",
+    userId: aileen.id,
+    requestId: "PR-105",
+    title: "Invoice uploaded",
+    body: "Invoice OL-2104 was uploaded and is ready for finance documentation.",
+    type: "invoice",
+    read: false,
+    createdAt: "2026-06-14T13:45:00.000Z",
+  },
+];
+
+export const initialState: ProcurementState = {
+  users: seedUsers,
+  requests: seedRequests,
+  auditLogs: seedAuditLogs,
+  notifications: seedNotifications,
+  chatbotMessages: [],
+};
+
+export function getUserById(users: UserProfile[], id: string) {
+  return users.find((user) => user.id === id);
+}
+
+export function getUserByRole(users: UserProfile[], role: Role) {
+  return users.find((user) => user.role === role);
+}
+
+export function getAssigneeName(request: ProcurementRequest, users: UserProfile[]) {
+  return getUserById(users, request.assigneeId)?.name ?? "Unassigned";
+}
+
+export function getStageIndex(stage: WorkflowStage) {
+  return WORKFLOW_STAGES.findIndex((candidate) => candidate.key === stage);
+}
+
+export function isDeclined(status: RequestStatus) {
+  return (
+    status === "Rashid Declined" ||
+    status === "Dr. Masjid Declined" ||
+    status === "Sent Back for Clarification"
+  );
+}
+
+export function isClosed(status: RequestStatus) {
+  return status === "Completed" || isDeclined(status);
+}
+
+export function isApprovalStatus(status: RequestStatus) {
+  return (
+    status === "Mona Review" ||
+    status === "Rashid Review" ||
+    status === "Rashid Auto Approved" ||
+    status === "Dr. Masjid Review"
+  );
+}
+
+export function isApprovedStatus(status: RequestStatus) {
+  return [
+    "Rashid Auto Approved",
+    "Edlyn Confirmation",
+    "Purchase in Progress",
+    "Invoice Uploaded",
+    "Aileen Finance Review",
+    "Invoice Cleared",
+    "Order Confirmed",
+    "Item Received",
+    "Completed",
+  ].includes(status);
+}
+
+export function getPendingAction(request: ProcurementRequest) {
+  switch (request.status) {
+    case "Mona Review":
+      return "Mona to approve or request clarification";
+    case "Rashid Review":
+      return "Rashid to approve or decline";
+    case "Dr. Masjid Review":
+      return "Dr. Masjid to approve or decline";
+    case "Rashid Auto Approved":
+      return "Dr. Masjid to approve or decline";
+    case "Edlyn Confirmation":
+      return "Edlyn to confirm item details";
+    case "Purchase in Progress":
+      return "Edlyn to purchase and upload invoice";
+    case "Aileen Finance Review":
+    case "Invoice Uploaded":
+      return "Aileen to document and clear invoice";
+    case "Invoice Cleared":
+      return "Edlyn to confirm the order was placed";
+    case "Order Confirmed":
+      return "Edlyn to mark item received";
+    case "Item Received":
+      return "Aileen to close the case";
+    case "Completed":
+      return "No pending action";
+    case "Rashid Declined":
+    case "Dr. Masjid Declined":
+      return "Decline reason recorded; Mona to review";
+    case "Sent Back for Clarification":
+      return "Employee to clarify request";
+    default:
+      return "Submit request";
+  }
+}
+
+export function nextRequestId(requests: ProcurementRequest[]) {
+  const highest = requests.reduce((max, request) => {
+    const numeric = Number(request.id.replace("PR-", ""));
+    return Number.isFinite(numeric) ? Math.max(max, numeric) : max;
+  }, 100);
+  return `PR-${highest + 1}`;
+}
+
+export function makeId(prefix: string) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function nowIso() {
+  return new Date().toISOString();
+}
+
+function addNotification(
+  notifications: NotificationRecord[],
+  input: Omit<NotificationRecord, "id" | "read" | "createdAt">,
+  dateTime: string,
+) {
+  notifications.push({
+    ...input,
+    id: makeId("notice"),
+    read: false,
+    createdAt: dateTime,
+  });
+}
+
+function addAudit(
+  auditLogs: AuditLog[],
+  request: ProcurementRequest,
+  actor: UserProfile,
+  previousStatus: RequestStatus,
+  action: string,
+  dateTime: string,
+  options: Partial<Omit<AuditLog, "id" | "requestId" | "userId" | "userName" | "action" | "dateTime" | "previousStatus" | "newStatus">> = {},
+) {
+  auditLogs.unshift({
+    id: makeId("audit"),
+    requestId: request.id,
+    userId: actor.id,
+    userName: actor.name,
+    action,
+    dateTime,
+    previousStatus,
+    newStatus: request.status,
+    ...options,
+  });
+}
+
+function requireRoleUser(users: UserProfile[], role: Role) {
+  const user = getUserByRole(users, role);
+  if (!user) {
+    throw new Error(`No active ${role} user found`);
+  }
+  return user;
+}
+
+export function submitProcurementRequest(
+  state: ProcurementState,
+  draft: ProcurementRequestDraft,
+  submittedById: string,
+) {
+  const dateTime = nowIso();
+  const monaUser = requireRoleUser(state.users, "Mona");
+  const actor = getUserById(state.users, submittedById) ?? monaUser;
+  const request: ProcurementRequest = {
+    ...draft,
+    id: nextRequestId(state.requests),
+    status: "Mona Review",
+    stage: "mona",
+    assigneeId: monaUser.id,
+    submittedById,
+    createdAt: dateTime,
+    updatedAt: dateTime,
+  };
+
+  const nextState: ProcurementState = {
+    ...state,
+    requests: [request, ...state.requests],
+    auditLogs: [...state.auditLogs],
+    notifications: [...state.notifications],
+    chatbotMessages: state.chatbotMessages,
+  };
+
+  addAudit(nextState.auditLogs, request, actor, "Draft", "Submitted request", dateTime, {
+    assignedPerson: monaUser.name,
+  });
+  addNotification(
+    nextState.notifications,
+    {
+      userId: monaUser.id,
+      requestId: request.id,
+      title: "New procurement request",
+      body: `${request.id} from ${request.employeeName} is ready for Mona review.`,
+      type: "assigned",
+    },
+    dateTime,
+  );
+
+  return nextState;
+}
+
+export function transitionRequest(
+  state: ProcurementState,
+  requestId: string,
+  actorId: string,
+  workflowAction: WorkflowAction,
+) {
+  const request = state.requests.find((candidate) => candidate.id === requestId);
+  const actor = getUserById(state.users, actorId);
+
+  if (!request || !actor) {
+    return state;
+  }
+
+  const dateTime = nowIso();
+  const nextRequests = state.requests.map((candidate) => ({ ...candidate }));
+  const editable = nextRequests.find((candidate) => candidate.id === requestId);
+
+  if (!editable) {
+    return state;
+  }
+
+  const nextState: ProcurementState = {
+    ...state,
+    requests: nextRequests,
+    auditLogs: [...state.auditLogs],
+    notifications: [...state.notifications],
+    chatbotMessages: state.chatbotMessages,
+  };
+
+  const previousStatus = editable.status;
+  let actionLabel = "Updated request";
+  let comment: string | undefined;
+  let declineReason: string | undefined;
+  let uploadedInvoiceReference: string | undefined;
+
+  const assignTo = (role: Role) => {
+    const assignee = requireRoleUser(state.users, role);
+    editable.assigneeId = assignee.id;
+    addNotification(
+      nextState.notifications,
+      {
+        userId: assignee.id,
+        requestId,
+        title: "Task assigned",
+        body: `${editable.id} is now assigned to ${assignee.name}.`,
+        type: "assigned",
+      },
+      dateTime,
+    );
+    return assignee;
+  };
+
+  switch (workflowAction.type) {
+    case "mona-approve": {
+      comment = workflowAction.comment;
+      if (editable.estimatedAmount < 300) {
+        const assignee = assignTo("Dr. Masjid");
+        editable.status = "Rashid Auto Approved";
+        editable.stage = "dr-masjid";
+        editable.previousResponsibleId = actor.id;
+        actionLabel = "Mona approved request; Rashid auto approved below AED 300";
+        comment = comment ?? "Amount is below AED 300, so Rashid approval was skipped.";
+        addNotification(
+          nextState.notifications,
+          {
+            userId: assignee.id,
+            requestId,
+            title: "Auto-approved request ready",
+            body: `${editable.id} was auto approved at Rashid stage and is ready for Dr. Masjid.`,
+            type: "approved",
+          },
+          dateTime,
+        );
+      } else {
+        const assignee = assignTo("Rashid");
+        editable.status = "Rashid Review";
+        editable.stage = "rashid";
+        editable.previousResponsibleId = actor.id;
+        actionLabel = "Mona approved request";
+        addNotification(
+          nextState.notifications,
+          {
+            userId: assignee.id,
+            requestId,
+            title: "Approval required",
+            body: `${editable.id} is ready for Rashid approval.`,
+            type: "approved",
+          },
+          dateTime,
+        );
+      }
+      break;
+    }
+    case "mona-clarify": {
+      editable.status = "Sent Back for Clarification";
+      editable.stage = "mona";
+      editable.assigneeId = editable.submittedById;
+      actionLabel = "Sent back for clarification";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: editable.submittedById,
+          requestId,
+          title: "Clarification required",
+          body: `${editable.id} needs clarification before it can continue.`,
+          type: "system",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "rashid-approve": {
+      const assignee = assignTo("Dr. Masjid");
+      editable.status = "Dr. Masjid Review";
+      editable.stage = "dr-masjid";
+      editable.previousResponsibleId = actor.id;
+      actionLabel = "Rashid approved request";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: assignee.id,
+          requestId,
+          title: "Approval required",
+          body: `${editable.id} is ready for Dr. Masjid approval.`,
+          type: "approved",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "rashid-decline": {
+      const assignee = assignTo("Mona");
+      editable.status = "Rashid Declined";
+      editable.stage = "rashid";
+      editable.previousResponsibleId = actor.id;
+      actionLabel = "Rashid declined request";
+      declineReason = workflowAction.declineReason;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: assignee.id,
+          requestId,
+          title: "Request declined",
+          body: `${editable.id} was declined by Rashid: ${declineReason}`,
+          type: "declined",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "dr-approve": {
+      const assignee = assignTo("Edlyn");
+      editable.status = "Edlyn Confirmation";
+      editable.stage = "edlyn";
+      editable.previousResponsibleId = actor.id;
+      actionLabel = "Dr. Masjid approved request";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: assignee.id,
+          requestId,
+          title: "Purchase task assigned",
+          body: `${editable.id} is approved and ready for item confirmation.`,
+          type: "approved",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "dr-decline": {
+      const fallback = requireRoleUser(state.users, "Mona");
+      const previousResponsible =
+        getUserById(state.users, editable.previousResponsibleId ?? "") ?? fallback;
+      editable.status = "Dr. Masjid Declined";
+      editable.stage = "dr-masjid";
+      editable.assigneeId = previousResponsible.id;
+      actionLabel = "Dr. Masjid declined request";
+      declineReason = workflowAction.declineReason;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: previousResponsible.id,
+          requestId,
+          title: "Request declined",
+          body: `${editable.id} was declined by Dr. Masjid: ${declineReason}`,
+          type: "declined",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "edlyn-confirm": {
+      editable.status = "Purchase in Progress";
+      editable.stage = "edlyn";
+      editable.assigneeId = actor.id;
+      actionLabel = "Edlyn confirmed item details";
+      comment = workflowAction.comment;
+      break;
+    }
+    case "edlyn-upload-invoice": {
+      const assignee = assignTo("Aileen");
+      editable.status = "Aileen Finance Review";
+      editable.stage = "aileen";
+      editable.previousResponsibleId = actor.id;
+      editable.invoice = workflowAction.invoice;
+      actionLabel = "Uploaded invoice";
+      comment = workflowAction.comment;
+      uploadedInvoiceReference = workflowAction.invoice.uploadedInvoiceFile;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: assignee.id,
+          requestId,
+          title: "Invoice uploaded",
+          body: `${editable.id} invoice ${workflowAction.invoice.invoiceNumber} is ready for finance documentation.`,
+          type: "invoice",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "aileen-clear-invoice": {
+      const assignee = assignTo("Edlyn");
+      editable.status = "Invoice Cleared";
+      editable.stage = "edlyn";
+      editable.invoice = editable.invoice
+        ? {
+            ...editable.invoice,
+            financeNotes:
+              workflowAction.financeNotes || editable.invoice.financeNotes,
+            clearedAt: dateTime,
+          }
+        : editable.invoice;
+      actionLabel = "Finance cleared invoice";
+      comment = workflowAction.financeNotes;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: editable.submittedById,
+          requestId,
+          title: "Invoice cleared",
+          body: `${editable.id} invoice has been documented by finance.`,
+          type: "finance",
+        },
+        dateTime,
+      );
+      addNotification(
+        nextState.notifications,
+        {
+          userId: assignee.id,
+          requestId,
+          title: "Order confirmation required",
+          body: `${editable.id} is cleared by finance. Inform the employee that the order has been placed.`,
+          type: "finance",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "edlyn-confirm-order": {
+      editable.status = "Order Confirmed";
+      editable.stage = "edlyn";
+      editable.assigneeId = actor.id;
+      editable.orderConfirmedAt = dateTime;
+      actionLabel = "Confirmed order placed";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: editable.submittedById,
+          requestId,
+          title: "Order placed",
+          body: `${editable.id} order has been placed.`,
+          type: "order",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "edlyn-receive-item": {
+      const assignee = assignTo("Aileen");
+      editable.status = "Item Received";
+      editable.stage = "aileen";
+      editable.itemReceivedAt = dateTime;
+      actionLabel = "Marked item received";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: assignee.id,
+          requestId,
+          title: "Case ready to close",
+          body: `${editable.id} item was received and is ready for final closure.`,
+          type: "received",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "aileen-close": {
+      editable.status = "Completed";
+      editable.stage = "aileen";
+      editable.assigneeId = actor.id;
+      editable.completedAt = dateTime;
+      actionLabel = "Closed procurement case";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: editable.submittedById,
+          requestId,
+          title: "Case fully closed",
+          body: `${editable.id} has been completed and closed.`,
+          type: "closed",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "admin-reassign": {
+      const assignee = getUserById(state.users, workflowAction.assigneeId);
+      if (!assignee) {
+        return state;
+      }
+      editable.assigneeId = assignee.id;
+      actionLabel = "Admin reassigned request";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: assignee.id,
+          requestId,
+          title: "Request reassigned",
+          body: `${editable.id} was manually reassigned to you.`,
+          type: "assigned",
+        },
+        dateTime,
+      );
+      break;
+    }
+  }
+
+  editable.updatedAt = dateTime;
+  addAudit(nextState.auditLogs, editable, actor, previousStatus, actionLabel, dateTime, {
+    comment,
+    declineReason,
+    uploadedInvoiceReference,
+    assignedPerson: getAssigneeName(editable, state.users),
+  });
+
+  return nextState;
+}
+
+export function markNotificationRead(
+  state: ProcurementState,
+  notificationId: string,
+) {
+  return {
+    ...state,
+    notifications: state.notifications.map((notification) =>
+      notification.id === notificationId
+        ? { ...notification, read: true }
+        : notification,
+    ),
+  };
+}
+
+export function getVisibleRequests(state: ProcurementState, user: UserProfile) {
+  if (user.role === "Admin") {
+    return state.requests;
+  }
+
+  if (user.role === "Employee") {
+    return state.requests.filter(
+      (request) =>
+        request.submittedById === user.id || request.employeeName === user.name,
+    );
+  }
+
+  return state.requests.filter(
+    (request) =>
+      request.assigneeId === user.id ||
+      request.submittedById === user.id ||
+      request.stage === WORKFLOW_STAGES.find((stage) => stage.ownerRole === user.role)?.key,
+  );
+}
+
+export function getStuckRequests(
+  requests: ProcurementRequest[],
+  referenceDate = new Date(),
+) {
+  const twoDaysMs = 1000 * 60 * 60 * 24 * 2;
+  return requests.filter((request) => {
+    if (isClosed(request.status)) {
+      return false;
+    }
+    return referenceDate.getTime() - new Date(request.updatedAt).getTime() > twoDaysMs;
+  });
+}
+
+export function getMetrics(requests: ProcurementRequest[]) {
+  const completed = requests.filter((request) => request.status === "Completed");
+  const durations = completed
+    .filter((request) => request.completedAt)
+    .map((request) => {
+      const start = new Date(request.createdAt).getTime();
+      const finish = new Date(request.completedAt as string).getTime();
+      return Math.max(0, finish - start) / (1000 * 60 * 60 * 24);
+    });
+
+  const averageProcessingTime =
+    durations.length === 0
+      ? 0
+      : durations.reduce((total, duration) => total + duration, 0) / durations.length;
+
+  return {
+    total: requests.length,
+    pendingApprovals: requests.filter((request) => isApprovalStatus(request.status)).length,
+    approved: requests.filter((request) => isApprovedStatus(request.status)).length,
+    declined: requests.filter((request) => isDeclined(request.status)).length,
+    completed: completed.length,
+    pendingInvoice: requests.filter((request) => request.status === "Purchase in Progress").length,
+    pendingItemReceipt: requests.filter((request) =>
+      ["Invoice Cleared", "Order Confirmed"].includes(request.status),
+    ).length,
+    averageProcessingTime,
+    stuck: getStuckRequests(requests).length,
+  };
+}
+
+export function createDailyReminderNotifications(state: ProcurementState) {
+  const dateTime = nowIso();
+  const pending = state.requests.filter((request) =>
+    ["Rashid Review", "Dr. Masjid Review"].includes(request.status),
+  );
+  const nextNotifications = [...state.notifications];
+
+  pending.forEach((request) => {
+    addNotification(
+      nextNotifications,
+      {
+        userId: request.assigneeId,
+        requestId: request.id,
+        title: "Daily approval reminder",
+        body: `${request.id} is still pending your approval.`,
+        type: "reminder",
+      },
+      dateTime,
+    );
+  });
+
+  return {
+    ...state,
+    notifications: nextNotifications,
+  };
+}
+
+export function answerProcurementQuestion(
+  question: string,
+  state: ProcurementState,
+  currentUser: UserProfile,
+) {
+  const normalized = question.trim().toLowerCase();
+  const requestId = question.match(/PR-\d+/i)?.[0]?.toUpperCase();
+  const visible = getVisibleRequests(state, currentUser);
+  const describe = (request: ProcurementRequest) =>
+    `${request.id}: ${request.itemName} is ${request.status}, stage ${WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label}, assigned to ${getAssigneeName(request, state.users)}.`;
+
+  if (!normalized) {
+    return "Ask me about request status, pending approvals, invoices, stuck requests, order placement, or completed requests.";
+  }
+
+  if (requestId) {
+    const request = state.requests.find((candidate) => candidate.id === requestId);
+    return request
+      ? describe(request)
+      : `I could not find ${requestId}. Check the request ID and try again.`;
+  }
+
+  if (normalized.includes("pending with rashid")) {
+    const rows = state.requests.filter((request) => request.status === "Rashid Review");
+    return rows.length
+      ? rows.map(describe).join("\n")
+      : "No requests are currently pending with Rashid.";
+  }
+
+  if (normalized.includes("pending with dr") || normalized.includes("pending with dr. masjid")) {
+    const rows = state.requests.filter((request) => request.status === "Dr. Masjid Review");
+    return rows.length
+      ? rows.map(describe).join("\n")
+      : "No requests are currently pending with Dr. Masjid.";
+  }
+
+  if (normalized.includes("invoice") && normalized.includes("aileen")) {
+    const rows = state.requests.filter((request) => request.status === "Aileen Finance Review");
+    return rows.length
+      ? rows.map(describe).join("\n")
+      : "No invoices are currently pending with Aileen.";
+  }
+
+  if (normalized.includes("stuck") || normalized.includes("more than 2 days")) {
+    const rows = getStuckRequests(state.requests);
+    return rows.length
+      ? rows.map(describe).join("\n")
+      : "No active requests are stuck for more than 2 days.";
+  }
+
+  if (normalized.includes("order") && normalized.includes("placed")) {
+    const latest = visible
+      .filter((request) =>
+        ["Order Confirmed", "Item Received", "Completed"].includes(request.status),
+      )
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+    return latest
+      ? `${latest.id} has an order placed status. ${describe(latest)}`
+      : "I do not see an order placed yet for your visible requests.";
+  }
+
+  if (normalized.includes("completed") && normalized.includes("month")) {
+    const now = new Date();
+    const rows = state.requests.filter((request) => {
+      if (!request.completedAt) {
+        return false;
+      }
+      const completedAt = new Date(request.completedAt);
+      return (
+        completedAt.getFullYear() === now.getFullYear() &&
+        completedAt.getMonth() === now.getMonth()
+      );
+    });
+    return rows.length
+      ? rows.map(describe).join("\n")
+      : "No requests have been completed this month.";
+  }
+
+  if (normalized.includes("my request") || normalized.includes("status")) {
+    const latest = visible
+      .slice()
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+    return latest
+      ? describe(latest)
+      : "I cannot see any procurement requests for your current role.";
+  }
+
+  return "I can answer questions such as: status of my request, pending with Rashid, pending with Dr. Masjid, invoices pending with Aileen, stuck more than 2 days, order placed, request PR-102 stage, or completed requests this month.";
+}
+
+export function serializeState(state: ProcurementState) {
+  return JSON.stringify(state);
+}
+
+export function parseState(serialized: string | null) {
+  if (!serialized) {
+    return initialState;
+  }
+
+  try {
+    const parsed = JSON.parse(serialized) as ProcurementState;
+    if (!Array.isArray(parsed.requests) || !Array.isArray(parsed.users)) {
+      return initialState;
+    }
+    return parsed;
+  } catch {
+    return initialState;
+  }
+}
