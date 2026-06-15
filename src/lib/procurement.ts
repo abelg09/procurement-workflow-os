@@ -249,7 +249,7 @@ const emptyVendor: VendorDetails = {
 export const seedUsers: UserProfile[] = [
   {
     id: "user-employee",
-    name: "Layla Hassan",
+    name: "Abel Gonsalves",
     email: "layla.hassan@example.com",
     role: "Employee",
     department: "Operations",
@@ -323,7 +323,7 @@ const employee = roleUser("Employee");
 export const seedRequests: ProcurementRequest[] = [
   {
     id: "PR-101",
-    employeeName: "Layla Hassan",
+    employeeName: "Abel Gonsalves",
     department: "Operations",
     itemName: "Ergonomic office chairs",
     itemDescription: "Four mesh-back ergonomic chairs for the operations room.",
@@ -366,7 +366,7 @@ export const seedRequests: ProcurementRequest[] = [
   },
   {
     id: "PR-102",
-    employeeName: "Layla Hassan",
+    employeeName: "Abel Gonsalves",
     department: "Operations",
     itemName: "Barcode scanner",
     itemDescription: "Wireless scanner for inventory receiving counter.",
@@ -396,7 +396,7 @@ export const seedRequests: ProcurementRequest[] = [
   },
   {
     id: "PR-103",
-    employeeName: "Omar Farouk",
+    employeeName: "Bilal G",
     department: "IT",
     itemName: "Laptop docking stations",
     itemDescription: "USB-C docks for hybrid desks.",
@@ -491,7 +491,7 @@ export const seedRequests: ProcurementRequest[] = [
   },
   {
     id: "PR-106",
-    employeeName: "Layla Hassan",
+    employeeName: "Abel Gonsalves",
     department: "Operations",
     itemName: "Whiteboard markers",
     itemDescription: "Assorted marker packs for meeting rooms.",
@@ -1392,17 +1392,43 @@ export function serializeState(state: ProcurementState) {
 }
 
 export function parseState(serialized: string | null) {
+  const migrateNames = (state: ProcurementState): ProcurementState => ({
+    ...state,
+    users: state.users.map((user) =>
+      user.name === "Layla Hassan" ? { ...user, name: "Abel Gonsalves" } : user,
+    ),
+    requests: state.requests.map((request) => ({
+      ...request,
+      employeeName:
+        request.employeeName === "Layla Hassan"
+          ? "Abel Gonsalves"
+          : request.employeeName === "Omar Farouk"
+            ? "Bilal G"
+            : request.employeeName,
+    })),
+    auditLogs: state.auditLogs.map((log) => ({
+      ...log,
+      userName: log.userName === "Layla Hassan" ? "Abel Gonsalves" : log.userName,
+    })),
+    notifications: state.notifications.map((notification) => ({
+      ...notification,
+      body: notification.body
+        .replaceAll("Layla Hassan", "Abel Gonsalves")
+        .replaceAll("Omar Farouk", "Bilal G"),
+    })),
+  });
+
   if (!serialized) {
-    return initialState;
+    return migrateNames(initialState);
   }
 
   try {
     const parsed = JSON.parse(serialized) as ProcurementState;
     if (!Array.isArray(parsed.requests) || !Array.isArray(parsed.users)) {
-      return initialState;
+      return migrateNames(initialState);
     }
-    return parsed;
+    return migrateNames(parsed);
   } catch {
-    return initialState;
+    return migrateNames(initialState);
   }
 }
