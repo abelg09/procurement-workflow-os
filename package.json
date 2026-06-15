@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --webpack",
     "build": "next build --webpack",
+    "build:pages": "NEXT_PUBLIC_GITHUB_PAGES=true node scripts/build-github-pages.mjs",
     "start": "next start",
     "lint": "eslint src"
   },
