@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const apiDir = join(root, "src/app/api");
 const disabledApiDir = join(root, ".pages-disabled-api");
+let exitCode = 0;
 
 function restoreApiRoutes() {
   if (existsSync(disabledApiDir) && !existsSync(apiDir)) {
@@ -32,10 +33,14 @@ try {
   });
 
   if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+    exitCode = result.status ?? 1;
+  } else {
+    writeFileSync(join(root, "out/.nojekyll"), "");
   }
-
-  writeFileSync(join(root, "out/.nojekyll"), "");
 } finally {
   restoreApiRoutes();
+}
+
+if (exitCode !== 0) {
+  process.exit(exitCode);
 }

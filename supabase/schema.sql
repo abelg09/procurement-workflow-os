@@ -64,7 +64,10 @@ create table procurement_requests (
   item_description text not null,
   quantity integer not null check (quantity > 0),
   estimated_amount numeric(12, 2) not null check (estimated_amount >= 0),
+  estimated_amount_aed numeric(12, 2) not null check (estimated_amount_aed >= 0),
   currency text not null default 'AED',
+  exchange_rate_source text,
+  exchange_rate_date date,
   vendor_name text,
   reason_for_purchase text not null,
   priority text not null,
@@ -79,6 +82,23 @@ create table procurement_requests (
   completed_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+create table procurement_request_items (
+  id uuid primary key default gen_random_uuid(),
+  request_id text not null references procurement_requests(id) on delete cascade,
+  item_name text not null,
+  item_description text not null,
+  quantity numeric(12, 2) not null check (quantity > 0),
+  unit_price numeric(12, 2) not null check (unit_price > 0),
+  currency text not null,
+  original_total numeric(12, 2) not null check (original_total >= 0),
+  fx_rate_to_aed numeric(18, 8) not null check (fx_rate_to_aed > 0),
+  aed_total numeric(12, 2) not null check (aed_total >= 0),
+  vendor_name text,
+  exchange_rate_source text not null,
+  exchange_rate_date date not null,
+  created_at timestamptz not null default now()
 );
 
 create table vendors (
@@ -161,6 +181,7 @@ create index procurement_requests_status_idx on procurement_requests(status);
 create index procurement_requests_stage_idx on procurement_requests(stage);
 create index procurement_requests_assignee_idx on procurement_requests(assignee_id);
 create index procurement_requests_department_idx on procurement_requests(department);
+create index procurement_request_items_request_idx on procurement_request_items(request_id);
 create index notifications_user_unread_idx on notifications(user_id, read);
 create index audit_logs_request_idx on audit_logs(request_id, created_at desc);
 

@@ -136,6 +136,21 @@ export type InvoiceDetails = {
   clearedAt?: string;
 };
 
+export type ProcurementLineItem = {
+  id: string;
+  itemName: string;
+  itemDescription: string;
+  quantity: number;
+  unitPrice: number;
+  currency: string;
+  originalTotal: number;
+  fxRateToAed: number;
+  aedTotal: number;
+  vendorName: string;
+  exchangeRateDate: string;
+  exchangeRateSource: string;
+};
+
 export type ProcurementRequest = {
   id: string;
   employeeName: string;
@@ -151,6 +166,10 @@ export type ProcurementRequest = {
   requiredByDate: string;
   attachments: AttachmentReference[];
   vendor: VendorDetails;
+  lineItems: ProcurementLineItem[];
+  estimatedAmountAed: number;
+  exchangeRateSource: string;
+  exchangeRateDate: string;
   invoice?: InvoiceDetails;
   status: RequestStatus;
   stage: WorkflowStage;
@@ -258,6 +277,86 @@ const emptyVendor: VendorDetails = {
   businessLocation: "",
 };
 
+const AED_EXCHANGE_RATE_SOURCE = "AED base currency";
+const DEFAULT_EXCHANGE_RATE_DATE = "2026-06-15";
+
+export function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+export function getRequestLineItems(request: ProcurementRequest) {
+  if (Array.isArray(request.lineItems) && request.lineItems.length > 0) {
+    return request.lineItems;
+  }
+
+  const quantity = Number.isFinite(request.quantity) && request.quantity > 0 ? request.quantity : 1;
+  const currency = request.currency || "AED";
+  const originalTotal = roundMoney(Number(request.estimatedAmount || 0));
+  const aedTotal = roundMoney(
+    Number.isFinite(request.estimatedAmountAed)
+      ? request.estimatedAmountAed
+      : currency === "AED"
+        ? originalTotal
+        : originalTotal,
+  );
+
+  return [
+    {
+      id: `${request.id.toLowerCase()}-item-1`,
+      itemName: request.itemName,
+      itemDescription: request.itemDescription,
+      quantity,
+      unitPrice: roundMoney(originalTotal / quantity),
+      currency,
+      originalTotal,
+      fxRateToAed:
+        originalTotal > 0 ? roundMoney(aedTotal / originalTotal) : 1,
+      aedTotal,
+      vendorName: request.vendorName,
+      exchangeRateDate:
+        request.exchangeRateDate || DEFAULT_EXCHANGE_RATE_DATE,
+      exchangeRateSource:
+        request.exchangeRateSource ||
+        (currency === "AED" ? AED_EXCHANGE_RATE_SOURCE : "Legacy amount"),
+    },
+  ];
+}
+
+export function getRequestTotalAed(request: ProcurementRequest) {
+  if (Number.isFinite(request.estimatedAmountAed)) {
+    return roundMoney(request.estimatedAmountAed);
+  }
+
+  return roundMoney(
+    getRequestLineItems(request).reduce((total, item) => total + item.aedTotal, 0),
+  );
+}
+
+export function getRequestItemCount(request: ProcurementRequest) {
+  return getRequestLineItems(request).length;
+}
+
+export function normalizeRequestFinancials(request: ProcurementRequest) {
+  const lineItems = getRequestLineItems(request);
+  const estimatedAmountAed = roundMoney(
+    lineItems.reduce((total, item) => total + item.aedTotal, 0),
+  );
+
+  return {
+    ...request,
+    lineItems,
+    estimatedAmountAed,
+    exchangeRateSource:
+      request.exchangeRateSource ||
+      lineItems[0]?.exchangeRateSource ||
+      AED_EXCHANGE_RATE_SOURCE,
+    exchangeRateDate:
+      request.exchangeRateDate ||
+      lineItems[0]?.exchangeRateDate ||
+      DEFAULT_EXCHANGE_RATE_DATE,
+  };
+}
+
 export const seedUsers: UserProfile[] = [
   {
     id: "user-employee",
@@ -332,7 +431,7 @@ const edlyn = roleUser("Edlyn");
 const aileen = roleUser("Aileen");
 const employee = roleUser("Employee");
 
-export const seedRequests: ProcurementRequest[] = [
+export const seedRequests: ProcurementRequest[] = ([
   {
     id: "PR-101",
     employeeName: "Abel Gonsalves",
@@ -556,7 +655,7 @@ export const seedRequests: ProcurementRequest[] = [
     createdAt: "2026-06-09T10:30:00.000Z",
     updatedAt: "2026-06-10T07:35:00.000Z",
   },
-];
+] as unknown as ProcurementRequest[]).map(normalizeRequestFinancials);
 
 export const seedAuditLogs: AuditLog[] = [
   {
@@ -810,7 +909,7 @@ export function submitProcurementRequest(
   const dateTime = nowIso();
   const monaUser = requireRoleUser(state.users, "Mona");
   const actor = getUserById(state.users, submittedById) ?? monaUser;
-  const request: ProcurementRequest = {
+  const request: ProcurementRequest = normalizeRequestFinancials({
     ...draft,
     id: nextRequestId(state.requests),
     status: "Mona Review",
@@ -819,7 +918,7 @@ export function submitProcurementRequest(
     submittedById,
     createdAt: dateTime,
     updatedAt: dateTime,
-  };
+  });
 
   const nextState: ProcurementState = {
     ...state,
@@ -911,13 +1010,16 @@ export function transitionRequest(
         return state;
       }
       comment = workflowAction.comment;
-      if (editable.estimatedAmount < 300) {
+      const totalAed = getRequestTotalAed(editable);
+      if (totalAed < 300) {
         const assignee = assignTo("Dr. Masjid");
         editable.status = "Rashid Auto Approved";
         editable.stage = "dr-masjid";
         editable.previousResponsibleId = actor.id;
         actionLabel = "Mona approved request; Rashid auto approved below AED 300";
-        comment = comment ?? "Amount is below AED 300, so Rashid approval was skipped.";
+        comment =
+          comment ??
+          `Total converted value is AED ${totalAed.toFixed(2)}, so Rashid approval was skipped.`;
         addNotification(
           nextState.notifications,
           {
@@ -1348,7 +1450,7 @@ export function answerProcurementQuestion(
   const requestId = question.match(/PR-\d+/i)?.[0]?.toUpperCase();
   const visible = getVisibleRequests(state, currentUser);
   const describe = (request: ProcurementRequest) =>
-    `${request.id}: ${request.itemName} is ${request.status}, stage ${WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label}, assigned to ${getAssigneeName(request, state.users)}.`;
+    `${request.id}: ${request.itemName} is ${request.status}, stage ${WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label}, assigned to ${getAssigneeName(request, state.users)}. Total AED ${getRequestTotalAed(request).toFixed(2)} across ${getRequestItemCount(request)} item(s).`;
 
   if (!normalized) {
     return "Ask me about request status, pending approvals, invoices, stuck requests, order placement, or completed requests.";
@@ -1445,7 +1547,7 @@ export function parseState(serialized: string | null) {
       requests: state.requests.map((request) => {
         const deprecatedDrDecline = String(request.status) === "Dr. Masjid Declined";
 
-        return {
+        return normalizeRequestFinancials({
           ...request,
           department:
             request.department === "IT"
@@ -1465,7 +1567,7 @@ export function parseState(serialized: string | null) {
             deprecatedDrDecline && drMasjidUser
               ? drMasjidUser.id
               : request.assigneeId,
-        };
+        });
       }),
       auditLogs: state.auditLogs.map((log) => ({
         ...log,

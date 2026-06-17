@@ -28,8 +28,14 @@ export async function POST() {
     pendingRequests?.map((request) => ({
       user_id: request.assignee_id,
       request_id: request.id,
-      title: "Daily approval reminder",
-      body: `${request.id} is still pending your approval.`,
+      title:
+        request.status === "Dr. Masjid Review"
+          ? "Daily review reminder"
+          : "Daily approval reminder",
+      body:
+        request.status === "Dr. Masjid Review"
+          ? `${request.id} is still pending your review.`
+          : `${request.id} is still pending your approval.`,
       type: "reminder",
       read: false,
     })) ?? [];

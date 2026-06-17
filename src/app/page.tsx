@@ -40,6 +40,7 @@ import {
   NotificationRecord,
   PAYMENT_TERMS,
   PRIORITIES,
+  ProcurementLineItem,
   ProcurementRequest,
   ProcurementRequestDraft,
   ProcurementState,
@@ -53,6 +54,9 @@ import {
   getAssigneeName,
   getMetrics,
   getPendingAction,
+  getRequestItemCount,
+  getRequestLineItems,
+  getRequestTotalAed,
   getStageIndex,
   getStuckRequests,
   getUserById,
@@ -66,12 +70,25 @@ import {
   nowIso,
   nextRequestId,
   parseState,
+  roundMoney,
   serializeState,
   submitProcurementRequest,
   transitionRequest,
 } from "@/lib/procurement";
 
 const STORAGE_KEY = "procurement-workflow-state-v1";
+const FX_CACHE_KEY = "procurement-fx-rates-v1";
+const FX_RATE_SOURCE = "Frankfurter v2";
+const FX_RATE_ENDPOINT = "https://api.frankfurter.dev/v2/rates";
+const BULK_TEMPLATE_HEADERS = [
+  "item_name",
+  "item_description",
+  "quantity",
+  "unit_price",
+  "currency",
+  "vendor_name",
+];
+const BULK_SUPPORTED_CURRENCIES = CURRENCIES.filter((currency) => currency !== "Other");
 const PUBLIC_BASE_PATH =
   process.env.NEXT_PUBLIC_GITHUB_PAGES === "true"
     ? "/procurement-workflow-os"
@@ -81,6 +98,22 @@ const hasSupabaseClientConfig = Boolean(
 );
 
 type View = "dashboard" | "new-request" | "notifications" | "admin";
+
+type FxRateResult = {
+  rate: number;
+  date: string;
+  source: string;
+  cached: boolean;
+};
+
+type BulkImportRow = {
+  itemName: string;
+  itemDescription: string;
+  quantity: number;
+  unitPrice: number;
+  currency: string;
+  vendorName: string;
+};
 
 const statusClass: Record<string, string> = {
   Pending: "border-amber-200 bg-amber-50 text-amber-800",
@@ -127,17 +160,196 @@ const formatDate = (value: string) =>
 
 const money = (amount: number, currency = "AED") =>
   `${currency} ${new Intl.NumberFormat("en-AE", {
-    maximumFractionDigits: 0,
+    maximumFractionDigits: 2,
+    minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
   }).format(amount)}`;
 
 const classNames = (...values: Array<string | false | null | undefined>) =>
   values.filter(Boolean).join(" ");
+
+const dubaiDateKey = () => {
+  const parts = new Intl.DateTimeFormat("en", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "Asia/Dubai",
+    year: "numeric",
+  }).formatToParts(new Date());
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return `${get("year")}-${get("month")}-${get("day")}`;
+};
 
 const defaultRequiredByDate = () => {
   const date = new Date();
   date.setDate(date.getDate() + 5);
   return date.toISOString().slice(0, 10);
 };
+
+const fxCacheKey = (currency: string, date: string) =>
+  `${currency.toUpperCase()}-${date}`;
+
+function readFxCache(): Record<string, FxRateResult> {
+  if (typeof window === "undefined") return {};
+
+  try {
+    return JSON.parse(window.localStorage.getItem(FX_CACHE_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+function writeFxCache(cache: Record<string, FxRateResult>) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(FX_CACHE_KEY, JSON.stringify(cache));
+}
+
+async function getFxRateToAed(currency: string): Promise<FxRateResult> {
+  const normalized = currency.toUpperCase().trim();
+  const date = dubaiDateKey();
+
+  if (normalized === "AED") {
+    return {
+      rate: 1,
+      date,
+      source: "AED base currency",
+      cached: false,
+    };
+  }
+
+  const cache = readFxCache();
+  const cacheKey = fxCacheKey(normalized, date);
+
+  try {
+    const response = await fetch(
+      `${FX_RATE_ENDPOINT}?base=${encodeURIComponent(normalized)}&quotes=AED`,
+    );
+    if (!response.ok) {
+      throw new Error(`FX service returned ${response.status}`);
+    }
+    const payload = (await response.json()) as Array<{
+      date?: string;
+      rate?: number;
+    }>;
+    const rate = Number(payload[0]?.rate);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      throw new Error(`No AED rate returned for ${normalized}`);
+    }
+
+    const result = {
+      rate,
+      date: payload[0]?.date ?? date,
+      source: FX_RATE_SOURCE,
+      cached: false,
+    };
+    writeFxCache({
+      ...cache,
+      [cacheKey]: result,
+    });
+    return result;
+  } catch {
+    const cached = cache[cacheKey];
+    if (cached) {
+      return {
+        ...cached,
+        cached: true,
+      };
+    }
+    throw new Error(
+      `Could not convert ${normalized} to AED. Check the connection and try again.`,
+    );
+  }
+}
+
+function normaliseHeader(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+function parseNumber(value: unknown) {
+  const parsed = Number(String(value ?? "").replaceAll(",", "").trim());
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+async function parseBulkWorkbook(file: File) {
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+  if (!worksheet) {
+    throw new Error("The uploaded file does not contain a worksheet.");
+  }
+
+  return XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
+    defval: "",
+  });
+}
+
+function mapBulkRows(rows: Array<Record<string, unknown>>) {
+  return rows.map((row, index): BulkImportRow => {
+    const normalized = Object.fromEntries(
+      Object.entries(row).map(([key, value]) => [normaliseHeader(key), value]),
+    );
+    const get = (key: string) => normalized[normaliseHeader(key)];
+    const quantity = parseNumber(get("quantity"));
+    const unitPrice = parseNumber(get("unit_price"));
+    const currency = String(get("currency") ?? "").trim().toUpperCase();
+    const itemName = String(get("item_name") ?? "").trim();
+    const itemDescription = String(get("item_description") ?? "").trim();
+    const vendorName = String(get("vendor_name") ?? "").trim();
+    const rowNumber = index + 2;
+
+    if (!itemName) {
+      throw new Error(`Row ${rowNumber}: item_name is required.`);
+    }
+    if (!itemDescription) {
+      throw new Error(`Row ${rowNumber}: item_description is required.`);
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error(`Row ${rowNumber}: quantity must be greater than 0.`);
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+      throw new Error(`Row ${rowNumber}: unit_price must be greater than 0.`);
+    }
+    if (!BULK_SUPPORTED_CURRENCIES.includes(currency as (typeof BULK_SUPPORTED_CURRENCIES)[number])) {
+      throw new Error(
+        `Row ${rowNumber}: currency must be one of ${BULK_SUPPORTED_CURRENCIES.join(", ")}.`,
+      );
+    }
+
+    return {
+      itemName,
+      itemDescription,
+      quantity,
+      unitPrice,
+      currency,
+      vendorName,
+    };
+  });
+}
+
+async function convertRowsToLineItems(rows: BulkImportRow[]) {
+  const lineItems: ProcurementLineItem[] = [];
+
+  for (const row of rows) {
+    const fx = await getFxRateToAed(row.currency);
+    const originalTotal = roundMoney(row.quantity * row.unitPrice);
+    lineItems.push({
+      id: makeId("item"),
+      itemName: row.itemName,
+      itemDescription: row.itemDescription,
+      quantity: row.quantity,
+      unitPrice: roundMoney(row.unitPrice),
+      currency: row.currency,
+      originalTotal,
+      fxRateToAed: fx.rate,
+      aedTotal: roundMoney(originalTotal * fx.rate),
+      vendorName: row.vendorName,
+      exchangeRateDate: fx.date,
+      exchangeRateSource: fx.cached ? `${fx.source} cached` : fx.source,
+    });
+  }
+
+  return lineItems;
+}
 
 function IconButton({
   children,
@@ -362,8 +574,60 @@ function RequestForm({
   const [businessLocation, setBusinessLocation] = useState("");
   const [formError, setFormError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [bulkLineItems, setBulkLineItems] = useState<ProcurementLineItem[]>([]);
+  const [bulkImportMessage, setBulkImportMessage] = useState("");
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const hasBulkLineItems = bulkLineItems.length > 0;
+  const bulkTotalAed = useMemo(
+    () => roundMoney(bulkLineItems.reduce((total, item) => total + item.aedTotal, 0)),
+    [bulkLineItems],
+  );
+
+  const downloadBulkTemplate = () => {
+    const rows = [
+      BULK_TEMPLATE_HEADERS.join(","),
+      "Laptop stand,Adjustable laptop stand for operations desk,2,95,AED,OfficeLine",
+      "Wireless mouse,USB-C wireless mouse,3,25,USD,TechGate Supplies",
+    ];
+    downloadBlob(
+      rows.join("\n"),
+      "procurement-bulk-template.csv",
+      "text/csv;charset=utf-8",
+    );
+  };
+
+  const handleBulkUpload = async (file: File | undefined) => {
+    if (!file) return;
+
+    setBulkImporting(true);
+    setFormError("");
+    setSuccessMessage("");
+    setBulkImportMessage("");
+
+    try {
+      const rows = await parseBulkWorkbook(file);
+      if (rows.length === 0) {
+        throw new Error("The uploaded file does not contain any item rows.");
+      }
+      const converted = await convertRowsToLineItems(mapBulkRows(rows));
+      setBulkLineItems(converted);
+      setBulkImportMessage(
+        `${converted.length} line item(s) loaded. Total converted value is ${money(
+          converted.reduce((total, item) => total + item.aedTotal, 0),
+          "AED",
+        )}.`,
+      );
+    } catch (error) {
+      setBulkLineItems([]);
+      setFormError(error instanceof Error ? error.message : "Could not import the file.");
+    } finally {
+      setBulkImporting(false);
+    }
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const amountValue = Number(estimatedAmount);
     const quantityValue = Number(quantity);
@@ -373,86 +637,127 @@ function RequestForm({
 
     setSuccessMessage("");
 
-    if (!employeeName.trim()) {
-      setFormError("Employee name is required.");
-      return;
-    }
-    if (!itemName.trim()) {
-      setFormError("Item name is required.");
-      return;
-    }
-    if (!Number.isFinite(quantityValue) || quantityValue < 1) {
-      setFormError("Quantity must be at least 1.");
-      return;
-    }
-    if (!Number.isFinite(amountValue) || amountValue <= 0) {
-      setFormError("Enter an estimated amount greater than 0.");
-      return;
-    }
-    if (currency === "Other" && !customCurrency.trim()) {
-      setFormError("Enter the currency when selecting Other.");
-      return;
-    }
-    if (!dueDate || Number.isNaN(dueDate.getTime())) {
-      setFormError("Required by date is required.");
-      return;
-    }
-    if (dueDate < today) {
-      setFormError("Required by date cannot be in the past.");
-      return;
-    }
+    try {
+      setSubmitting(true);
 
-    const requestId = onSubmit({
-      employeeName,
-      department,
-      itemName,
-      itemDescription,
-      quantity: quantityValue,
-      estimatedAmount: amountValue,
-      currency: currency === "Other" ? customCurrency || "Other" : currency,
-      vendorName,
-      reasonForPurchase,
-      priority,
-      requiredByDate,
-      attachments,
-      vendor: {
-        contactPerson: vendorContact,
-        companyName: vendorCompany || vendorName,
-        trnNumber,
-        tradeLicense,
-        bankDetails,
-        vatRegistration,
-        ownerDocument,
-        websiteLink,
-        eBrochureLink,
-        businessLocation,
-      },
-    });
-    setFormError("");
-    setSuccessMessage(
-      `${requestId ?? "Request"} submitted to Mona for first review.`,
-    );
-    setItemName("");
-    setItemDescription("");
-    setQuantity(1);
-    setEstimatedAmount("");
-    setCurrency("AED");
-    setCustomCurrency("");
-    setVendorName("");
-    setReasonForPurchase("");
-    setPriority("Normal");
-    setRequiredByDate(defaultRequiredByDate());
-    setAttachments([]);
-    setVendorContact("");
-    setVendorCompany("");
-    setTrnNumber("");
-    setTradeLicense("");
-    setBankDetails("");
-    setVatRegistration("");
-    setOwnerDocument("");
-    setWebsiteLink("");
-    setEBrochureLink("");
-    setBusinessLocation("");
+      if (!employeeName.trim()) {
+        throw new Error("Employee name is required.");
+      }
+      if (!hasBulkLineItems && !itemName.trim()) {
+        throw new Error("Item name is required.");
+      }
+      if (!hasBulkLineItems && (!Number.isFinite(quantityValue) || quantityValue < 1)) {
+        throw new Error("Quantity must be at least 1.");
+      }
+      if (!hasBulkLineItems && (!Number.isFinite(amountValue) || amountValue <= 0)) {
+        throw new Error("Enter an estimated amount greater than 0.");
+      }
+      if (!hasBulkLineItems && !itemDescription.trim()) {
+        throw new Error("Item description is required.");
+      }
+      if (!hasBulkLineItems && currency === "Other" && !customCurrency.trim()) {
+        throw new Error("Enter the currency when selecting Other.");
+      }
+      if (!reasonForPurchase.trim()) {
+        throw new Error("Reason for purchase is required.");
+      }
+      if (!dueDate || Number.isNaN(dueDate.getTime())) {
+        throw new Error("Required by date is required.");
+      }
+      if (dueDate < today) {
+        throw new Error("Required by date cannot be in the past.");
+      }
+
+      const selectedCurrency =
+        currency === "Other" ? customCurrency.trim().toUpperCase() : currency;
+      const lineItems = hasBulkLineItems
+        ? bulkLineItems
+        : await convertRowsToLineItems([
+            {
+              itemName,
+              itemDescription,
+              quantity: quantityValue,
+              unitPrice: amountValue / quantityValue,
+              currency: selectedCurrency,
+              vendorName,
+            },
+          ]);
+      const totalAed = roundMoney(
+        lineItems.reduce((total, item) => total + item.aedTotal, 0),
+      );
+      const totalQuantity = lineItems.reduce((total, item) => total + item.quantity, 0);
+      const requestId = onSubmit({
+        employeeName,
+        department,
+        itemName: hasBulkLineItems
+          ? `Bulk upload (${lineItems.length} items)`
+          : itemName,
+        itemDescription: hasBulkLineItems
+          ? `Bulk procurement upload containing ${lineItems.length} item(s).`
+          : itemDescription,
+        quantity: hasBulkLineItems ? totalQuantity : quantityValue,
+        estimatedAmount: hasBulkLineItems ? totalAed : amountValue,
+        estimatedAmountAed: totalAed,
+        currency: hasBulkLineItems ? "AED" : selectedCurrency,
+        exchangeRateDate: lineItems[0]?.exchangeRateDate ?? dubaiDateKey(),
+        exchangeRateSource: Array.from(
+          new Set(lineItems.map((item) => item.exchangeRateSource)),
+        ).join(", "),
+        lineItems,
+        vendorName:
+          vendorName ||
+          Array.from(new Set(lineItems.map((item) => item.vendorName).filter(Boolean))).join(
+            ", ",
+          ),
+        reasonForPurchase,
+        priority,
+        requiredByDate,
+        attachments,
+        vendor: {
+          contactPerson: vendorContact,
+          companyName: vendorCompany || vendorName,
+          trnNumber,
+          tradeLicense,
+          bankDetails,
+          vatRegistration,
+          ownerDocument,
+          websiteLink,
+          eBrochureLink,
+          businessLocation,
+        },
+      });
+      setFormError("");
+      setSuccessMessage(
+        `${requestId ?? "Request"} submitted to Mona for first review. Total AED ${totalAed.toFixed(2)}.`,
+      );
+      setItemName("");
+      setItemDescription("");
+      setQuantity(1);
+      setEstimatedAmount("");
+      setCurrency("AED");
+      setCustomCurrency("");
+      setVendorName("");
+      setReasonForPurchase("");
+      setPriority("Normal");
+      setRequiredByDate(defaultRequiredByDate());
+      setAttachments([]);
+      setBulkLineItems([]);
+      setBulkImportMessage("");
+      setVendorContact("");
+      setVendorCompany("");
+      setTrnNumber("");
+      setTradeLicense("");
+      setBankDetails("");
+      setVatRegistration("");
+      setOwnerDocument("");
+      setWebsiteLink("");
+      setEBrochureLink("");
+      setBusinessLocation("");
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Could not submit the request.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -484,33 +789,45 @@ function RequestForm({
             </SelectInput>
           </Field>
           <Field label="Item name" required>
-            <TextInput value={itemName} onChange={(event) => setItemName(event.target.value)} required />
+            <TextInput
+              disabled={hasBulkLineItems}
+              value={hasBulkLineItems ? "Calculated from bulk upload" : itemName}
+              onChange={(event) => setItemName(event.target.value)}
+              required={!hasBulkLineItems}
+            />
           </Field>
           <Field label="Quantity" required>
             <TextInput
+              disabled={hasBulkLineItems}
               min={1}
               type="number"
-              value={quantity}
+              value={hasBulkLineItems ? bulkLineItems.reduce((total, item) => total + item.quantity, 0) : quantity}
               onChange={(event) => setQuantity(Number(event.target.value))}
-              required
+              required={!hasBulkLineItems}
             />
           </Field>
           <Field label="Estimated amount" required>
             <TextInput
+              disabled={hasBulkLineItems}
               inputMode="decimal"
               min={0}
               pattern="[0-9]*[.]?[0-9]*"
-              placeholder="Enter amount"
+              placeholder={hasBulkLineItems ? "Calculated from bulk upload" : "Enter amount"}
               type="text"
-              value={estimatedAmount}
+              value={hasBulkLineItems ? money(bulkTotalAed, "AED") : estimatedAmount}
               onChange={(event) =>
                 setEstimatedAmount(event.target.value.replace(/[^\d.]/g, ""))
               }
-              required
+              required={!hasBulkLineItems}
             />
           </Field>
           <Field label="Currency" required>
-            <SelectInput value={currency} onChange={(event) => setCurrency(event.target.value as typeof currency)} required>
+            <SelectInput
+              disabled={hasBulkLineItems}
+              value={hasBulkLineItems ? "AED" : currency}
+              onChange={(event) => setCurrency(event.target.value as typeof currency)}
+              required
+            >
               {CURRENCIES.map((item) => (
                 <option key={item}>{item}</option>
               ))}
@@ -547,13 +864,132 @@ function RequestForm({
           </Field>
           <div className="md:col-span-2 xl:col-span-3">
             <Field label="Item description" required>
-              <TextArea value={itemDescription} onChange={(event) => setItemDescription(event.target.value)} required />
+              <TextArea
+                disabled={hasBulkLineItems}
+                value={
+                  hasBulkLineItems
+                    ? `Bulk upload with ${bulkLineItems.length} line item(s).`
+                    : itemDescription
+                }
+                onChange={(event) => setItemDescription(event.target.value)}
+                required={!hasBulkLineItems}
+              />
             </Field>
           </div>
           <div className="md:col-span-2 xl:col-span-3">
             <Field label="Reason for purchase" required>
               <TextArea value={reasonForPurchase} onChange={(event) => setReasonForPurchase(event.target.value)} required />
             </Field>
+          </div>
+          <div className="md:col-span-2 xl:col-span-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-950">Bulk item upload</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Upload CSV or Excel rows with item_name, item_description, quantity, unit_price, currency, and optional vendor_name.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <IconButton
+                    icon={<Download className="h-4 w-4" />}
+                    onClick={downloadBulkTemplate}
+                    variant="secondary"
+                  >
+                    Download template
+                  </IconButton>
+                  {hasBulkLineItems ? (
+                    <IconButton
+                      icon={<XCircle className="h-4 w-4" />}
+                      onClick={() => {
+                        setBulkLineItems([]);
+                        setBulkImportMessage("");
+                      }}
+                      variant="ghost"
+                    >
+                      Clear items
+                    </IconButton>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <input
+                  accept=".csv,.xlsx,.xls"
+                  className={inputClass()}
+                  disabled={bulkImporting || submitting}
+                  type="file"
+                  onChange={(event) => {
+                    void handleBulkUpload(event.target.files?.[0]);
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </div>
+
+              {bulkImporting ? (
+                <p className="mt-3 text-sm font-medium text-blue-700">
+                  Importing rows and converting to AED...
+                </p>
+              ) : null}
+
+              {bulkImportMessage ? (
+                <p className="mt-3 text-sm font-medium text-emerald-700">
+                  {bulkImportMessage}
+                </p>
+              ) : null}
+
+              {hasBulkLineItems ? (
+                <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                  <table className="w-full min-w-[860px] text-left text-sm">
+                    <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2">Item</th>
+                        <th className="px-3 py-2">Qty</th>
+                        <th className="px-3 py-2">Unit price</th>
+                        <th className="px-3 py-2">Original total</th>
+                        <th className="px-3 py-2">FX to AED</th>
+                        <th className="px-3 py-2">AED total</th>
+                        <th className="px-3 py-2">Vendor</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {bulkLineItems.map((item) => (
+                        <tr key={item.id}>
+                          <td className="px-3 py-2">
+                            <p className="font-semibold text-slate-950">{item.itemName}</p>
+                            <p className="mt-1 line-clamp-1 text-xs text-slate-500">
+                              {item.itemDescription}
+                            </p>
+                          </td>
+                          <td className="px-3 py-2">{item.quantity}</td>
+                          <td className="px-3 py-2">{money(item.unitPrice, item.currency)}</td>
+                          <td className="px-3 py-2">{money(item.originalTotal, item.currency)}</td>
+                          <td className="px-3 py-2">
+                            {item.fxRateToAed.toFixed(4)}
+                            <p className="text-xs text-slate-500">{item.exchangeRateDate}</p>
+                          </td>
+                          <td className="px-3 py-2 font-semibold">
+                            {money(item.aedTotal, "AED")}
+                          </td>
+                          <td className="px-3 py-2">{item.vendorName || "Not provided"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-slate-50">
+                      <tr>
+                        <td className="px-3 py-2 font-bold text-slate-950" colSpan={5}>
+                          Total converted value
+                        </td>
+                        <td className="px-3 py-2 font-bold text-slate-950">
+                          {money(bulkTotalAed, "AED")}
+                        </td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              ) : null}
+            </div>
           </div>
           <div className="md:col-span-2 xl:col-span-3">
             <Field label="Attachments">
@@ -612,8 +1048,12 @@ function RequestForm({
       </section>
 
       <div className="flex justify-end">
-        <IconButton icon={<Plus className="h-4 w-4" />} type="submit">
-          Submit to Mona
+        <IconButton
+          disabled={bulkImporting || submitting}
+          icon={<Plus className="h-4 w-4" />}
+          type="submit"
+        >
+          {submitting ? "Submitting..." : "Submit to Mona"}
         </IconButton>
       </div>
     </form>
@@ -655,10 +1095,14 @@ function RequestsTable({
       request.employeeName,
       request.itemName,
       request.vendorName,
+      ...getRequestLineItems(request).flatMap((item) => [
+        item.itemName,
+        item.vendorName,
+      ]),
     ]
       .join(" ")
       .toLowerCase();
-    const amount = request.estimatedAmount;
+    const amount = getRequestTotalAed(request);
     return (
       haystack.includes(search.toLowerCase()) &&
       (status === "All" || request.status === status) &&
@@ -741,7 +1185,7 @@ function RequestsTable({
               <th className="px-4 py-3">Request</th>
               <th className="px-4 py-3">Stage</th>
               <th className="px-4 py-3">Assignee</th>
-              <th className="px-4 py-3">Amount</th>
+              <th className="px-4 py-3">Total AED</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Invoice</th>
               <th className="px-4 py-3">Pending action</th>
@@ -776,8 +1220,11 @@ function RequestsTable({
                   </td>
                   <td className="px-4 py-3">{getAssigneeName(request, users)}</td>
                   <td className="px-4 py-3 font-semibold">
-                    {money(request.estimatedAmount, request.currency)}
-                  </td>
+                  {money(getRequestTotalAed(request), "AED")}
+                  <p className="mt-1 text-xs font-normal text-slate-500">
+                    {getRequestItemCount(request)} item(s)
+                  </p>
+                </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={request.status} />
                   </td>
@@ -820,7 +1267,7 @@ function ActionPanel({
   const [comment, setComment] = useState("");
   const [declineReason, setDeclineReason] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
-  const [invoiceAmount, setInvoiceAmount] = useState(request.estimatedAmount);
+  const [invoiceAmount, setInvoiceAmount] = useState(getRequestTotalAed(request));
   const [invoiceDate, setInvoiceDate] = useState("2026-06-15");
   const [invoiceFile, setInvoiceFile] = useState("");
   const [paymentTerms, setPaymentTerms] = useState<(typeof PAYMENT_TERMS)[number]>("COD");
@@ -1087,6 +1534,7 @@ function RequestDetails({
 
   const logs = state.auditLogs.filter((log) => log.requestId === request.id);
   const latestDecline = logs.find((log) => log.declineReason);
+  const lineItems = getRequestLineItems(request);
 
   return (
     <section className="grid gap-5">
@@ -1121,17 +1569,61 @@ function RequestDetails({
             <h3 className="text-base font-bold text-slate-950">Request details</h3>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <Detail label="Item" value={request.itemName} />
-              <Detail label="Quantity" value={String(request.quantity)} />
-              <Detail label="Amount" value={money(request.estimatedAmount, request.currency)} />
+              <Detail label="Line items" value={String(lineItems.length)} />
+              <Detail label="Request amount" value={money(request.estimatedAmount, request.currency)} />
+              <Detail label="Total AED" value={money(getRequestTotalAed(request), "AED")} />
               <Detail label="Priority" value={request.priority} />
               <Detail label="Required by" value={formatDate(request.requiredByDate)} />
               <Detail label="Vendor" value={request.vendorName || "Optional"} />
+              <Detail label="FX source" value={request.exchangeRateSource || "Not provided"} />
               <div className="md:col-span-2">
                 <Detail label="Description" value={request.itemDescription} />
               </div>
               <div className="md:col-span-2">
                 <Detail label="Reason" value={request.reasonForPurchase} />
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 className="text-base font-bold text-slate-950">Line items</h3>
+            <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+              <table className="w-full min-w-[920px] text-left text-sm">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">Item</th>
+                    <th className="px-3 py-2">Qty</th>
+                    <th className="px-3 py-2">Unit price</th>
+                    <th className="px-3 py-2">Original total</th>
+                    <th className="px-3 py-2">FX to AED</th>
+                    <th className="px-3 py-2">AED total</th>
+                    <th className="px-3 py-2">Vendor</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {lineItems.map((item) => (
+                    <tr key={item.id}>
+                      <td className="px-3 py-2">
+                        <p className="font-semibold text-slate-950">{item.itemName}</p>
+                        <p className="mt-1 line-clamp-1 text-xs text-slate-500">
+                          {item.itemDescription}
+                        </p>
+                      </td>
+                      <td className="px-3 py-2">{item.quantity}</td>
+                      <td className="px-3 py-2">{money(item.unitPrice, item.currency)}</td>
+                      <td className="px-3 py-2">{money(item.originalTotal, item.currency)}</td>
+                      <td className="px-3 py-2">
+                        {item.fxRateToAed.toFixed(4)}
+                        <p className="text-xs text-slate-500">{item.exchangeRateDate}</p>
+                      </td>
+                      <td className="px-3 py-2 font-semibold">
+                        {money(item.aedTotal, "AED")}
+                      </td>
+                      <td className="px-3 py-2">{item.vendorName || "Not provided"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
 
@@ -1154,7 +1646,7 @@ function RequestDetails({
               {request.invoice ? (
                 <div className="mt-4 grid gap-3 text-sm">
                   <Detail label="Invoice number" value={request.invoice.invoiceNumber} />
-                  <Detail label="Amount" value={money(request.invoice.invoiceAmount, request.currency)} />
+                  <Detail label="Amount" value={money(request.invoice.invoiceAmount, "AED")} />
                   <Detail label="Invoice date" value={formatDate(request.invoice.invoiceDate)} />
                   <Detail label="Payment terms" value={request.invoice.paymentTerms} />
                   <Detail label="Uploaded file" value={request.invoice.uploadedInvoiceFile} />
@@ -1177,6 +1669,7 @@ function RequestDetails({
 
         <ActionPanel
           currentUser={currentUser}
+          key={request.id}
           onTransition={onTransition}
           request={request}
           state={state}
@@ -1338,8 +1831,12 @@ function rowsForExport(state: ProcurementState) {
     Department: request.department,
     Item: request.itemName,
     Vendor: request.vendorName,
-    Amount: request.estimatedAmount,
+    "Request amount": request.estimatedAmount,
     Currency: request.currency,
+    "Total AED": getRequestTotalAed(request),
+    "Line items": getRequestItemCount(request),
+    "FX source": request.exchangeRateSource,
+    "FX date": request.exchangeRateDate,
     Status: request.status,
     Stage: WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label,
     Assignee: getAssigneeName(request, state.users),
@@ -1347,6 +1844,27 @@ function rowsForExport(state: ProcurementState) {
     "Pending action": getPendingAction(request),
     "Last updated": formatDateTime(request.updatedAt),
   }));
+}
+
+function lineItemRowsForExport(state: ProcurementState) {
+  return state.requests.flatMap((request) =>
+    getRequestLineItems(request).map((item) => ({
+      "Request ID": request.id,
+      Employee: request.employeeName,
+      Department: request.department,
+      Item: item.itemName,
+      Description: item.itemDescription,
+      Quantity: item.quantity,
+      "Unit price": item.unitPrice,
+      Currency: item.currency,
+      "Original total": item.originalTotal,
+      "FX to AED": item.fxRateToAed,
+      "AED total": item.aedTotal,
+      Vendor: item.vendorName,
+      "FX source": item.exchangeRateSource,
+      "FX date": item.exchangeRateDate,
+    })),
+  );
 }
 
 function downloadBlob(content: BlobPart, filename: string, type: string) {
@@ -1473,8 +1991,10 @@ function AdminPanel({
   const exportExcel = async () => {
     const XLSX = await import("xlsx");
     const worksheet = XLSX.utils.json_to_sheet(rowsForExport(state));
+    const itemWorksheet = XLSX.utils.json_to_sheet(lineItemRowsForExport(state));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Procurement");
+    XLSX.utils.book_append_sheet(workbook, itemWorksheet, "Line Items");
     XLSX.writeFile(workbook, "procurement-report.xlsx");
   };
 
@@ -1761,7 +2281,8 @@ function EmployeeRequestStatus({
       </div>
 
       <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Detail label="Amount" value={money(request.estimatedAmount, request.currency)} />
+        <Detail label="Total AED" value={money(getRequestTotalAed(request), "AED")} />
+        <Detail label="Items" value={String(getRequestItemCount(request))} />
         <Detail label="Invoice" value={request.invoice?.invoiceNumber ?? "Pending"} />
         <Detail label="Required by" value={formatDate(request.requiredByDate)} />
         <Detail label="Pending action" value={getPendingAction(request)} />
