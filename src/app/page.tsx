@@ -574,12 +574,14 @@ function RequestForm({
   const [businessLocation, setBusinessLocation] = useState("");
   const [formError, setFormError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [entryMode, setEntryMode] = useState<"single" | "bulk">("single");
   const [bulkLineItems, setBulkLineItems] = useState<ProcurementLineItem[]>([]);
   const [bulkImportMessage, setBulkImportMessage] = useState("");
   const [bulkImporting, setBulkImporting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const hasBulkLineItems = bulkLineItems.length > 0;
+  const isBulkMode = entryMode === "bulk";
+  const hasBulkLineItems = isBulkMode && bulkLineItems.length > 0;
   const bulkTotalAed = useMemo(
     () => roundMoney(bulkLineItems.reduce((total, item) => total + item.aedTotal, 0)),
     [bulkLineItems],
@@ -601,6 +603,7 @@ function RequestForm({
   const handleBulkUpload = async (file: File | undefined) => {
     if (!file) return;
 
+    setEntryMode("bulk");
     setBulkImporting(true);
     setFormError("");
     setSuccessMessage("");
@@ -642,6 +645,9 @@ function RequestForm({
 
       if (!employeeName.trim()) {
         throw new Error("Employee name is required.");
+      }
+      if (isBulkMode && !hasBulkLineItems) {
+        throw new Error("Upload at least one bulk item or switch back to Single item.");
       }
       if (!hasBulkLineItems && !itemName.trim()) {
         throw new Error("Item name is required.");
@@ -741,6 +747,7 @@ function RequestForm({
       setPriority("Normal");
       setRequiredByDate(defaultRequiredByDate());
       setAttachments([]);
+      setEntryMode("single");
       setBulkLineItems([]);
       setBulkImportMessage("");
       setVendorContact("");
@@ -788,65 +795,116 @@ function RequestForm({
               ))}
             </SelectInput>
           </Field>
-          <Field label="Item name" required>
-            <TextInput
-              disabled={hasBulkLineItems}
-              value={hasBulkLineItems ? "Calculated from bulk upload" : itemName}
-              onChange={(event) => setItemName(event.target.value)}
-              required={!hasBulkLineItems}
-            />
-          </Field>
-          <Field label="Quantity" required>
-            <TextInput
-              disabled={hasBulkLineItems}
-              min={1}
-              type="number"
-              value={hasBulkLineItems ? bulkLineItems.reduce((total, item) => total + item.quantity, 0) : quantity}
-              onChange={(event) => setQuantity(Number(event.target.value))}
-              required={!hasBulkLineItems}
-            />
-          </Field>
-          <Field label="Estimated amount" required>
-            <TextInput
-              disabled={hasBulkLineItems}
-              inputMode="decimal"
-              min={0}
-              pattern="[0-9]*[.]?[0-9]*"
-              placeholder={hasBulkLineItems ? "Calculated from bulk upload" : "Enter amount"}
-              type="text"
-              value={hasBulkLineItems ? money(bulkTotalAed, "AED") : estimatedAmount}
-              onChange={(event) =>
-                setEstimatedAmount(event.target.value.replace(/[^\d.]/g, ""))
-              }
-              required={!hasBulkLineItems}
-            />
-          </Field>
-          <Field label="Currency" required>
-            <SelectInput
-              disabled={hasBulkLineItems}
-              value={hasBulkLineItems ? "AED" : currency}
-              onChange={(event) => setCurrency(event.target.value as typeof currency)}
-              required
-            >
-              {CURRENCIES.map((item) => (
-                <option key={item}>{item}</option>
-              ))}
-            </SelectInput>
-          </Field>
-          {currency === "Other" ? (
-            <Field label="Other currency" required>
-              <TextInput
-                maxLength={12}
-                placeholder="Enter currency"
-                value={customCurrency}
-                onChange={(event) => setCustomCurrency(event.target.value.toUpperCase())}
-                required
-              />
-            </Field>
-          ) : null}
-          <Field label="Vendor name">
-            <TextInput value={vendorName} onChange={(event) => setVendorName(event.target.value)} />
-          </Field>
+          <div className="md:col-span-2 xl:col-span-3">
+            <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm font-bold text-slate-950">Request items</p>
+              <div className="grid grid-cols-2 gap-2 rounded-md bg-white p-1 shadow-sm">
+                <button
+                  className={classNames(
+                    "inline-flex min-h-9 items-center justify-center gap-2 rounded px-3 text-sm font-semibold transition",
+                    !isBulkMode
+                      ? "bg-slate-950 text-white"
+                      : "text-slate-600 hover:bg-slate-100",
+                  )}
+                  onClick={() => {
+                    setEntryMode("single");
+                    setBulkLineItems([]);
+                    setBulkImportMessage("");
+                  }}
+                  type="button"
+                >
+                  <PackageCheck className="h-4 w-4" />
+                  Single item
+                </button>
+                <button
+                  className={classNames(
+                    "inline-flex min-h-9 items-center justify-center gap-2 rounded px-3 text-sm font-semibold transition",
+                    isBulkMode
+                      ? "bg-slate-950 text-white"
+                      : "text-slate-600 hover:bg-slate-100",
+                  )}
+                  onClick={() => setEntryMode("bulk")}
+                  type="button"
+                >
+                  <FileSpreadsheet className="h-4 w-4" />
+                  Bulk upload
+                </button>
+              </div>
+            </div>
+          </div>
+          {isBulkMode ? (
+            <div className="md:col-span-2 xl:col-span-3">
+              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+                <p className="text-sm font-bold text-slate-950">Bulk item request</p>
+                <p className="mt-1 text-sm text-slate-600">
+                  {hasBulkLineItems
+                    ? `${bulkLineItems.length} item(s), total converted value ${money(
+                        bulkTotalAed,
+                        "AED",
+                      )}`
+                    : "No bulk file loaded yet."}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <Field label="Item name" required>
+                <TextInput
+                  value={itemName}
+                  onChange={(event) => setItemName(event.target.value)}
+                  required
+                />
+              </Field>
+              <Field label="Quantity" required>
+                <TextInput
+                  min={1}
+                  type="number"
+                  value={quantity}
+                  onChange={(event) => setQuantity(Number(event.target.value))}
+                  required
+                />
+              </Field>
+              <Field label="Estimated amount" required>
+                <TextInput
+                  inputMode="decimal"
+                  min={0}
+                  pattern="[0-9]*[.]?[0-9]*"
+                  placeholder="Enter amount"
+                  type="text"
+                  value={estimatedAmount}
+                  onChange={(event) =>
+                    setEstimatedAmount(event.target.value.replace(/[^\d.]/g, ""))
+                  }
+                  required
+                />
+              </Field>
+              <Field label="Currency" required>
+                <SelectInput
+                  value={currency}
+                  onChange={(event) => setCurrency(event.target.value as typeof currency)}
+                  required
+                >
+                  {CURRENCIES.map((item) => (
+                    <option key={item}>{item}</option>
+                  ))}
+                </SelectInput>
+              </Field>
+              {currency === "Other" ? (
+                <Field label="Other currency" required>
+                  <TextInput
+                    maxLength={12}
+                    placeholder="Enter currency"
+                    value={customCurrency}
+                    onChange={(event) => setCustomCurrency(event.target.value.toUpperCase())}
+                    required
+                  />
+                </Field>
+              ) : null}
+              <Field label="Vendor name">
+                <TextInput value={vendorName} onChange={(event) => setVendorName(event.target.value)} />
+              </Field>
+            </>
+          )}
           <Field label="Priority">
             <SelectInput value={priority} onChange={(event) => setPriority(event.target.value as typeof priority)}>
               {PRIORITIES.map((item) => (
@@ -862,25 +920,23 @@ function RequestForm({
               required
             />
           </Field>
-          <div className="md:col-span-2 xl:col-span-3">
-            <Field label="Item description" required>
-              <TextArea
-                disabled={hasBulkLineItems}
-                value={
-                  hasBulkLineItems
-                    ? `Bulk upload with ${bulkLineItems.length} line item(s).`
-                    : itemDescription
-                }
-                onChange={(event) => setItemDescription(event.target.value)}
-                required={!hasBulkLineItems}
-              />
-            </Field>
-          </div>
+          {!isBulkMode ? (
+            <div className="md:col-span-2 xl:col-span-3">
+              <Field label="Item description" required>
+                <TextArea
+                  value={itemDescription}
+                  onChange={(event) => setItemDescription(event.target.value)}
+                  required
+                />
+              </Field>
+            </div>
+          ) : null}
           <div className="md:col-span-2 xl:col-span-3">
             <Field label="Reason for purchase" required>
               <TextArea value={reasonForPurchase} onChange={(event) => setReasonForPurchase(event.target.value)} required />
             </Field>
           </div>
+          {isBulkMode ? (
           <div className="md:col-span-2 xl:col-span-3">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -991,6 +1047,7 @@ function RequestForm({
               ) : null}
             </div>
           </div>
+          ) : null}
           <div className="md:col-span-2 xl:col-span-3">
             <Field label="Attachments">
               <input
