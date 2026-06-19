@@ -26,6 +26,7 @@ import {
   Shield,
   ShoppingCart,
   SlidersHorizontal,
+  Truck,
   Upload,
   UserCog,
   XCircle,
@@ -35,8 +36,10 @@ import {
   AuditLog,
   AttachmentReference,
   CURRENCIES,
+  DELIVERY_STATUSES,
   DEPARTMENTS,
   InvoiceDetails,
+  LogisticsDetails,
   NotificationRecord,
   PAYMENT_TERMS,
   PRIORITIES,
@@ -59,12 +62,14 @@ import {
   getRequestTotalAed,
   getStageIndex,
   getStuckRequests,
+  getUserBlockedTasks,
   getUserById,
   getVisibleRequests,
   initialState,
   isApprovalStatus,
   isClosed,
   isDeclined,
+  isUserBlockedTask,
   makeId,
   markNotificationRead,
   nowIso,
@@ -132,10 +137,12 @@ const statusTone = (status: RequestStatus) => {
   if (
     [
       "Edlyn Confirmation",
+      "Edlyn Clarification Requested",
       "Purchase in Progress",
       "Invoice Uploaded",
       "Aileen Finance Review",
       "Invoice Cleared",
+      "Delivery Tracking",
       "Order Confirmed",
       "Item Received",
     ].includes(status)
@@ -999,6 +1006,7 @@ function RequestForm({
                   <table className="w-full min-w-[860px] text-left text-sm">
                     <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                       <tr>
+                        <th className="px-3 py-2">No.</th>
                         <th className="px-3 py-2">Item</th>
                         <th className="px-3 py-2">Qty</th>
                         <th className="px-3 py-2">Unit price</th>
@@ -1009,8 +1017,11 @@ function RequestForm({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {bulkLineItems.map((item) => (
+                      {bulkLineItems.map((item, index) => (
                         <tr key={item.id}>
+                          <td className="px-3 py-2 font-semibold text-slate-600">
+                            Item {index + 1}
+                          </td>
                           <td className="px-3 py-2">
                             <p className="font-semibold text-slate-950">{item.itemName}</p>
                             <p className="mt-1 line-clamp-1 text-xs text-slate-500">
@@ -1033,7 +1044,7 @@ function RequestForm({
                     </tbody>
                     <tfoot className="bg-slate-50">
                       <tr>
-                        <td className="px-3 py-2 font-bold text-slate-950" colSpan={5}>
+                        <td className="px-3 py-2 font-bold text-slate-950" colSpan={6}>
                           Total converted value
                         </td>
                         <td className="px-3 py-2 font-bold text-slate-950">
@@ -1122,17 +1133,21 @@ function RequestsTable({
   users,
   selectedRequestId,
   onSelect,
+  currentUser,
   title = "All procurement requests",
   description = "Search, filter, and open requests to view stage actions.",
   showAssigneeFilter = true,
+  hideFinancials = false,
 }: {
   requests: ProcurementRequest[];
   users: UserProfile[];
   selectedRequestId?: string;
   onSelect: (id: string) => void;
+  currentUser?: UserProfile;
   title?: string;
   description?: string;
   showAssigneeFilter?: boolean;
+  hideFinancials?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
@@ -1166,8 +1181,8 @@ function RequestsTable({
       (assignee === "All" || request.assigneeId === assignee) &&
       (department === "All" || request.department === department) &&
       (stage === "All" || request.stage === stage) &&
-      (!minAmount || amount >= Number(minAmount)) &&
-      (!maxAmount || amount <= Number(maxAmount)) &&
+      (hideFinancials || !minAmount || amount >= Number(minAmount)) &&
+      (hideFinancials || !maxAmount || amount <= Number(maxAmount)) &&
       (!fromDate || request.createdAt.slice(0, 10) >= fromDate) &&
       (!toDate || request.createdAt.slice(0, 10) <= toDate)
     );
@@ -1228,21 +1243,25 @@ function RequestsTable({
               </option>
             ))}
           </SelectInput>
-          <TextInput placeholder="Min amount" type="number" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} />
-          <TextInput placeholder="Max amount" type="number" value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} />
+          {!hideFinancials ? (
+            <>
+              <TextInput placeholder="Min amount" type="number" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} />
+              <TextInput placeholder="Max amount" type="number" value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} />
+            </>
+          ) : null}
           <TextInput type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
           <TextInput type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
         </div>
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
+        <table className={classNames("w-full border-collapse text-left text-sm", hideFinancials ? "min-w-[980px]" : "min-w-[1120px]")}>
           <thead className="bg-slate-50 text-xs uppercase text-slate-500">
             <tr>
               <th className="px-4 py-3">Request</th>
               <th className="px-4 py-3">Stage</th>
               <th className="px-4 py-3">Assignee</th>
-              <th className="px-4 py-3">Total AED</th>
+              {!hideFinancials ? <th className="px-4 py-3">Total AED</th> : null}
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Invoice</th>
               <th className="px-4 py-3">Pending action</th>
@@ -1252,16 +1271,25 @@ function RequestsTable({
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0 ? (
               <tr>
-                <td className="px-4 py-8 text-center text-sm text-slate-500" colSpan={8}>
+                <td className="px-4 py-8 text-center text-sm text-slate-500" colSpan={hideFinancials ? 7 : 8}>
                   No procurement requests match the current filters.
                 </td>
               </tr>
             ) : (
-              filtered.map((request) => (
+              filtered.map((request) => {
+                const blocked = currentUser ? isUserBlockedTask(request, currentUser) : false;
+
+                return (
                 <tr
                   className={classNames(
                     "cursor-pointer transition hover:bg-blue-50/60",
-                    selectedRequestId === request.id ? "bg-blue-50" : "bg-white",
+                    blocked
+                      ? selectedRequestId === request.id
+                        ? "bg-red-100 hover:bg-red-100"
+                        : "bg-red-50 hover:bg-red-100"
+                      : selectedRequestId === request.id
+                        ? "bg-blue-50"
+                        : "bg-white",
                   )}
                   key={request.id}
                   onClick={() => onSelect(request.id)}
@@ -1276,12 +1304,14 @@ function RequestsTable({
                     {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
                   </td>
                   <td className="px-4 py-3">{getAssigneeName(request, users)}</td>
-                  <td className="px-4 py-3 font-semibold">
-                  {money(getRequestTotalAed(request), "AED")}
-                  <p className="mt-1 text-xs font-normal text-slate-500">
-                    {getRequestItemCount(request)} item(s)
-                  </p>
-                </td>
+                  {!hideFinancials ? (
+                    <td className="px-4 py-3 font-semibold">
+                    {money(getRequestTotalAed(request), "AED")}
+                    <p className="mt-1 text-xs font-normal text-slate-500">
+                      {getRequestItemCount(request)} item(s)
+                    </p>
+                  </td>
+                  ) : null}
                   <td className="px-4 py-3">
                     <StatusBadge status={request.status} />
                   </td>
@@ -1293,7 +1323,7 @@ function RequestsTable({
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <span className="line-clamp-2 max-w-72 text-slate-600">
+                    <span className={classNames("line-clamp-2 max-w-72", blocked ? "font-semibold text-red-800" : "text-slate-600")}>
                       {getPendingAction(request)}
                     </span>
                   </td>
@@ -1301,7 +1331,8 @@ function RequestsTable({
                     {formatDateTime(request.updatedAt)}
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>
@@ -1329,6 +1360,16 @@ function ActionPanel({
   const [invoiceFile, setInvoiceFile] = useState("");
   const [paymentTerms, setPaymentTerms] = useState<(typeof PAYMENT_TERMS)[number]>("COD");
   const [financeNotes, setFinanceNotes] = useState("");
+  const [deliveryStatus, setDeliveryStatus] = useState<LogisticsDetails["deliveryStatus"]>(
+    request.logistics?.deliveryStatus ?? "Order placed",
+  );
+  const [deliveryProvider, setDeliveryProvider] = useState(request.logistics?.provider ?? "");
+  const [trackingNumber, setTrackingNumber] = useState(request.logistics?.trackingNumber ?? "");
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState(
+    request.logistics?.expectedDeliveryDate ?? "",
+  );
+  const [lastCheckpoint, setLastCheckpoint] = useState(request.logistics?.lastCheckpoint ?? "");
+  const [deliveryNotes, setDeliveryNotes] = useState(request.logistics?.notes ?? "");
 
   const role = currentUser.role;
   const clearText = () => {
@@ -1345,6 +1386,56 @@ function ActionPanel({
     paymentTerms,
     financeNotes,
   });
+  const logisticsPayload = (): LogisticsDetails => ({
+    deliveryStatus,
+    provider: deliveryProvider,
+    trackingNumber,
+    expectedDeliveryDate,
+    lastCheckpoint,
+    notes: deliveryNotes,
+  });
+  const logisticsFields = (
+    <div className="grid gap-3 md:grid-cols-2">
+      <SelectInput
+        value={deliveryStatus}
+        onChange={(event) =>
+          setDeliveryStatus(event.target.value as LogisticsDetails["deliveryStatus"])
+        }
+      >
+        {DELIVERY_STATUSES.map((status) => (
+          <option key={status}>{status}</option>
+        ))}
+      </SelectInput>
+      <TextInput
+        placeholder="Logistics provider"
+        value={deliveryProvider}
+        onChange={(event) => setDeliveryProvider(event.target.value)}
+      />
+      <TextInput
+        placeholder="Tracking number"
+        value={trackingNumber}
+        onChange={(event) => setTrackingNumber(event.target.value)}
+      />
+      <TextInput
+        type="date"
+        value={expectedDeliveryDate}
+        onChange={(event) => setExpectedDeliveryDate(event.target.value)}
+      />
+      <TextInput
+        className="md:col-span-2"
+        placeholder="Last checkpoint"
+        value={lastCheckpoint}
+        onChange={(event) => setLastCheckpoint(event.target.value)}
+      />
+      <div className="md:col-span-2">
+        <TextArea
+          placeholder="Delivery notes"
+          value={deliveryNotes}
+          onChange={(event) => setDeliveryNotes(event.target.value)}
+        />
+      </div>
+    </div>
+  );
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -1443,15 +1534,31 @@ function ActionPanel({
         ) : null}
 
         {request.status === "Edlyn Confirmation" && canUse("Edlyn") ? (
-          <IconButton
-            icon={<ShoppingCart className="h-4 w-4" />}
-            onClick={() => {
-              onTransition(request.id, { type: "edlyn-confirm", comment });
-              clearText();
-            }}
-          >
-            Confirm item details
-          </IconButton>
+          <div className="flex flex-wrap gap-2">
+            <IconButton
+              icon={<ShoppingCart className="h-4 w-4" />}
+              onClick={() => {
+                onTransition(request.id, { type: "edlyn-confirm", comment });
+                clearText();
+              }}
+            >
+              Confirm item details
+            </IconButton>
+            <IconButton
+              disabled={!comment.trim()}
+              icon={<AlertCircle className="h-4 w-4" />}
+              onClick={() => {
+                onTransition(request.id, {
+                  type: "edlyn-request-clarification",
+                  comment,
+                });
+                clearText();
+              }}
+              variant="secondary"
+            >
+              Request clarification
+            </IconButton>
+          </div>
         ) : null}
 
         {request.status === "Purchase in Progress" && canUse("Edlyn") ? (
@@ -1473,19 +1580,35 @@ function ActionPanel({
                 />
               </div>
             </div>
-            <IconButton
-              icon={<Upload className="h-4 w-4" />}
-              onClick={() => {
-                onTransition(request.id, {
-                  type: "edlyn-upload-invoice",
-                  invoice: invoicePayload(),
-                  comment,
-                });
-                clearText();
-              }}
-            >
-              Upload invoice
-            </IconButton>
+            <div className="flex flex-wrap gap-2">
+              <IconButton
+                icon={<Upload className="h-4 w-4" />}
+                onClick={() => {
+                  onTransition(request.id, {
+                    type: "edlyn-upload-invoice",
+                    invoice: invoicePayload(),
+                    comment,
+                  });
+                  clearText();
+                }}
+              >
+                Upload invoice
+              </IconButton>
+              <IconButton
+                disabled={!comment.trim()}
+                icon={<AlertCircle className="h-4 w-4" />}
+                onClick={() => {
+                  onTransition(request.id, {
+                    type: "edlyn-request-clarification",
+                    comment,
+                  });
+                  clearText();
+                }}
+                variant="secondary"
+              >
+                Request clarification
+              </IconButton>
+            </div>
           </div>
         ) : null}
 
@@ -1513,12 +1636,50 @@ function ActionPanel({
         ) : null}
 
         {request.status === "Invoice Cleared" && canUse("Edlyn") ? (
-          <IconButton
-            icon={<Send className="h-4 w-4" />}
-            onClick={() => onTransition(request.id, { type: "edlyn-confirm-order", comment })}
-          >
-            Confirm order placed
-          </IconButton>
+          <div className="grid gap-3 rounded-lg border border-slate-200 p-3">
+            {logisticsFields}
+            <IconButton
+              icon={<Send className="h-4 w-4" />}
+              onClick={() => {
+                onTransition(request.id, {
+                  type: "edlyn-start-delivery-tracking",
+                  logistics: logisticsPayload(),
+                  comment,
+                });
+                clearText();
+              }}
+            >
+              Confirm order and track delivery
+            </IconButton>
+          </div>
+        ) : null}
+
+        {request.status === "Delivery Tracking" && canUse("Edlyn") ? (
+          <div className="grid gap-3 rounded-lg border border-slate-200 p-3">
+            {logisticsFields}
+            <div className="flex flex-wrap gap-2">
+              <IconButton
+                icon={<Truck className="h-4 w-4" />}
+                onClick={() =>
+                  onTransition(request.id, {
+                    type: "edlyn-update-logistics",
+                    logistics: logisticsPayload(),
+                    comment,
+                  })
+                }
+                variant="secondary"
+              >
+                Update logistics
+              </IconButton>
+              <IconButton
+                icon={<PackageCheck className="h-4 w-4" />}
+                onClick={() => onTransition(request.id, { type: "edlyn-receive-item", comment })}
+                variant="success"
+              >
+                Mark item received
+              </IconButton>
+            </div>
+          </div>
         ) : null}
 
         {request.status === "Order Confirmed" && canUse("Edlyn") ? (
@@ -1553,7 +1714,7 @@ function ActionPanel({
           (request.status === "Rashid Review" && canUse("Rashid")) ||
           (["Dr. Masjid Review", "Rashid Auto Approved"].includes(request.status) &&
             canUse("Dr. Masjid")) ||
-          (["Edlyn Confirmation", "Purchase in Progress", "Invoice Cleared", "Order Confirmed"].includes(
+          (["Edlyn Confirmation", "Purchase in Progress", "Invoice Cleared", "Delivery Tracking", "Order Confirmed"].includes(
             request.status,
           ) &&
             canUse("Edlyn")) ||
@@ -1648,6 +1809,7 @@ function RequestDetails({
               <table className="w-full min-w-[920px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
+                    <th className="px-3 py-2">No.</th>
                     <th className="px-3 py-2">Item</th>
                     <th className="px-3 py-2">Qty</th>
                     <th className="px-3 py-2">Unit price</th>
@@ -1658,8 +1820,11 @@ function RequestDetails({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {lineItems.map((item) => (
+                  {lineItems.map((item, index) => (
                     <tr key={item.id}>
+                      <td className="px-3 py-2 font-semibold text-slate-600">
+                        Item {index + 1}
+                      </td>
                       <td className="px-3 py-2">
                         <p className="font-semibold text-slate-950">{item.itemName}</p>
                         <p className="mt-1 line-clamp-1 text-xs text-slate-500">
@@ -1684,7 +1849,7 @@ function RequestDetails({
             </div>
           </div>
 
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid gap-5 lg:grid-cols-3">
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h3 className="text-base font-bold text-slate-950">Vendor profile</h3>
               <div className="mt-4 grid gap-3 text-sm">
@@ -1712,6 +1877,24 @@ function RequestDetails({
               ) : (
                 <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                   Invoice is pending upload by Edlyn.
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="text-base font-bold text-slate-950">Logistics tracking</h3>
+              {request.logistics ? (
+                <div className="mt-4 grid gap-3 text-sm">
+                  <Detail label="Delivery status" value={request.logistics.deliveryStatus} />
+                  <Detail label="Provider" value={request.logistics.provider || "Not provided"} />
+                  <Detail label="Tracking number" value={request.logistics.trackingNumber || "Not provided"} />
+                  <Detail label="Expected delivery" value={request.logistics.expectedDeliveryDate ? formatDate(request.logistics.expectedDeliveryDate) : "Not provided"} />
+                  <Detail label="Last checkpoint" value={request.logistics.lastCheckpoint || "Not provided"} />
+                  <Detail label="Notes" value={request.logistics.notes || "No notes"} />
+                </div>
+              ) : (
+                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                  Delivery tracking starts after finance clears the invoice.
                 </div>
               )}
             </div>
@@ -1898,6 +2081,10 @@ function rowsForExport(state: ProcurementState) {
     Stage: WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label,
     Assignee: getAssigneeName(request, state.users),
     Invoice: request.invoice?.invoiceNumber ?? "Pending",
+    "Delivery status": request.logistics?.deliveryStatus ?? "Not started",
+    "Logistics provider": request.logistics?.provider ?? "",
+    "Tracking number": request.logistics?.trackingNumber ?? "",
+    "Expected delivery": request.logistics?.expectedDeliveryDate ?? "",
     "Pending action": getPendingAction(request),
     "Last updated": formatDateTime(request.updatedAt),
   }));
@@ -1905,8 +2092,9 @@ function rowsForExport(state: ProcurementState) {
 
 function lineItemRowsForExport(state: ProcurementState) {
   return state.requests.flatMap((request) =>
-    getRequestLineItems(request).map((item) => ({
+    getRequestLineItems(request).map((item, index) => ({
       "Request ID": request.id,
+      "Line #": index + 1,
       Employee: request.employeeName,
       Department: request.department,
       Item: item.itemName,
@@ -2301,10 +2489,16 @@ function ProcurementAssistant({
 function EmployeeRequestStatus({
   request,
   state,
+  currentUser,
+  onTransition,
 }: {
   request?: ProcurementRequest;
   state: ProcurementState;
+  currentUser: UserProfile;
+  onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
 }) {
+  const [clarification, setClarification] = useState("");
+
   if (!request) {
     return (
       <section className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
@@ -2338,12 +2532,41 @@ function EmployeeRequestStatus({
       </div>
 
       <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Detail label="Total AED" value={money(getRequestTotalAed(request), "AED")} />
         <Detail label="Items" value={String(getRequestItemCount(request))} />
         <Detail label="Invoice" value={request.invoice?.invoiceNumber ?? "Pending"} />
         <Detail label="Required by" value={formatDate(request.requiredByDate)} />
         <Detail label="Pending action" value={getPendingAction(request)} />
       </div>
+
+      {request.status === "Edlyn Clarification Requested" &&
+      request.assigneeId === currentUser.id ? (
+        <div className="mt-5 grid gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
+          <div>
+            <p className="font-semibold text-red-950">Clarification needed by Edlyn</p>
+            <p className="mt-1 text-sm text-red-800">
+              Answer the item or price question here. The request will return directly to Edlyn.
+            </p>
+          </div>
+          <TextArea
+            placeholder="Write your clarification for Edlyn"
+            value={clarification}
+            onChange={(event) => setClarification(event.target.value)}
+          />
+          <IconButton
+            disabled={!clarification.trim()}
+            icon={<Send className="h-4 w-4" />}
+            onClick={() => {
+              onTransition(request.id, {
+                type: "employee-submit-edlyn-clarification",
+                comment: clarification,
+              });
+              setClarification("");
+            }}
+          >
+            Submit clarification
+          </IconButton>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2394,7 +2617,9 @@ function EmployeePortal({
       />
 
       <RequestsTable
+        currentUser={currentUser}
         description="Read-only company status view for submitted requests and workflow progress."
+        hideFinancials
         onSelect={setSelectedRequestId}
         requests={state.requests}
         selectedRequestId={selectedRequest?.id}
@@ -2403,7 +2628,14 @@ function EmployeePortal({
         users={state.users}
       />
 
-      <EmployeeRequestStatus request={selectedRequest} state={state} />
+      <EmployeeRequestStatus
+        currentUser={currentUser}
+        onTransition={(requestId, action) =>
+          setState((current) => transitionRequest(current, requestId, currentUser.id, action))
+        }
+        request={selectedRequest}
+        state={state}
+      />
     </div>
   );
 }
@@ -2429,6 +2661,9 @@ function Dashboard({
     state.requests.find((request) => request.id === selectedRequestId) ??
     visibleRequests[0];
   const metrics = getMetrics(currentUser.role === "Admin" ? state.requests : visibleRequests);
+  const blockedTasks = getUserBlockedTasks(state.requests, currentUser);
+  const watchlistRequests = blockedTasks.length > 0 ? blockedTasks : getStuckRequests(state.requests);
+  const showingPersonalBlockages = blockedTasks.length > 0;
 
   const metricCards = [
     {
@@ -2498,6 +2733,7 @@ function Dashboard({
       <div className="grid gap-5 2xl:grid-cols-[1fr_420px]">
         <div className="grid gap-5">
           <RequestsTable
+            currentUser={currentUser}
             onSelect={setSelectedRequestId}
             requests={visibleRequests}
             selectedRequestId={selectedRequest?.id}
@@ -2524,15 +2760,29 @@ function Dashboard({
               <h2 className="text-base font-bold text-slate-950">Watchlist</h2>
             </div>
             <div className="mt-3 grid gap-2">
-              {getStuckRequests(state.requests).map((request) => (
+              {watchlistRequests.length === 0 ? (
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                  No blocked tasks assigned to you.
+                </div>
+              ) : null}
+              {watchlistRequests.map((request) => (
                 <button
-                  className="rounded-md border border-orange-200 bg-orange-50 p-3 text-left text-sm text-orange-900"
+                  className={classNames(
+                    "rounded-md border p-3 text-left text-sm",
+                    showingPersonalBlockages
+                      ? "border-red-200 bg-red-50 text-red-900"
+                      : "border-orange-200 bg-orange-50 text-orange-900",
+                  )}
                   key={request.id}
                   onClick={() => setSelectedRequestId(request.id)}
                   type="button"
                 >
                   <strong>{request.id}</strong> has been waiting since{" "}
                   {formatDateTime(request.updatedAt)}
+                  <span className="mt-1 block text-xs">
+                    {showingPersonalBlockages ? "Blocked on you" : getAssigneeName(request, state.users)} -{" "}
+                    {getPendingAction(request)}
+                  </span>
                 </button>
               ))}
             </div>

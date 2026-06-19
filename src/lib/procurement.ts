@@ -19,10 +19,12 @@ export const STATUSES = [
   "Rashid Declined",
   "Dr. Masjid Review",
   "Edlyn Confirmation",
+  "Edlyn Clarification Requested",
   "Purchase in Progress",
   "Invoice Uploaded",
   "Aileen Finance Review",
   "Invoice Cleared",
+  "Delivery Tracking",
   "Order Confirmed",
   "Item Received",
   "Completed",
@@ -95,6 +97,17 @@ export type Department = (typeof DEPARTMENTS)[number];
 export const CURRENCIES = ["AED", "USD", "EUR", "GBP", "SAR", "INR", "Other"] as const;
 export type Currency = (typeof CURRENCIES)[number];
 
+export const DELIVERY_STATUSES = [
+  "Not started",
+  "Order placed",
+  "In transit",
+  "Out for delivery",
+  "Delivered",
+  "Delayed",
+] as const;
+
+export type DeliveryStatus = (typeof DELIVERY_STATUSES)[number];
+
 export type UserProfile = {
   id: string;
   name: string;
@@ -134,6 +147,16 @@ export type InvoiceDetails = {
   paymentTerms: PaymentTerm;
   financeNotes: string;
   clearedAt?: string;
+};
+
+export type LogisticsDetails = {
+  deliveryStatus: DeliveryStatus;
+  provider: string;
+  trackingNumber: string;
+  expectedDeliveryDate: string;
+  lastCheckpoint: string;
+  notes: string;
+  updatedAt?: string;
 };
 
 export type ProcurementLineItem = {
@@ -176,6 +199,8 @@ export type ProcurementRequest = {
   assigneeId: string;
   submittedById: string;
   previousResponsibleId?: string;
+  edlynClarificationReturnStatus?: "Edlyn Confirmation" | "Purchase in Progress";
+  logistics?: LogisticsDetails;
   orderConfirmedAt?: string;
   itemReceivedAt?: string;
   completedAt?: string;
@@ -257,9 +282,13 @@ export type WorkflowAction =
   | { type: "rashid-decline"; declineReason: string }
   | { type: "dr-review"; comment?: string }
   | { type: "edlyn-confirm"; comment?: string }
+  | { type: "edlyn-request-clarification"; comment: string }
+  | { type: "employee-submit-edlyn-clarification"; comment: string }
   | { type: "edlyn-upload-invoice"; invoice: InvoiceDetails; comment?: string }
   | { type: "aileen-clear-invoice"; financeNotes?: string }
   | { type: "edlyn-confirm-order"; comment?: string }
+  | { type: "edlyn-start-delivery-tracking"; logistics?: LogisticsDetails; comment?: string }
+  | { type: "edlyn-update-logistics"; logistics: LogisticsDetails; comment?: string }
   | { type: "edlyn-receive-item"; comment?: string }
   | { type: "aileen-close"; comment?: string }
   | { type: "admin-reassign"; assigneeId: string; comment?: string };
@@ -275,6 +304,15 @@ const emptyVendor: VendorDetails = {
   websiteLink: "",
   eBrochureLink: "",
   businessLocation: "",
+};
+
+const emptyLogistics: LogisticsDetails = {
+  deliveryStatus: "Not started",
+  provider: "",
+  trackingNumber: "",
+  expectedDeliveryDate: "",
+  lastCheckpoint: "",
+  notes: "",
 };
 
 const AED_EXCHANGE_RATE_SOURCE = "AED base currency";
@@ -336,16 +374,30 @@ export function getRequestItemCount(request: ProcurementRequest) {
   return getRequestLineItems(request).length;
 }
 
-export function normalizeRequestFinancials(request: ProcurementRequest) {
+export function normalizeRequestFinancials(request: ProcurementRequest): ProcurementRequest {
   const lineItems = getRequestLineItems(request);
   const estimatedAmountAed = roundMoney(
     lineItems.reduce((total, item) => total + item.aedTotal, 0),
   );
+  const logistics = request.logistics
+    ? {
+        ...emptyLogistics,
+        ...request.logistics,
+      }
+    : undefined;
+  const edlynClarificationReturnStatus: ProcurementRequest["edlynClarificationReturnStatus"] =
+    request.edlynClarificationReturnStatus === "Purchase in Progress"
+      ? "Purchase in Progress"
+      : request.edlynClarificationReturnStatus === "Edlyn Confirmation"
+        ? "Edlyn Confirmation"
+        : undefined;
 
   return {
     ...request,
     lineItems,
     estimatedAmountAed,
+    logistics,
+    edlynClarificationReturnStatus,
     exchangeRateSource:
       request.exchangeRateSource ||
       lineItems[0]?.exchangeRateSource ||
@@ -469,6 +521,15 @@ export const seedRequests: ProcurementRequest[] = ([
     assigneeId: aileen.id,
     submittedById: employee.id,
     previousResponsibleId: edlyn.id,
+    logistics: {
+      deliveryStatus: "Delivered",
+      provider: "Workspace Gulf delivery",
+      trackingNumber: "WG-PR101",
+      expectedDeliveryDate: "2026-06-13",
+      lastCheckpoint: "Delivered to operations room",
+      notes: "Received and checked by operations.",
+      updatedAt: "2026-06-13T08:45:00.000Z",
+    },
     orderConfirmedAt: "2026-06-11T13:30:00.000Z",
     itemReceivedAt: "2026-06-13T08:45:00.000Z",
     completedAt: "2026-06-13T09:10:00.000Z",
@@ -802,6 +863,7 @@ export function isApprovedStatus(status: RequestStatus) {
     "Invoice Uploaded",
     "Aileen Finance Review",
     "Invoice Cleared",
+    "Delivery Tracking",
     "Order Confirmed",
     "Item Received",
     "Completed",
@@ -820,13 +882,17 @@ export function getPendingAction(request: ProcurementRequest) {
       return "Dr. Masjid to review and forward to Edlyn";
     case "Edlyn Confirmation":
       return "Edlyn to confirm item details";
+    case "Edlyn Clarification Requested":
+      return "Employee to answer Edlyn clarification";
     case "Purchase in Progress":
-      return "Edlyn to purchase and upload invoice";
+      return "Edlyn to purchase, request clarification, or upload invoice";
     case "Aileen Finance Review":
     case "Invoice Uploaded":
       return "Aileen to document and clear invoice";
     case "Invoice Cleared":
-      return "Edlyn to confirm the order was placed";
+      return "Edlyn to confirm the order and start delivery tracking";
+    case "Delivery Tracking":
+      return "Edlyn to update logistics or mark item received";
     case "Order Confirmed":
       return "Edlyn to mark item received";
     case "Item Received":
@@ -856,6 +922,19 @@ export function makeId(prefix: string) {
 
 export function nowIso() {
   return new Date().toISOString();
+}
+
+function mergeLogistics(
+  current: LogisticsDetails | undefined,
+  updates: Partial<LogisticsDetails> | undefined,
+  dateTime: string,
+): LogisticsDetails {
+  return {
+    ...emptyLogistics,
+    ...current,
+    ...updates,
+    updatedAt: dateTime,
+  };
 }
 
 function addNotification(
@@ -960,7 +1039,11 @@ export function transitionRequest(
   }
 
   const dateTime = nowIso();
-  const nextRequests = state.requests.map((candidate) => ({ ...candidate }));
+  const nextRequests = state.requests.map((candidate) => ({
+    ...candidate,
+    invoice: candidate.invoice ? { ...candidate.invoice } : candidate.invoice,
+    logistics: candidate.logistics ? { ...candidate.logistics } : candidate.logistics,
+  }));
   const editable = nextRequests.find((candidate) => candidate.id === requestId);
 
   if (!editable) {
@@ -1153,6 +1236,64 @@ export function transitionRequest(
       comment = workflowAction.comment;
       break;
     }
+    case "edlyn-request-clarification": {
+      if (
+        !canAct(["Edlyn Confirmation", "Purchase in Progress"], "Edlyn") ||
+        !hasText(workflowAction.comment)
+      ) {
+        return state;
+      }
+      editable.edlynClarificationReturnStatus =
+        editable.status === "Purchase in Progress"
+          ? "Purchase in Progress"
+          : "Edlyn Confirmation";
+      editable.status = "Edlyn Clarification Requested";
+      editable.stage = "edlyn";
+      editable.assigneeId = editable.submittedById;
+      editable.previousResponsibleId = actor.id;
+      actionLabel = "Edlyn requested clarification";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: editable.submittedById,
+          requestId,
+          title: "Edlyn needs clarification",
+          body: `${editable.id} needs item or price clarification from you: ${comment}`,
+          type: "system",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "employee-submit-edlyn-clarification": {
+      if (
+        editable.status !== "Edlyn Clarification Requested" ||
+        actor.id !== editable.submittedById ||
+        !hasText(workflowAction.comment)
+      ) {
+        return state;
+      }
+      const assignee = assignTo("Edlyn");
+      editable.status = editable.edlynClarificationReturnStatus ?? "Edlyn Confirmation";
+      editable.stage = "edlyn";
+      editable.previousResponsibleId = actor.id;
+      delete editable.edlynClarificationReturnStatus;
+      actionLabel = "Employee answered Edlyn clarification";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: assignee.id,
+          requestId,
+          title: "Clarification received",
+          body: `${editable.id} clarification has been submitted and is back with Edlyn.`,
+          type: "system",
+        },
+        dateTime,
+      );
+      break;
+    }
     case "edlyn-upload-invoice": {
       if (
         !canAct(["Purchase in Progress"], "Edlyn") ||
@@ -1225,15 +1366,27 @@ export function transitionRequest(
       );
       break;
     }
-    case "edlyn-confirm-order": {
+    case "edlyn-confirm-order":
+    case "edlyn-start-delivery-tracking": {
       if (!canAct(["Invoice Cleared"], "Edlyn")) {
         return state;
       }
-      editable.status = "Order Confirmed";
+      editable.status = "Delivery Tracking";
       editable.stage = "edlyn";
       editable.assigneeId = actor.id;
       editable.orderConfirmedAt = dateTime;
-      actionLabel = "Confirmed order placed";
+      editable.logistics = mergeLogistics(
+        editable.logistics,
+        workflowAction.type === "edlyn-start-delivery-tracking"
+          ? {
+              ...workflowAction.logistics,
+              deliveryStatus:
+                workflowAction.logistics?.deliveryStatus ?? "Order placed",
+            }
+          : { deliveryStatus: "Order placed" },
+        dateTime,
+      );
+      actionLabel = "Confirmed order and started delivery tracking";
       comment = workflowAction.comment;
       addNotification(
         nextState.notifications,
@@ -1248,14 +1401,30 @@ export function transitionRequest(
       );
       break;
     }
+    case "edlyn-update-logistics": {
+      if (!canAct(["Delivery Tracking"], "Edlyn")) {
+        return state;
+      }
+      editable.logistics = mergeLogistics(editable.logistics, workflowAction.logistics, dateTime);
+      editable.stage = "edlyn";
+      editable.assigneeId = actor.id;
+      actionLabel = "Updated delivery tracking";
+      comment = workflowAction.comment || workflowAction.logistics.notes;
+      break;
+    }
     case "edlyn-receive-item": {
-      if (!canAct(["Order Confirmed"], "Edlyn")) {
+      if (!canAct(["Order Confirmed", "Delivery Tracking"], "Edlyn")) {
         return state;
       }
       const assignee = assignTo("Aileen");
       editable.status = "Item Received";
       editable.stage = "aileen";
       editable.itemReceivedAt = dateTime;
+      editable.logistics = mergeLogistics(
+        editable.logistics,
+        { deliveryStatus: "Delivered", lastCheckpoint: "Item received" },
+        dateTime,
+      );
       actionLabel = "Marked item received";
       comment = workflowAction.comment;
       addNotification(
@@ -1378,6 +1547,26 @@ export function getStuckRequests(
   });
 }
 
+export function isUserBlockedTask(
+  request: ProcurementRequest,
+  user: UserProfile,
+  referenceDate = new Date(),
+) {
+  return (
+    !isClosed(request.status) &&
+    request.assigneeId === user.id &&
+    getStuckRequests([request], referenceDate).length > 0
+  );
+}
+
+export function getUserBlockedTasks(
+  requests: ProcurementRequest[],
+  user: UserProfile,
+  referenceDate = new Date(),
+) {
+  return requests.filter((request) => isUserBlockedTask(request, user, referenceDate));
+}
+
 export function getMetrics(requests: ProcurementRequest[]) {
   const completed = requests.filter((request) => request.status === "Completed");
   const durations = completed
@@ -1401,7 +1590,7 @@ export function getMetrics(requests: ProcurementRequest[]) {
     completed: completed.length,
     pendingInvoice: requests.filter((request) => request.status === "Purchase in Progress").length,
     pendingItemReceipt: requests.filter((request) =>
-      ["Invoice Cleared", "Order Confirmed"].includes(request.status),
+      ["Invoice Cleared", "Delivery Tracking", "Order Confirmed"].includes(request.status),
     ).length,
     averageProcessingTime,
     stuck: getStuckRequests(requests).length,
@@ -1449,8 +1638,16 @@ export function answerProcurementQuestion(
   const normalized = question.trim().toLowerCase();
   const requestId = question.match(/PR-\d+/i)?.[0]?.toUpperCase();
   const visible = getVisibleRequests(state, currentUser);
-  const describe = (request: ProcurementRequest) =>
-    `${request.id}: ${request.itemName} is ${request.status}, stage ${WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label}, assigned to ${getAssigneeName(request, state.users)}. Total AED ${getRequestTotalAed(request).toFixed(2)} across ${getRequestItemCount(request)} item(s).`;
+  const canSeePrices = currentUser.role !== "Employee";
+  const describe = (request: ProcurementRequest) => {
+    const priceText = canSeePrices
+      ? ` Total AED ${getRequestTotalAed(request).toFixed(2)} across ${getRequestItemCount(request)} item(s).`
+      : ` ${getRequestItemCount(request)} item(s).`;
+    const logisticsText = request.logistics?.deliveryStatus
+      ? ` Delivery: ${request.logistics.deliveryStatus}.`
+      : "";
+    return `${request.id}: ${request.itemName} is ${request.status}, stage ${WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label}, assigned to ${getAssigneeName(request, state.users)}.${priceText}${logisticsText}`;
+  };
 
   if (!normalized) {
     return "Ask me about request status, pending approvals, invoices, stuck requests, order placement, or completed requests.";
@@ -1494,7 +1691,7 @@ export function answerProcurementQuestion(
   if (normalized.includes("order") && normalized.includes("placed")) {
     const latest = visible
       .filter((request) =>
-        ["Order Confirmed", "Item Received", "Completed"].includes(request.status),
+        ["Delivery Tracking", "Order Confirmed", "Item Received", "Completed"].includes(request.status),
       )
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
     return latest
