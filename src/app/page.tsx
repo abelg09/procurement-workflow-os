@@ -120,6 +120,32 @@ type BulkImportRow = {
   vendorName: string;
 };
 
+type BulkWorkbookRow = Record<string, unknown> & {
+  __rowNumber?: number;
+};
+
+const BULK_FIELD_ALIASES = {
+  itemName: ["item_name", "item name", "item", "product", "product name"],
+  itemDescription: [
+    "item_description",
+    "item description",
+    "description",
+    "item details",
+    "details",
+  ],
+  quantity: ["quantity", "qty", "qnty"],
+  unitPrice: [
+    "unit_price",
+    "unit price",
+    "unit cost",
+    "price",
+    "rate",
+    "cost",
+  ],
+  currency: ["currency", "curr"],
+  vendorName: ["vendor_name", "vendor name", "vendor", "supplier", "supplier name"],
+};
+
 const statusClass: Record<string, string> = {
   Pending: "border-amber-200 bg-amber-50 text-amber-800",
   Approved: "border-emerald-200 bg-emerald-50 text-emerald-800",
@@ -276,9 +302,31 @@ function normaliseHeader(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 }
 
+const normalizedAliases = (aliases: string[]) => aliases.map((alias) => normaliseHeader(alias));
+
 function parseNumber(value: unknown) {
   const parsed = Number(String(value ?? "").replaceAll(",", "").trim());
   return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function rowHasValue(values: unknown[]) {
+  return values.some((value) => String(value ?? "").trim() !== "");
+}
+
+function headerHasAlias(headers: string[], aliases: string[]) {
+  const options = normalizedAliases(aliases);
+  return headers.some((header) => options.includes(header));
+}
+
+function isBulkHeaderRow(values: unknown[]) {
+  const headers = values.map((value) => normaliseHeader(String(value ?? "")));
+  return (
+    headerHasAlias(headers, BULK_FIELD_ALIASES.itemName) &&
+    headerHasAlias(headers, BULK_FIELD_ALIASES.itemDescription) &&
+    headerHasAlias(headers, BULK_FIELD_ALIASES.quantity) &&
+    headerHasAlias(headers, BULK_FIELD_ALIASES.unitPrice) &&
+    headerHasAlias(headers, BULK_FIELD_ALIASES.currency)
+  );
 }
 
 async function parseBulkWorkbook(file: File) {
@@ -289,36 +337,81 @@ async function parseBulkWorkbook(file: File) {
     throw new Error("The uploaded file does not contain a worksheet.");
   }
 
-  return XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
+  const sheetRows = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+    blankrows: false,
     defval: "",
+    header: 1,
   });
+
+  const headerIndex = sheetRows.findIndex((row) => rowHasValue(row) && isBulkHeaderRow(row));
+  if (headerIndex < 0) {
+    throw new Error(
+      "Could not find bulk item headers. Use columns: item_name, item_description, quantity, unit_price, currency, vendor_name.",
+    );
+  }
+
+  const headers = sheetRows[headerIndex].map((value, index) => {
+    const header = String(value ?? "").trim();
+    return header || `column_${index + 1}`;
+  });
+  const rows = sheetRows
+    .slice(headerIndex + 1)
+    .map((values, index): BulkWorkbookRow => {
+      const row = Object.fromEntries(
+        headers.map((header, cellIndex) => [header, values[cellIndex] ?? ""]),
+      ) as BulkWorkbookRow;
+      row.__rowNumber = headerIndex + index + 2;
+      return row;
+    })
+    .filter((row) =>
+      Object.entries(row).some(
+        ([key, value]) => key !== "__rowNumber" && String(value ?? "").trim() !== "",
+      ),
+    );
+
+  return rows;
 }
 
-function mapBulkRows(rows: Array<Record<string, unknown>>) {
+function getBulkField(normalized: Record<string, unknown>, aliases: string[]) {
+  const aliasKeys = normalizedAliases(aliases);
+  for (const key of aliasKeys) {
+    if (Object.prototype.hasOwnProperty.call(normalized, key)) {
+      return normalized[key];
+    }
+  }
+  return "";
+}
+
+function mapBulkRows(rows: BulkWorkbookRow[]) {
   return rows.map((row, index): BulkImportRow => {
     const normalized = Object.fromEntries(
-      Object.entries(row).map(([key, value]) => [normaliseHeader(key), value]),
+      Object.entries(row)
+        .filter(([key]) => key !== "__rowNumber")
+        .map(([key, value]) => [normaliseHeader(key), value]),
     );
-    const get = (key: string) => normalized[normaliseHeader(key)];
-    const quantity = parseNumber(get("quantity"));
-    const unitPrice = parseNumber(get("unit_price"));
-    const currency = String(get("currency") ?? "").trim().toUpperCase();
-    const itemName = String(get("item_name") ?? "").trim();
-    const itemDescription = String(get("item_description") ?? "").trim();
-    const vendorName = String(get("vendor_name") ?? "").trim();
-    const rowNumber = index + 2;
+    const quantity = parseNumber(getBulkField(normalized, BULK_FIELD_ALIASES.quantity));
+    const unitPrice = parseNumber(getBulkField(normalized, BULK_FIELD_ALIASES.unitPrice));
+    const currency = String(getBulkField(normalized, BULK_FIELD_ALIASES.currency) ?? "")
+      .trim()
+      .toUpperCase();
+    const itemName = String(getBulkField(normalized, BULK_FIELD_ALIASES.itemName) ?? "").trim();
+    const itemDescription = String(
+      getBulkField(normalized, BULK_FIELD_ALIASES.itemDescription) ?? "",
+    ).trim();
+    const vendorName = String(getBulkField(normalized, BULK_FIELD_ALIASES.vendorName) ?? "").trim();
+    const rowNumber = row.__rowNumber ?? index + 2;
 
     if (!itemName) {
-      throw new Error(`Row ${rowNumber}: item_name is required.`);
+      throw new Error(`Row ${rowNumber}: item name is required.`);
     }
     if (!itemDescription) {
-      throw new Error(`Row ${rowNumber}: item_description is required.`);
+      throw new Error(`Row ${rowNumber}: item description is required.`);
     }
     if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new Error(`Row ${rowNumber}: quantity must be greater than 0.`);
     }
     if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
-      throw new Error(`Row ${rowNumber}: unit_price must be greater than 0.`);
+      throw new Error(`Row ${rowNumber}: unit price must be greater than 0.`);
     }
     if (!BULK_SUPPORTED_CURRENCIES.includes(currency as (typeof BULK_SUPPORTED_CURRENCIES)[number])) {
       throw new Error(
@@ -602,6 +695,7 @@ function RequestForm({
   const [successMessage, setSuccessMessage] = useState("");
   const [entryMode, setEntryMode] = useState<"single" | "bulk">("single");
   const [bulkLineItems, setBulkLineItems] = useState<ProcurementLineItem[]>([]);
+  const [bulkFileName, setBulkFileName] = useState("");
   const [bulkImportMessage, setBulkImportMessage] = useState("");
   const [bulkImporting, setBulkImporting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -633,17 +727,22 @@ function RequestForm({
     setBulkImporting(true);
     setFormError("");
     setSuccessMessage("");
+    setBulkFileName(file.name);
     setBulkImportMessage("");
 
     try {
       const rows = await parseBulkWorkbook(file);
       if (rows.length === 0) {
-        throw new Error("The uploaded file does not contain any item rows.");
+        throw new Error("The uploaded file contains headers but no item rows.");
       }
-      const converted = await convertRowsToLineItems(mapBulkRows(rows));
+      const mappedRows = mapBulkRows(rows);
+      if (mappedRows.length === 0) {
+        throw new Error("The uploaded file contains no valid item rows.");
+      }
+      const converted = await convertRowsToLineItems(mappedRows);
       setBulkLineItems(converted);
       setBulkImportMessage(
-        `${converted.length} line item(s) loaded. Total converted value is ${money(
+        `${converted.length} line item(s) loaded from ${file.name}. Total converted value is ${money(
           converted.reduce((total, item) => total + item.aedTotal, 0),
           "AED",
         )}.`,
@@ -775,6 +874,7 @@ function RequestForm({
       setAttachments([]);
       setEntryMode("single");
       setBulkLineItems([]);
+      setBulkFileName("");
       setBulkImportMessage("");
       setVendorContact("");
       setVendorCompany("");
@@ -835,6 +935,7 @@ function RequestForm({
                   onClick={() => {
                     setEntryMode("single");
                     setBulkLineItems([]);
+                    setBulkFileName("");
                     setBulkImportMessage("");
                   }}
                   type="button"
@@ -868,6 +969,8 @@ function RequestForm({
                         bulkTotalAed,
                         "AED",
                       )}`
+                    : bulkFileName
+                      ? `Last selected file: ${bulkFileName}`
                     : "No bulk file loaded yet."}
                 </p>
               </div>
@@ -986,6 +1089,7 @@ function RequestForm({
                         icon={<XCircle className="h-4 w-4" />}
                         onClick={() => {
                           setBulkLineItems([]);
+                          setBulkFileName("");
                           setBulkImportMessage("");
                         }}
                         variant="ghost"
@@ -1008,6 +1112,12 @@ function RequestForm({
                     }}
                   />
                 </div>
+
+                {bulkFileName ? (
+                  <p className="mt-2 text-xs font-semibold text-slate-500">
+                    Selected file: {bulkFileName}
+                  </p>
+                ) : null}
 
                 {bulkImporting ? (
                   <p className="mt-3 text-sm font-medium text-blue-700">
