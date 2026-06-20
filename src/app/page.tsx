@@ -2507,6 +2507,15 @@ function EmployeeRequestStatus({
     );
   }
 
+  const edlynClarification = state.auditLogs
+    .filter(
+      (log) =>
+        log.requestId === request.id &&
+        log.action === "Edlyn requested clarification" &&
+        Boolean(log.comment?.trim()),
+    )
+    .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
+
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -2547,6 +2556,23 @@ function EmployeeRequestStatus({
               Answer the item or price question here. The request will return directly to Edlyn.
             </p>
           </div>
+          {edlynClarification?.comment ? (
+            <div className="rounded-lg border border-red-200 bg-white p-3">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm font-semibold text-red-950">Message from Edlyn</p>
+                <p className="text-xs text-red-700">
+                  {formatDateTime(edlynClarification.dateTime)}
+                </p>
+              </div>
+              <p className="mt-2 whitespace-pre-line text-sm text-slate-800">
+                {edlynClarification.comment}
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-red-200 bg-white p-3 text-sm text-red-800">
+              No written clarification note was found for this request.
+            </div>
+          )}
           <TextArea
             placeholder="Write your clarification for Edlyn"
             value={clarification}
