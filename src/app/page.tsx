@@ -174,6 +174,10 @@ const money = (amount: number, currency = "AED") =>
 const classNames = (...values: Array<string | false | null | undefined>) =>
   values.filter(Boolean).join(" ");
 
+const panelClass =
+  "rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.05)]";
+const insetPanelClass = "rounded-xl border border-slate-200 bg-slate-50/70";
+
 const dubaiDateKey = () => {
   const parts = new Intl.DateTimeFormat("en", {
     day: "2-digit",
@@ -376,18 +380,18 @@ function IconButton({
   title?: string;
 }) {
   const variants = {
-    primary: "bg-slate-950 text-white hover:bg-slate-800",
+    primary: "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700",
     secondary:
-      "border border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50",
-    danger: "bg-red-600 text-white hover:bg-red-700",
+      "border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300 hover:bg-slate-50",
+    danger: "bg-red-600 text-white shadow-sm shadow-red-600/20 hover:bg-red-700",
     ghost: "text-slate-600 hover:bg-slate-100",
-    success: "bg-emerald-700 text-white hover:bg-emerald-800",
+    success: "bg-emerald-600 text-white shadow-sm shadow-emerald-600/20 hover:bg-emerald-700",
   };
 
   return (
     <button
       className={classNames(
-        "box-border inline-flex min-h-10 max-w-full items-center justify-center gap-2 rounded-md px-3 text-center text-sm font-semibold leading-5 transition disabled:opacity-50",
+        "box-border inline-flex min-h-10 max-w-full items-center justify-center gap-2 rounded-lg px-3.5 text-center text-sm font-semibold leading-5 transition disabled:opacity-50",
         variants[variant],
       )}
       disabled={disabled}
@@ -406,7 +410,7 @@ function StatusBadge({ status }: { status: RequestStatus }) {
   return (
     <span
       className={classNames(
-        "inline-flex max-w-full items-center rounded-md border px-2 py-1 text-xs font-semibold",
+        "inline-flex max-w-full items-center rounded-full border px-2.5 py-1 text-xs font-semibold",
         statusClass[tone],
       )}
     >
@@ -451,7 +455,7 @@ function Field({
 }
 
 function inputClass() {
-  return "box-border min-h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
+  return "box-border min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3.5 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100/80";
 }
 
 function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
@@ -487,12 +491,12 @@ function DashboardMetric({
   tone: string;
 }) {
   return (
-    <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <div className={classNames(panelClass, "min-w-0 p-5")}>
       <div className="flex items-center justify-between gap-3">
-        <p className="min-w-0 text-sm font-medium text-slate-500">{label}</p>
-        <span className={classNames("rounded-md p-2", tone)}>{icon}</span>
+        <p className="min-w-0 text-sm font-semibold text-slate-500">{label}</p>
+        <span className={classNames("rounded-xl p-2.5", tone)}>{icon}</span>
       </div>
-      <p className="mt-3 text-2xl font-bold text-slate-950">{value}</p>
+      <p className="mt-4 text-3xl font-bold tracking-tight text-slate-950">{value}</p>
     </div>
   );
 }
@@ -512,10 +516,10 @@ function WorkflowTracker({ request }: { request: ProcurementRequest }) {
         return (
           <div
             className={classNames(
-              "min-h-24 min-w-0 rounded-lg border bg-white p-3",
-              complete ? "border-emerald-200" : "border-slate-200",
-              current && !declined ? "ring-2 ring-blue-100" : "",
-              current && declined ? "border-red-300 ring-2 ring-red-100" : "",
+              "min-h-24 min-w-0 rounded-xl border bg-white p-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
+              complete ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200",
+              current && !declined ? "border-blue-200 ring-4 ring-blue-100/80" : "",
+              current && declined ? "border-red-300 ring-4 ring-red-100" : "",
               autoApproved ? "border-purple-200 bg-purple-50" : "",
             )}
             key={stage.key}
@@ -801,7 +805,7 @@ function RequestForm({
           {successMessage}
         </div>
       ) : null}
-      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <section className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
         <div className="mb-5 flex items-center gap-2">
           <ClipboardList className="h-5 w-5 text-blue-700" />
           <h2 className="text-lg font-bold text-slate-950">Procurement request</h2>
@@ -818,14 +822,14 @@ function RequestForm({
             </SelectInput>
           </Field>
           <div className="md:col-span-2 xl:col-span-3">
-            <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className={classNames(insetPanelClass, "flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between")}>
               <p className="text-sm font-bold text-slate-950">Request items</p>
               <div className="grid grid-cols-2 gap-2 rounded-md bg-white p-1 shadow-sm">
                 <button
                   className={classNames(
                     "inline-flex min-h-9 items-center justify-center gap-2 rounded px-3 text-sm font-semibold transition",
                     !isBulkMode
-                      ? "bg-slate-950 text-white"
+                      ? "bg-blue-600 text-white shadow-sm"
                       : "text-slate-600 hover:bg-slate-100",
                   )}
                   onClick={() => {
@@ -842,7 +846,7 @@ function RequestForm({
                   className={classNames(
                     "inline-flex min-h-9 items-center justify-center gap-2 rounded px-3 text-sm font-semibold transition",
                     isBulkMode
-                      ? "bg-slate-950 text-white"
+                      ? "bg-blue-600 text-white shadow-sm"
                       : "text-slate-600 hover:bg-slate-100",
                   )}
                   onClick={() => setEntryMode("bulk")}
@@ -856,7 +860,7 @@ function RequestForm({
           </div>
           {isBulkMode ? (
             <div className="md:col-span-2 xl:col-span-3">
-              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4">
+              <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
                 <p className="text-sm font-bold text-slate-950">Bulk item request</p>
                 <p className="mt-1 text-sm text-slate-600">
                   {hasBulkLineItems
@@ -960,7 +964,7 @@ function RequestForm({
           </div>
           {isBulkMode ? (
             <div className="md:col-span-2 xl:col-span-3">
-              <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:p-4">
+              <div className={classNames(insetPanelClass, "min-w-0 p-3 sm:p-4")}>
                 <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div className="min-w-0">
                     <h3 className="text-sm font-bold text-slate-950">Bulk item upload</h3>
@@ -1022,7 +1026,7 @@ function RequestForm({
                     <div className="mt-4 grid gap-3 md:hidden">
                       {bulkLineItems.map((item, index) => (
                         <div
-                          className="rounded-lg border border-slate-200 bg-white p-3"
+                          className="rounded-xl border border-slate-200 bg-white p-3"
                           key={item.id}
                         >
                           <div className="flex items-start justify-between gap-3">
@@ -1058,11 +1062,11 @@ function RequestForm({
                           </div>
                         </div>
                       ))}
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-950">
+                      <div className={classNames(insetPanelClass, "p-3 text-sm font-bold text-slate-950")}>
                         Total converted value: {money(bulkTotalAed, "AED")}
                       </div>
                     </div>
-                    <div className="mt-4 hidden overflow-x-auto rounded-lg border border-slate-200 bg-white md:block">
+                    <div className="mt-4 hidden overflow-x-auto rounded-xl border border-slate-200 bg-white md:block">
                       <table className="w-full min-w-[860px] text-left text-sm">
                     <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                       <tr>
@@ -1135,7 +1139,7 @@ function RequestForm({
         </div>
       </section>
 
-      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <section className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
         <div className="mb-5 flex items-center gap-2">
           <FileText className="h-5 w-5 text-emerald-700" />
           <h2 className="text-lg font-bold text-slate-950">Vendor details</h2>
@@ -1250,8 +1254,8 @@ function RequestsTable({
   });
 
   return (
-    <section className="min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-200 p-5">
+    <section className={classNames(panelClass, "min-w-0 overflow-hidden")}>
+      <div className="border-b border-slate-200/80 p-5">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -1317,7 +1321,7 @@ function RequestsTable({
 
       <div className="grid min-w-0 gap-3 p-3 md:hidden">
         {filtered.length === 0 ? (
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-500">
+          <div className={classNames(insetPanelClass, "p-4 text-center text-sm text-slate-500")}>
             No procurement requests match the current filters.
           </div>
         ) : (
@@ -1327,7 +1331,7 @@ function RequestsTable({
             return (
               <button
                 className={classNames(
-                  "box-border min-w-0 w-full rounded-lg border p-3 text-left transition",
+                  "box-border min-w-0 w-full rounded-xl border p-3 text-left transition",
                   blocked
                     ? selectedRequestId === request.id
                       ? "border-red-300 bg-red-100"
@@ -1376,7 +1380,7 @@ function RequestsTable({
                       {request.invoice?.invoiceNumber ?? "Pending"}
                     </span>
                   </div>
-                  <div className="rounded-md bg-slate-50 p-2 text-slate-700">
+                  <div className="rounded-lg bg-slate-50 p-2 text-slate-700">
                     {getPendingAction(request)}
                   </div>
                   <p className="text-xs text-slate-500">
@@ -1391,7 +1395,7 @@ function RequestsTable({
 
       <div className="hidden overflow-x-auto md:block">
         <table className={classNames("w-full border-collapse text-left text-sm", hideFinancials ? "min-w-[980px]" : "min-w-[1120px]")}>
-          <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+          <thead className="bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-4 py-3">Request</th>
               <th className="px-4 py-3">Stage</th>
@@ -1609,7 +1613,7 @@ function ActionPanel({
   );
 
   return (
-    <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+    <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
       <div className="flex items-center gap-2">
         <SlidersHorizontal className="h-5 w-5 text-blue-700" />
         <h3 className="text-base font-bold text-slate-950">Stage actions</h3>
@@ -1694,7 +1698,7 @@ function ActionPanel({
         {["Dr. Masjid Review", "Rashid Auto Approved"].includes(request.status) &&
         canUse("Dr. Masjid") ? (
           <div className="grid gap-3">
-            <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+            <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
               Dr. Masjid reviews the request details only. Approval decisions remain with Rashid.
             </div>
             <IconButton
@@ -1739,7 +1743,7 @@ function ActionPanel({
         ) : null}
 
         {request.status === "Purchase in Progress" && canUse("Edlyn") ? (
-          <div className="grid gap-3 rounded-lg border border-slate-200 p-3">
+          <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
             <div className="grid gap-3">
               <Field label="Invoice number" htmlFor={invoiceNumberId}>
                 <TextInput id={invoiceNumberId} placeholder="INV-001" value={invoiceNumber} onChange={(event) => setInvoiceNumber(event.target.value)} />
@@ -1831,7 +1835,7 @@ function ActionPanel({
         ) : null}
 
         {request.status === "Invoice Cleared" && canUse("Edlyn") ? (
-          <div className="grid gap-3 rounded-lg border border-slate-200 p-3">
+          <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
             {logisticsFields}
             <IconButton
               icon={<Send className="h-4 w-4" />}
@@ -1850,7 +1854,7 @@ function ActionPanel({
         ) : null}
 
         {request.status === "Delivery Tracking" && canUse("Edlyn") ? (
-          <div className="grid gap-3 rounded-lg border border-slate-200 p-3">
+          <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
             {logisticsFields}
             <div className="flex flex-wrap gap-2">
               <IconButton
@@ -1898,7 +1902,7 @@ function ActionPanel({
         ) : null}
 
         {role === "Admin" ? (
-          <div className="rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-600">
+          <div className="rounded-xl border border-dashed border-slate-300 p-3 text-sm text-slate-600">
             Admin can view the full request and reassign it from the Admin view.
           </div>
         ) : null}
@@ -1916,7 +1920,7 @@ function ActionPanel({
           (["Aileen Finance Review", "Item Received"].includes(request.status) &&
             canUse("Aileen"))
         ) ? (
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+          <div className={classNames(insetPanelClass, "p-3 text-sm text-slate-600")}>
             Switch to the assigned role to complete this pending action. Current assignee:{" "}
             <strong>{getAssigneeName(request, state.users)}</strong>.
           </div>
@@ -1939,7 +1943,7 @@ function RequestDetails({
 }) {
   if (!request) {
     return (
-      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-sm">
+      <section className={classNames(panelClass, "min-w-0 p-8 text-center text-slate-500")}>
         Select a request to see workflow details.
       </section>
     );
@@ -1951,7 +1955,7 @@ function RequestDetails({
 
   return (
     <section className="grid min-w-0 gap-5">
-      <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -1978,7 +1982,7 @@ function RequestDetails({
 
       <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
         <div className="grid min-w-0 gap-5">
-          <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
             <h3 className="text-base font-bold text-slate-950">Request details</h3>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <Detail label="Item" value={request.itemName} />
@@ -1998,11 +2002,11 @@ function RequestDetails({
             </div>
           </div>
 
-          <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
             <h3 className="text-base font-bold text-slate-950">Line items</h3>
             <div className="mt-4 grid gap-3 md:hidden">
               {lineItems.map((item, index) => (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={item.id}>
+                <div className={classNames(insetPanelClass, "p-3")} key={item.id}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-xs font-semibold uppercase text-slate-500">
@@ -2027,7 +2031,7 @@ function RequestDetails({
                 </div>
               ))}
             </div>
-            <div className="mt-4 hidden overflow-x-auto rounded-lg border border-slate-200 md:block">
+            <div className="mt-4 hidden overflow-x-auto rounded-xl border border-slate-200 md:block">
               <table className="w-full min-w-[920px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
@@ -2072,7 +2076,7 @@ function RequestDetails({
           </div>
 
           <div className="grid min-w-0 gap-5 lg:grid-cols-3">
-            <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
               <h3 className="text-base font-bold text-slate-950">Vendor profile</h3>
               <div className="mt-4 grid gap-3 text-sm">
                 <Detail label="Contact person" value={request.vendor.contactPerson || "Not provided"} />
@@ -2085,7 +2089,7 @@ function RequestDetails({
               </div>
             </div>
 
-            <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
               <h3 className="text-base font-bold text-slate-950">Invoice documentation</h3>
               {request.invoice ? (
                 <div className="mt-4 grid gap-3 text-sm">
@@ -2097,13 +2101,13 @@ function RequestDetails({
                   <Detail label="Finance notes" value={request.invoice.financeNotes || "No notes"} />
                 </div>
               ) : (
-                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
                   Invoice is pending upload by Edlyn.
                 </div>
               )}
             </div>
 
-            <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
               <h3 className="text-base font-bold text-slate-950">Logistics tracking</h3>
               {request.logistics ? (
                 <div className="mt-4 grid gap-3 text-sm">
@@ -2115,7 +2119,7 @@ function RequestDetails({
                   <Detail label="Notes" value={request.logistics.notes || "No notes"} />
                 </div>
               ) : (
-                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                <div className={classNames(insetPanelClass, "mt-4 p-3 text-sm text-slate-600")}>
                   Delivery tracking starts after finance clears the invoice.
                 </div>
               )}
@@ -2123,7 +2127,7 @@ function RequestDetails({
           </div>
 
           {latestDecline ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
               <strong>Decline reason:</strong> {latestDecline.declineReason}
             </div>
           ) : null}
@@ -2154,7 +2158,7 @@ function Detail({ label, value }: { label: string; value: string }) {
 
 function AuditTrail({ logs }: { logs: AuditLog[] }) {
   return (
-    <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+    <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
       <div className="flex items-center gap-2">
         <History className="h-5 w-5 text-slate-700" />
         <h3 className="text-base font-bold text-slate-950">Audit trail</h3>
@@ -2164,7 +2168,7 @@ function AuditTrail({ logs }: { logs: AuditLog[] }) {
           <p className="text-sm text-slate-500">No audit entries yet.</p>
         ) : (
           logs.map((log) => (
-            <div className="rounded-lg border border-slate-200 p-3" key={log.id}>
+            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3" key={log.id}>
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                 <p className="font-semibold text-slate-950">{log.action}</p>
                 <p className="text-xs text-slate-500">{formatDateTime(log.dateTime)}</p>
@@ -2209,7 +2213,7 @@ function NotificationsCenter({
       : state.notifications.filter((notification) => notification.userId === currentUser.id);
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+    <section className={classNames(panelClass, "overflow-hidden")}>
       <div className="flex flex-col gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -2258,7 +2262,7 @@ function NotificationItem({
   return (
     <div
       className={classNames(
-        "rounded-lg border p-4",
+        "rounded-xl border p-4",
         notification.read ? "border-slate-200 bg-white" : "border-blue-200 bg-blue-50",
       )}
     >
@@ -2377,7 +2381,7 @@ function SystemReadiness({
   ];
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <div className={classNames(panelClass, "p-5")}>
       <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -2399,7 +2403,7 @@ function SystemReadiness({
       <div className="mt-4 grid gap-3 lg:grid-cols-3">
         {items.map((item) => (
           <div
-            className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+            className={classNames(insetPanelClass, "p-4")}
             key={item.label}
           >
             <div className="flex items-center justify-between gap-3">
@@ -2481,7 +2485,7 @@ function AdminPanel({
         onClearWorkspace={onClearWorkspace}
       />
 
-      <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -2504,7 +2508,7 @@ function AdminPanel({
       </div>
 
       <div className="grid min-w-0 gap-5 xl:grid-cols-2">
-        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
           <div className="flex items-center gap-2">
             <UserCog className="h-5 w-5 text-slate-700" />
             <h3 className="text-base font-bold text-slate-950">Users and roles</h3>
@@ -2554,7 +2558,7 @@ function AdminPanel({
           </div>
         </div>
 
-        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
           <div className="flex items-center gap-2">
             <ArrowRightLeft className="h-5 w-5 text-slate-700" />
             <h3 className="text-base font-bold text-slate-950">Manual reassignment</h3>
@@ -2645,7 +2649,7 @@ function ProcurementAssistant({
   };
 
   return (
-    <aside className="min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm">
+    <aside className={classNames(panelClass, "min-w-0 overflow-hidden")}>
       <div className="border-b border-slate-200 p-4">
         <div className="flex items-center gap-2">
           <Bot className="h-5 w-5 text-purple-700" />
@@ -2657,7 +2661,7 @@ function ProcurementAssistant({
       </div>
       <div className="grid max-h-[460px] gap-3 overflow-y-auto p-4">
         {messages.length === 0 ? (
-          <div className="rounded-lg border border-purple-100 bg-purple-50 p-3 text-sm text-purple-900">
+          <div className="rounded-xl border border-purple-100 bg-purple-50 p-3 text-sm text-purple-900">
             Ask: Which stage is request PR-102 in?
           </div>
         ) : (
@@ -2724,7 +2728,7 @@ function EmployeeRequestStatus({
 
   if (!request) {
     return (
-      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
+      <section className={classNames(panelClass, "min-w-0 p-6 text-sm text-slate-500")}>
         Select a request to view its current status.
       </section>
     );
@@ -2740,7 +2744,7 @@ function EmployeeRequestStatus({
     .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
 
   return (
-    <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+    <section className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -2772,7 +2776,7 @@ function EmployeeRequestStatus({
 
       {request.status === "Edlyn Clarification Requested" &&
       request.assigneeId === currentUser.id ? (
-        <div className="mt-5 grid gap-3 rounded-lg border border-red-200 bg-red-50 p-4">
+        <div className="mt-5 grid gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
           <div>
             <p className="font-semibold text-red-950">Clarification needed by Edlyn</p>
             <p className="mt-1 text-sm text-red-800">
@@ -2780,7 +2784,7 @@ function EmployeeRequestStatus({
             </p>
           </div>
           {edlynClarification?.comment ? (
-            <div className="rounded-lg border border-red-200 bg-white p-3">
+            <div className="rounded-xl border border-red-200 bg-white p-3">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm font-semibold text-red-950">Message from Edlyn</p>
                 <p className="text-xs text-red-700">
@@ -2792,7 +2796,7 @@ function EmployeeRequestStatus({
               </p>
             </div>
           ) : (
-            <div className="rounded-lg border border-red-200 bg-white p-3 text-sm text-red-800">
+            <div className="rounded-xl border border-red-200 bg-white p-3 text-sm text-red-800">
               No written clarification note was found for this request.
             </div>
           )}
@@ -2839,7 +2843,7 @@ function EmployeePortal({
 
   return (
     <div className="grid min-w-0 gap-5">
-      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+      <section className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="min-w-0">
             <h2 className="text-xl font-bold text-slate-950">Employee procurement portal</h2>
@@ -3003,7 +3007,7 @@ function Dashboard({
             setState={setState}
             state={state}
           />
-          <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <section className={classNames(panelClass, "min-w-0 p-4")}>
             <div className="flex items-center gap-2">
               <Filter className="h-5 w-5 text-slate-700" />
               <h2 className="text-base font-bold text-slate-950">Watchlist</h2>
@@ -3043,21 +3047,30 @@ function Dashboard({
 }
 
 export default function Home() {
-  const [state, setState] = useState<ProcurementState>(() => {
-    if (typeof window === "undefined") {
-      return initialState;
-    }
-    return parseState(window.localStorage.getItem(STORAGE_KEY));
-  });
+  const [state, setState] = useState<ProcurementState>(initialState);
+  const [browserStateLoaded, setBrowserStateLoaded] = useState(false);
   const [currentUserId, setCurrentUserId] = useState("user-admin");
   const [view, setView] = useState<View>("dashboard");
   const [selectedRequestId, setSelectedRequestId] = useState("PR-102");
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (cancelled) return;
+      setState(parseState(window.localStorage.getItem(STORAGE_KEY)));
+      setBrowserStateLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && browserStateLoaded) {
       window.localStorage.setItem(STORAGE_KEY, serializeState(state));
     }
-  }, [state]);
+  }, [browserStateLoaded, state]);
 
   const currentUser =
     state.users.find((user) => user.id === currentUserId) ?? state.users[0];
@@ -3086,6 +3099,31 @@ export default function Home() {
             hidden: currentUser.role !== "Admin",
           },
         ];
+  const visibleNavItems = navItems.filter((item) => !item.hidden);
+  const viewCopy: Record<View, { title: string; subtitle: string }> = {
+    dashboard: isEmployee
+      ? {
+          title: "Employee portal",
+          subtitle: "Submit requests and track procurement status.",
+        }
+      : {
+          title: "Dashboard",
+          subtitle: "Procurement performance, requests, approvals, and closures.",
+        },
+    "new-request": {
+      title: "New procurement request",
+      subtitle: "Create a request for Mona review.",
+    },
+    notifications: {
+      title: "Notifications",
+      subtitle: "Internal alerts, reminders, and workflow updates.",
+    },
+    admin: {
+      title: "Admin controls",
+      subtitle: "Users, reassignment, exports, and audit visibility.",
+    },
+  };
+  const currentViewCopy = viewCopy[view];
 
   const clearBrowserWorkspace = () => {
     if (
@@ -3101,72 +3139,186 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-100">
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1800px] flex-col gap-3 px-3 py-3 sm:px-4 sm:py-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-28 shrink-0 items-center justify-center rounded-lg bg-black px-3 shadow-sm sm:h-12 sm:w-32 sm:px-4">
-              <Image
-                alt="SULMI"
-                className="h-7 w-full object-contain sm:h-8"
-                height={36}
-                src={`${PUBLIC_BASE_PATH}/sulmi-logo.svg`}
-                unoptimized
-                width={130}
-              />
-            </div>
-            <div className="min-w-0">
-              <h1 className="text-lg font-bold leading-tight text-slate-950 sm:text-xl">Procurement Workflow OS</h1>
-              <p className="text-xs text-slate-500 sm:text-sm">
-                Requests, approvals, purchasing, invoices, and closure
-              </p>
-            </div>
-          </div>
-
-          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
-            {isEmployee ? (
-              <div className="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                {currentUser.name} - Employee
-              </div>
-            ) : (
-              <div className="grid w-full min-w-0 gap-1 sm:min-w-72">
-                <span className="text-xs font-semibold uppercase text-slate-500">
-                  Active account
-                </span>
-                <SelectInput
-                  aria-label="Signed in user"
-                  value={currentUser.id}
-                  onChange={(event) => {
-                    const nextUser = state.users.find(
-                      (user) => user.id === event.target.value,
-                    );
-                    setCurrentUserId(event.target.value);
-                    if (nextUser?.role === "Employee") {
-                      setView("dashboard");
-                    }
-                  }}
-                >
-                  {state.users.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.name} - {user.role}
-                    </option>
-                  ))}
-                </SelectInput>
-              </div>
-            )}
+    <main className="min-h-screen bg-[#f6f8fb] text-slate-900">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-72 flex-col border-r border-slate-200/80 bg-white lg:flex">
+        <div className="flex h-[76px] items-center gap-3 border-b border-slate-200/80 px-5">
+          <div className="flex h-11 w-32 shrink-0 items-center justify-center rounded-xl bg-black px-4 shadow-sm">
+            <Image
+              alt="SULMI"
+              className="h-8 w-full object-contain"
+              height={36}
+              src={`${PUBLIC_BASE_PATH}/sulmi-logo.svg`}
+              unoptimized
+              width={130}
+            />
           </div>
         </div>
 
-        <nav className="mx-auto grid max-w-[1800px] grid-cols-2 gap-2 px-3 pb-3 sm:flex sm:overflow-x-auto sm:px-4">
-          {navItems
-            .filter((item) => !item.hidden)
-            .map((item) => (
+        <div className="border-b border-slate-200/80 p-4">
+          {isEmployee ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+              {currentUser.name} - Employee
+            </div>
+          ) : (
+            <div className="grid gap-1">
+              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Active account
+              </span>
+              <SelectInput
+                aria-label="Signed in user"
+                value={currentUser.id}
+                onChange={(event) => {
+                  const nextUser = state.users.find(
+                    (user) => user.id === event.target.value,
+                  );
+                  setCurrentUserId(event.target.value);
+                  if (nextUser?.role === "Employee") {
+                    setView("dashboard");
+                  }
+                }}
+              >
+                {state.users.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.name} - {user.role}
+                  </option>
+                ))}
+              </SelectInput>
+            </div>
+          )}
+        </div>
+
+        <nav className="grid gap-1 p-3">
+          {visibleNavItems.map((item) => (
+            <button
+              className={classNames(
+                "inline-flex min-h-11 items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold transition",
+                view === item.id
+                  ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
+                  : "text-slate-500 hover:bg-slate-50 hover:text-slate-900",
+              )}
+              key={item.id}
+              onClick={() => setView(item.id)}
+              type="button"
+            >
+              <span className="grid h-8 w-8 place-items-center rounded-lg bg-white/10">
+                {item.icon}
+              </span>
+              <span className="min-w-0 flex-1">{item.label}</span>
+              {item.id === "notifications" && unread ? (
+                <span className="grid h-5 min-w-5 place-items-center rounded-full bg-red-500 px-1 text-xs text-white">
+                  {unread}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </nav>
+      </aside>
+
+      <div className="min-w-0 lg:pl-72">
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur">
+          <div className="mx-auto flex max-w-[1680px] flex-col gap-3 px-3 py-3 sm:px-5 lg:h-[76px] lg:flex-row lg:items-center lg:justify-between lg:px-7 lg:py-0">
+            <div className="flex min-w-0 items-center gap-3 lg:hidden">
+              <div className="flex h-10 w-28 shrink-0 items-center justify-center rounded-xl bg-black px-3 shadow-sm">
+                <Image
+                  alt="SULMI"
+                  className="h-7 w-full object-contain"
+                  height={36}
+                  src={`${PUBLIC_BASE_PATH}/sulmi-logo.svg`}
+                  unoptimized
+                  width={130}
+                />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-lg font-bold leading-tight text-slate-950">Procurement Workflow OS</h1>
+                <p className="text-xs text-slate-500">Requests, approvals, purchasing, invoices, and closure</p>
+              </div>
+            </div>
+
+            <div className="hidden min-w-0 lg:block">
+              <h1 className="text-2xl font-bold tracking-tight text-slate-950">
+                {currentViewCopy.title}
+              </h1>
+              <p className="mt-0.5 text-sm text-slate-500">
+                {currentViewCopy.subtitle}
+              </p>
+            </div>
+
+            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
+              {!isEmployee && view !== "new-request" ? (
+                <div className="hidden lg:block">
+                  <IconButton
+                    icon={<Plus className="h-4 w-4" />}
+                    onClick={() => setView("new-request")}
+                  >
+                    New request
+                  </IconButton>
+                </div>
+              ) : null}
+              {!isEmployee ? (
+                <button
+                  className="relative hidden h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 lg:inline-flex"
+                  onClick={() => setView("notifications")}
+                  type="button"
+                >
+                  <Bell className="h-4 w-4" />
+                  {unread ? (
+                    <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-red-500 px-1 text-xs font-bold text-white">
+                      {unread}
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
+              <div className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm lg:flex">
+                <span className="grid h-8 w-8 place-items-center rounded-full bg-blue-600 text-xs font-bold text-white">
+                  {currentUser.name
+                    .split(" ")
+                    .map((part) => part[0])
+                    .slice(0, 2)
+                    .join("")}
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-900">{currentUser.name}</p>
+                  <p className="text-xs text-slate-500">{currentUser.role}</p>
+                </div>
+              </div>
+              <div className="lg:hidden">
+                {isEmployee ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                    {currentUser.name} - Employee
+                  </div>
+                ) : (
+                  <SelectInput
+                    aria-label="Signed in user"
+                    value={currentUser.id}
+                    onChange={(event) => {
+                      const nextUser = state.users.find(
+                        (user) => user.id === event.target.value,
+                      );
+                      setCurrentUserId(event.target.value);
+                      if (nextUser?.role === "Employee") {
+                        setView("dashboard");
+                      }
+                    }}
+                  >
+                    {state.users.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.name} - {user.role}
+                      </option>
+                    ))}
+                  </SelectInput>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <nav className="mx-auto grid max-w-[1680px] grid-cols-2 gap-2 px-3 pb-3 sm:flex sm:overflow-x-auto sm:px-5 lg:hidden">
+            {visibleNavItems.map((item) => (
               <button
                 className={classNames(
-                  "inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition sm:shrink-0",
+                  "inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold transition sm:shrink-0",
                   view === item.id
-                    ? "bg-slate-950 text-white"
-                    : "bg-white text-slate-600 hover:bg-slate-100",
+                    ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
+                    : "bg-white text-slate-600 shadow-sm hover:bg-slate-50",
                 )}
                 key={item.id}
                 onClick={() => setView(item.id)}
@@ -3175,35 +3327,35 @@ export default function Home() {
                 {item.icon}
                 <span>{item.label}</span>
                 {item.id === "notifications" && unread ? (
-                  <span className="grid h-5 min-w-5 place-items-center rounded-full bg-red-600 px-1 text-xs text-white">
+                  <span className="grid h-5 min-w-5 place-items-center rounded-full bg-red-500 px-1 text-xs text-white">
                     {unread}
                   </span>
                 ) : null}
               </button>
             ))}
-        </nav>
-      </header>
+          </nav>
+        </header>
 
-      <div className="mx-auto grid max-w-[1800px] gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5">
-        {view === "dashboard" ? (
-          isEmployee ? (
-            <EmployeePortal
-              currentUser={currentUser}
-              selectedRequestId={selectedRequestId}
-              setSelectedRequestId={setSelectedRequestId}
-              setState={setState}
-              state={state}
-            />
-          ) : (
-            <Dashboard
-              currentUser={currentUser}
-              selectedRequestId={selectedRequestId}
-              setSelectedRequestId={setSelectedRequestId}
-              setState={setState}
-              state={state}
-            />
-          )
-        ) : null}
+        <div className="mx-auto grid max-w-[1680px] gap-5 px-3 py-4 sm:px-5 sm:py-5 lg:px-7 lg:py-7">
+          {view === "dashboard" ? (
+            isEmployee ? (
+              <EmployeePortal
+                currentUser={currentUser}
+                selectedRequestId={selectedRequestId}
+                setSelectedRequestId={setSelectedRequestId}
+                setState={setState}
+                state={state}
+              />
+            ) : (
+              <Dashboard
+                currentUser={currentUser}
+                selectedRequestId={selectedRequestId}
+                setSelectedRequestId={setSelectedRequestId}
+                setState={setState}
+                state={state}
+              />
+            )
+          ) : null}
 
         {view === "new-request" ? (
           <RequestForm
@@ -3239,6 +3391,7 @@ export default function Home() {
             state={state}
           />
         ) : null}
+        </div>
       </div>
     </main>
   );
