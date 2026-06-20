@@ -31,7 +31,7 @@ import {
   UserCog,
   XCircle,
 } from "lucide-react";
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useId, useMemo, useState } from "react";
 import {
   AuditLog,
   AttachmentReference,
@@ -418,18 +418,33 @@ function StatusBadge({ status }: { status: RequestStatus }) {
 function Field({
   label,
   children,
+  htmlFor,
   required,
 }: {
   label: string;
   children: ReactNode;
+  htmlFor?: string;
   required?: boolean;
 }) {
+  const labelContent = (
+    <span>
+      {label}
+      {required ? <span className="text-red-600"> *</span> : null}
+    </span>
+  );
+
+  if (htmlFor) {
+    return (
+      <div className="grid gap-1.5 text-sm font-medium text-slate-700">
+        <label htmlFor={htmlFor}>{labelContent}</label>
+        {children}
+      </div>
+    );
+  }
+
   return (
     <label className="grid gap-1.5 text-sm font-medium text-slate-700">
-      <span>
-        {label}
-        {required ? <span className="text-red-600"> *</span> : null}
-      </span>
+      {labelContent}
       {children}
     </label>
   );
@@ -1352,14 +1367,19 @@ function ActionPanel({
   state: ProcurementState;
   onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
 }) {
+  const fieldPrefix = useId();
   const [comment, setComment] = useState("");
   const [declineReason, setDeclineReason] = useState("");
-  const [invoiceNumber, setInvoiceNumber] = useState("");
-  const [invoiceAmount, setInvoiceAmount] = useState(getRequestTotalAed(request));
-  const [invoiceDate, setInvoiceDate] = useState("2026-06-15");
-  const [invoiceFile, setInvoiceFile] = useState("");
-  const [paymentTerms, setPaymentTerms] = useState<(typeof PAYMENT_TERMS)[number]>("COD");
-  const [financeNotes, setFinanceNotes] = useState("");
+  const [invoiceNumber, setInvoiceNumber] = useState(request.invoice?.invoiceNumber ?? "");
+  const [invoiceAmount, setInvoiceAmount] = useState(
+    request.invoice?.invoiceAmount ?? getRequestTotalAed(request),
+  );
+  const [invoiceDate, setInvoiceDate] = useState(request.invoice?.invoiceDate ?? dubaiDateKey());
+  const [invoiceFile, setInvoiceFile] = useState(request.invoice?.uploadedInvoiceFile ?? "");
+  const [paymentTerms, setPaymentTerms] = useState<(typeof PAYMENT_TERMS)[number]>(
+    request.invoice?.paymentTerms ?? "COD",
+  );
+  const [financeNotes, setFinanceNotes] = useState(request.invoice?.financeNotes ?? "");
   const [deliveryStatus, setDeliveryStatus] = useState<LogisticsDetails["deliveryStatus"]>(
     request.logistics?.deliveryStatus ?? "Order placed",
   );
@@ -1370,6 +1390,20 @@ function ActionPanel({
   );
   const [lastCheckpoint, setLastCheckpoint] = useState(request.logistics?.lastCheckpoint ?? "");
   const [deliveryNotes, setDeliveryNotes] = useState(request.logistics?.notes ?? "");
+  const actionNoteId = `${fieldPrefix}-action-note`;
+  const declineReasonId = `${fieldPrefix}-decline-reason`;
+  const invoiceNumberId = `${fieldPrefix}-invoice-number`;
+  const invoiceAmountId = `${fieldPrefix}-invoice-amount`;
+  const invoiceDateId = `${fieldPrefix}-invoice-date`;
+  const paymentTermsId = `${fieldPrefix}-payment-terms`;
+  const invoiceFileId = `${fieldPrefix}-invoice-file`;
+  const financeNotesId = `${fieldPrefix}-finance-notes`;
+  const deliveryStatusId = `${fieldPrefix}-delivery-status`;
+  const deliveryProviderId = `${fieldPrefix}-delivery-provider`;
+  const trackingNumberId = `${fieldPrefix}-tracking-number`;
+  const expectedDeliveryDateId = `${fieldPrefix}-expected-delivery-date`;
+  const lastCheckpointId = `${fieldPrefix}-last-checkpoint`;
+  const deliveryNotesId = `${fieldPrefix}-delivery-notes`;
 
   const role = currentUser.role;
   const clearText = () => {
@@ -1377,10 +1411,11 @@ function ActionPanel({
     setDeclineReason("");
   };
   const canUse = (neededRole: Role) => role === neededRole;
+
   const invoicePayload = (): InvoiceDetails => ({
     invoiceNumber: invoiceNumber || `${request.id}-INV`,
     invoiceAmount,
-    invoiceDate,
+    invoiceDate: invoiceDate || dubaiDateKey(),
     vendor: request.vendorName || request.vendor.companyName,
     uploadedInvoiceFile: invoiceFile || `${request.id.toLowerCase()}-invoice.pdf`,
     paymentTerms,
@@ -1395,45 +1430,61 @@ function ActionPanel({
     notes: deliveryNotes,
   });
   const logisticsFields = (
-    <div className="grid gap-3 md:grid-cols-2">
-      <SelectInput
-        value={deliveryStatus}
-        onChange={(event) =>
-          setDeliveryStatus(event.target.value as LogisticsDetails["deliveryStatus"])
-        }
-      >
-        {DELIVERY_STATUSES.map((status) => (
-          <option key={status}>{status}</option>
-        ))}
-      </SelectInput>
-      <TextInput
-        placeholder="Logistics provider"
-        value={deliveryProvider}
-        onChange={(event) => setDeliveryProvider(event.target.value)}
-      />
-      <TextInput
-        placeholder="Tracking number"
-        value={trackingNumber}
-        onChange={(event) => setTrackingNumber(event.target.value)}
-      />
-      <TextInput
-        type="date"
-        value={expectedDeliveryDate}
-        onChange={(event) => setExpectedDeliveryDate(event.target.value)}
-      />
-      <TextInput
-        className="md:col-span-2"
-        placeholder="Last checkpoint"
-        value={lastCheckpoint}
-        onChange={(event) => setLastCheckpoint(event.target.value)}
-      />
-      <div className="md:col-span-2">
+    <div className="grid gap-3">
+      <Field label="Delivery status" htmlFor={deliveryStatusId}>
+        <SelectInput
+          id={deliveryStatusId}
+          value={deliveryStatus}
+          onChange={(event) =>
+            setDeliveryStatus(event.target.value as LogisticsDetails["deliveryStatus"])
+          }
+        >
+          {DELIVERY_STATUSES.map((status) => (
+            <option key={status}>{status}</option>
+          ))}
+        </SelectInput>
+      </Field>
+      <Field label="Logistics provider" htmlFor={deliveryProviderId}>
+        <TextInput
+          id={deliveryProviderId}
+          placeholder="Enter provider name"
+          value={deliveryProvider}
+          onChange={(event) => setDeliveryProvider(event.target.value)}
+        />
+      </Field>
+      <Field label="Tracking number" htmlFor={trackingNumberId}>
+        <TextInput
+          id={trackingNumberId}
+          placeholder="Enter tracking number"
+          value={trackingNumber}
+          onChange={(event) => setTrackingNumber(event.target.value)}
+        />
+      </Field>
+      <Field label="Expected delivery date" htmlFor={expectedDeliveryDateId}>
+        <TextInput
+          id={expectedDeliveryDateId}
+          type="date"
+          value={expectedDeliveryDate}
+          onInput={(event) => setExpectedDeliveryDate(event.currentTarget.value)}
+          onChange={(event) => setExpectedDeliveryDate(event.target.value)}
+        />
+      </Field>
+      <Field label="Last checkpoint" htmlFor={lastCheckpointId}>
+        <TextInput
+          id={lastCheckpointId}
+          placeholder="Enter latest delivery update"
+          value={lastCheckpoint}
+          onChange={(event) => setLastCheckpoint(event.target.value)}
+        />
+      </Field>
+      <Field label="Delivery notes" htmlFor={deliveryNotesId}>
         <TextArea
-          placeholder="Delivery notes"
+          id={deliveryNotesId}
+          placeholder="Add delivery notes"
           value={deliveryNotes}
           onChange={(event) => setDeliveryNotes(event.target.value)}
         />
-      </div>
+      </Field>
     </div>
   );
 
@@ -1446,11 +1497,14 @@ function ActionPanel({
       <p className="mt-2 text-sm text-slate-500">{getPendingAction(request)}</p>
 
       <div className="mt-4 grid gap-3">
-        <TextArea
-          placeholder="Comment, finance note, or clarification text"
-          value={comment}
-          onChange={(event) => setComment(event.target.value)}
-        />
+        <Field label="Action note / clarification message" htmlFor={actionNoteId}>
+          <TextArea
+            id={actionNoteId}
+            placeholder="Write a comment, clarification message, or internal note"
+            value={comment}
+            onChange={(event) => setComment(event.target.value)}
+          />
+        </Field>
 
         {request.status === "Mona Review" && canUse("Mona") ? (
           <div className="flex flex-wrap gap-2">
@@ -1480,11 +1534,14 @@ function ActionPanel({
 
         {request.status === "Rashid Review" && canUse("Rashid") ? (
           <div className="grid gap-3">
-            <TextArea
-              placeholder="Decline reason is required when declining"
-              value={declineReason}
-              onChange={(event) => setDeclineReason(event.target.value)}
-            />
+            <Field label="Decline reason" htmlFor={declineReasonId} required>
+              <TextArea
+                id={declineReasonId}
+                placeholder="Required when declining"
+                value={declineReason}
+                onChange={(event) => setDeclineReason(event.target.value)}
+              />
+            </Field>
             <div className="flex flex-wrap gap-2">
               <IconButton
                 icon={<CheckCircle2 className="h-4 w-4" />}
@@ -1563,22 +1620,37 @@ function ActionPanel({
 
         {request.status === "Purchase in Progress" && canUse("Edlyn") ? (
           <div className="grid gap-3 rounded-lg border border-slate-200 p-3">
-            <div className="grid gap-3 md:grid-cols-2">
-              <TextInput placeholder="Invoice number" value={invoiceNumber} onChange={(event) => setInvoiceNumber(event.target.value)} />
-              <TextInput type="number" value={invoiceAmount} onChange={(event) => setInvoiceAmount(Number(event.target.value))} />
-              <TextInput type="date" value={invoiceDate} onChange={(event) => setInvoiceDate(event.target.value)} />
-              <SelectInput value={paymentTerms} onChange={(event) => setPaymentTerms(event.target.value as typeof paymentTerms)}>
-                {PAYMENT_TERMS.map((term) => (
-                  <option key={term}>{term}</option>
-                ))}
-              </SelectInput>
-              <div className="md:col-span-2">
+            <div className="grid gap-3">
+              <Field label="Invoice number" htmlFor={invoiceNumberId}>
+                <TextInput id={invoiceNumberId} placeholder="INV-001" value={invoiceNumber} onChange={(event) => setInvoiceNumber(event.target.value)} />
+              </Field>
+              <Field label="Invoice amount" htmlFor={invoiceAmountId}>
+                <TextInput id={invoiceAmountId} type="number" value={invoiceAmount} onChange={(event) => setInvoiceAmount(Number(event.target.value))} />
+              </Field>
+              <Field label="Invoice date" htmlFor={invoiceDateId}>
                 <TextInput
-                  placeholder="Uploaded invoice file name"
+                  id={invoiceDateId}
+                  type="date"
+                  value={invoiceDate}
+                  onInput={(event) => setInvoiceDate(event.currentTarget.value)}
+                  onChange={(event) => setInvoiceDate(event.target.value)}
+                />
+              </Field>
+              <Field label="Payment terms" htmlFor={paymentTermsId}>
+                <SelectInput id={paymentTermsId} value={paymentTerms} onChange={(event) => setPaymentTerms(event.target.value as typeof paymentTerms)}>
+                  {PAYMENT_TERMS.map((term) => (
+                    <option key={term}>{term}</option>
+                  ))}
+                </SelectInput>
+              </Field>
+              <Field label="Uploaded invoice file name" htmlFor={invoiceFileId}>
+                <TextInput
+                  id={invoiceFileId}
+                  placeholder="invoice-pr-001.pdf"
                   value={invoiceFile}
                   onChange={(event) => setInvoiceFile(event.target.value)}
                 />
-              </div>
+              </Field>
             </div>
             <div className="flex flex-wrap gap-2">
               <IconButton
@@ -1614,11 +1686,14 @@ function ActionPanel({
 
         {request.status === "Aileen Finance Review" && canUse("Aileen") ? (
           <div className="grid gap-3">
-            <TextArea
-              placeholder="Finance notes"
-              value={financeNotes}
-              onChange={(event) => setFinanceNotes(event.target.value)}
-            />
+            <Field label="Finance notes" htmlFor={financeNotesId}>
+              <TextArea
+                id={financeNotesId}
+                placeholder="Add finance documentation notes"
+                value={financeNotes}
+                onChange={(event) => setFinanceNotes(event.target.value)}
+              />
+            </Field>
             <IconButton
               icon={<CircleDollarSign className="h-4 w-4" />}
               onClick={() => {
@@ -1909,7 +1984,7 @@ function RequestDetails({
 
         <ActionPanel
           currentUser={currentUser}
-          key={request.id}
+          key={`${request.id}-${request.status}-${request.updatedAt}-${currentUser.id}`}
           onTransition={onTransition}
           request={request}
           state={state}
