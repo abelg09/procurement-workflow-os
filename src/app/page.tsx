@@ -387,7 +387,7 @@ function IconButton({
   return (
     <button
       className={classNames(
-        "inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition disabled:opacity-50",
+        "box-border inline-flex min-h-10 max-w-full items-center justify-center gap-2 rounded-md px-3 text-center text-sm font-semibold leading-5 transition disabled:opacity-50",
         variants[variant],
       )}
       disabled={disabled}
@@ -395,8 +395,8 @@ function IconButton({
       title={title}
       type={type}
     >
-      {icon}
-      <span>{children}</span>
+      <span className="shrink-0">{icon}</span>
+      <span className="min-w-0 whitespace-normal">{children}</span>
     </button>
   );
 }
@@ -451,7 +451,7 @@ function Field({
 }
 
 function inputClass() {
-  return "min-h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
+  return "box-border min-h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
 }
 
 function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
@@ -487,9 +487,9 @@ function DashboardMetric({
   tone: string;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-medium text-slate-500">{label}</p>
+        <p className="min-w-0 text-sm font-medium text-slate-500">{label}</p>
         <span className={classNames("rounded-md p-2", tone)}>{icon}</span>
       </div>
       <p className="mt-3 text-2xl font-bold text-slate-950">{value}</p>
@@ -502,7 +502,7 @@ function WorkflowTracker({ request }: { request: ProcurementRequest }) {
   const declined = isDeclined(request.status);
 
   return (
-    <div className="grid gap-3 md:grid-cols-5">
+    <div className="grid min-w-0 gap-3 sm:grid-cols-2 md:grid-cols-5">
       {WORKFLOW_STAGES.map((stage, index) => {
         const complete = request.status === "Completed" || index < currentIndex;
         const current = index === currentIndex;
@@ -512,7 +512,7 @@ function WorkflowTracker({ request }: { request: ProcurementRequest }) {
         return (
           <div
             className={classNames(
-              "min-h-24 rounded-lg border bg-white p-3",
+              "min-h-24 min-w-0 rounded-lg border bg-white p-3",
               complete ? "border-emerald-200" : "border-slate-200",
               current && !declined ? "ring-2 ring-blue-100" : "",
               current && declined ? "border-red-300 ring-2 ring-red-100" : "",
@@ -536,7 +536,7 @@ function WorkflowTracker({ request }: { request: ProcurementRequest }) {
                 Stage {stage.id}
               </span>
             </div>
-            <p className="mt-3 text-sm font-bold leading-5 text-slate-950">
+            <p className="mt-3 break-words text-sm font-bold leading-5 text-slate-950">
               {stage.label}
             </p>
             <p className="mt-1 text-xs text-slate-500">{stage.ownerRole}</p>
@@ -790,7 +790,7 @@ function RequestForm({
   };
 
   return (
-    <form className="grid gap-6" onSubmit={handleSubmit}>
+    <form className="grid min-w-0 gap-5 sm:gap-6" onSubmit={handleSubmit}>
       {formError ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
           {formError}
@@ -801,12 +801,12 @@ function RequestForm({
           {successMessage}
         </div>
       ) : null}
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-5 flex items-center gap-2">
           <ClipboardList className="h-5 w-5 text-blue-700" />
           <h2 className="text-lg font-bold text-slate-950">Procurement request</h2>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
           <Field label="Employee name" required>
             <TextInput value={employeeName} onChange={(event) => setEmployeeName(event.target.value)} required />
           </Field>
@@ -959,66 +959,111 @@ function RequestForm({
             </Field>
           </div>
           {isBulkMode ? (
-          <div className="md:col-span-2 xl:col-span-3">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-950">Bulk item upload</h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Upload CSV or Excel rows with item_name, item_description, quantity, unit_price, currency, and optional vendor_name.
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <IconButton
-                    icon={<Download className="h-4 w-4" />}
-                    onClick={downloadBulkTemplate}
-                    variant="secondary"
-                  >
-                    Download template
-                  </IconButton>
-                  {hasBulkLineItems ? (
+            <div className="md:col-span-2 xl:col-span-3">
+              <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:p-4">
+                <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold text-slate-950">Bulk item upload</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Upload CSV or Excel rows with item_name, item_description,
+                      quantity, unit_price, currency, and optional vendor_name.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
                     <IconButton
-                      icon={<XCircle className="h-4 w-4" />}
-                      onClick={() => {
-                        setBulkLineItems([]);
-                        setBulkImportMessage("");
-                      }}
-                      variant="ghost"
+                      icon={<Download className="h-4 w-4" />}
+                      onClick={downloadBulkTemplate}
+                      variant="secondary"
                     >
-                      Clear items
+                      Download template
                     </IconButton>
-                  ) : null}
+                    {hasBulkLineItems ? (
+                      <IconButton
+                        icon={<XCircle className="h-4 w-4" />}
+                        onClick={() => {
+                          setBulkLineItems([]);
+                          setBulkImportMessage("");
+                        }}
+                        variant="ghost"
+                      >
+                        Clear items
+                      </IconButton>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
 
-              <div className="mt-4">
-                <input
-                  accept=".csv,.xlsx,.xls"
-                  className={inputClass()}
-                  disabled={bulkImporting || submitting}
-                  type="file"
-                  onChange={(event) => {
-                    void handleBulkUpload(event.target.files?.[0]);
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </div>
+                <div className="mt-4">
+                  <input
+                    accept=".csv,.xlsx,.xls"
+                    className={inputClass()}
+                    disabled={bulkImporting || submitting}
+                    type="file"
+                    onChange={(event) => {
+                      void handleBulkUpload(event.target.files?.[0]);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </div>
 
-              {bulkImporting ? (
-                <p className="mt-3 text-sm font-medium text-blue-700">
-                  Importing rows and converting to AED...
-                </p>
-              ) : null}
+                {bulkImporting ? (
+                  <p className="mt-3 text-sm font-medium text-blue-700">
+                    Importing rows and converting to AED...
+                  </p>
+                ) : null}
 
-              {bulkImportMessage ? (
-                <p className="mt-3 text-sm font-medium text-emerald-700">
-                  {bulkImportMessage}
-                </p>
-              ) : null}
+                {bulkImportMessage ? (
+                  <p className="mt-3 text-sm font-medium text-emerald-700">
+                    {bulkImportMessage}
+                  </p>
+                ) : null}
 
-              {hasBulkLineItems ? (
-                <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
-                  <table className="w-full min-w-[860px] text-left text-sm">
+                {hasBulkLineItems ? (
+                  <>
+                    <div className="mt-4 grid gap-3 md:hidden">
+                      {bulkLineItems.map((item, index) => (
+                        <div
+                          className="rounded-lg border border-slate-200 bg-white p-3"
+                          key={item.id}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold uppercase text-slate-500">
+                                Item {index + 1}
+                              </p>
+                              <p className="mt-1 font-semibold text-slate-950">
+                                {item.itemName}
+                              </p>
+                            </div>
+                            <span className="shrink-0 text-sm font-bold text-slate-950">
+                              {money(item.aedTotal, "AED")}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-sm text-slate-600">
+                            {item.itemDescription}
+                          </p>
+                          <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                            <Detail label="Qty" value={String(item.quantity)} />
+                            <Detail
+                              label="Unit price"
+                              value={money(item.unitPrice, item.currency)}
+                            />
+                            <Detail
+                              label="Original total"
+                              value={money(item.originalTotal, item.currency)}
+                            />
+                            <Detail label="FX to AED" value={item.fxRateToAed.toFixed(4)} />
+                            <div className="col-span-2">
+                              <Detail label="Vendor" value={item.vendorName || "Not provided"} />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-950">
+                        Total converted value: {money(bulkTotalAed, "AED")}
+                      </div>
+                    </div>
+                    <div className="mt-4 hidden overflow-x-auto rounded-lg border border-slate-200 bg-white md:block">
+                      <table className="w-full min-w-[860px] text-left text-sm">
                     <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                       <tr>
                         <th className="px-3 py-2">No.</th>
@@ -1068,11 +1113,12 @@ function RequestForm({
                         <td />
                       </tr>
                     </tfoot>
-                  </table>
-                </div>
-              ) : null}
+                      </table>
+                    </div>
+                  </>
+                ) : null}
+              </div>
             </div>
-          </div>
           ) : null}
           <div className="md:col-span-2 xl:col-span-3">
             <Field label="Attachments">
@@ -1089,12 +1135,12 @@ function RequestForm({
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="mb-5 flex items-center gap-2">
           <FileText className="h-5 w-5 text-emerald-700" />
           <h2 className="text-lg font-bold text-slate-950">Vendor details</h2>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
           <Field label="Contact person">
             <TextInput value={vendorContact} onChange={(event) => setVendorContact(event.target.value)} />
           </Field>
@@ -1204,10 +1250,10 @@ function RequestsTable({
   });
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+    <section className="min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 p-5">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
               <LayoutDashboard className="h-5 w-5 text-blue-700" />
               <h2 className="text-lg font-bold text-slate-950">{title}</h2>
@@ -1269,7 +1315,81 @@ function RequestsTable({
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="grid min-w-0 gap-3 p-3 md:hidden">
+        {filtered.length === 0 ? (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-500">
+            No procurement requests match the current filters.
+          </div>
+        ) : (
+          filtered.map((request) => {
+            const blocked = currentUser ? isUserBlockedTask(request, currentUser) : false;
+
+            return (
+              <button
+                className={classNames(
+                  "box-border min-w-0 w-full rounded-lg border p-3 text-left transition",
+                  blocked
+                    ? selectedRequestId === request.id
+                      ? "border-red-300 bg-red-100"
+                      : "border-red-200 bg-red-50"
+                    : selectedRequestId === request.id
+                      ? "border-blue-200 bg-blue-50"
+                      : "border-slate-200 bg-white",
+                )}
+                key={`mobile-${request.id}`}
+                onClick={() => onSelect(request.id)}
+                type="button"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-950">{request.id}</p>
+                    <p className="mt-1 truncate text-sm text-slate-500">
+                      {request.employeeName} - {request.itemName}
+                    </p>
+                  </div>
+                  <StatusBadge status={request.status} />
+                </div>
+                <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500">Stage</span>
+                    <span className="min-w-0 break-words text-right font-medium text-slate-800">
+                      {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500">Assignee</span>
+                    <span className="min-w-0 break-words text-right font-medium text-slate-800">
+                      {getAssigneeName(request, users)}
+                    </span>
+                  </div>
+                  {!hideFinancials ? (
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Total AED</span>
+                      <span className="min-w-0 break-words text-right font-semibold text-slate-900">
+                        {money(getRequestTotalAed(request), "AED")}
+                      </span>
+                    </div>
+                  ) : null}
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500">Invoice</span>
+                    <span className="min-w-0 break-words text-right font-medium text-slate-800">
+                      {request.invoice?.invoiceNumber ?? "Pending"}
+                    </span>
+                  </div>
+                  <div className="rounded-md bg-slate-50 p-2 text-slate-700">
+                    {getPendingAction(request)}
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Last updated {formatDateTime(request.updatedAt)}
+                  </p>
+                </div>
+              </button>
+            );
+          })
+        )}
+      </div>
+
+      <div className="hidden overflow-x-auto md:block">
         <table className={classNames("w-full border-collapse text-left text-sm", hideFinancials ? "min-w-[980px]" : "min-w-[1120px]")}>
           <thead className="bg-slate-50 text-xs uppercase text-slate-500">
             <tr>
@@ -1489,7 +1609,7 @@ function ActionPanel({
   );
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
       <div className="flex items-center gap-2">
         <SlidersHorizontal className="h-5 w-5 text-blue-700" />
         <h3 className="text-base font-bold text-slate-950">Stage actions</h3>
@@ -1819,7 +1939,7 @@ function RequestDetails({
 }) {
   if (!request) {
     return (
-      <section className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-sm">
+      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-sm">
         Select a request to see workflow details.
       </section>
     );
@@ -1830,12 +1950,12 @@ function RequestDetails({
   const lineItems = getRequestLineItems(request);
 
   return (
-    <section className="grid gap-5">
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="grid min-w-0 gap-5">
+      <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <div>
+          <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-2xl font-bold text-slate-950">{request.id}</h2>
+              <h2 className="text-xl font-bold text-slate-950 sm:text-2xl">{request.id}</h2>
               <StatusBadge status={request.status} />
             </div>
             <p className="mt-2 text-sm text-slate-500">
@@ -1856,9 +1976,9 @@ function RequestDetails({
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
-        <div className="grid gap-5">
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
+        <div className="grid min-w-0 gap-5">
+          <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <h3 className="text-base font-bold text-slate-950">Request details</h3>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <Detail label="Item" value={request.itemName} />
@@ -1878,9 +1998,36 @@ function RequestDetails({
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
             <h3 className="text-base font-bold text-slate-950">Line items</h3>
-            <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+            <div className="mt-4 grid gap-3 md:hidden">
+              {lineItems.map((item, index) => (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={item.id}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold uppercase text-slate-500">
+                        Item {index + 1}
+                      </p>
+                      <p className="mt-1 font-semibold text-slate-950">{item.itemName}</p>
+                    </div>
+                    <span className="shrink-0 text-sm font-bold text-slate-950">
+                      {money(item.aedTotal, "AED")}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-600">{item.itemDescription}</p>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    <Detail label="Qty" value={String(item.quantity)} />
+                    <Detail label="Unit price" value={money(item.unitPrice, item.currency)} />
+                    <Detail label="Original total" value={money(item.originalTotal, item.currency)} />
+                    <Detail label="FX to AED" value={item.fxRateToAed.toFixed(4)} />
+                    <div className="col-span-2">
+                      <Detail label="Vendor" value={item.vendorName || "Not provided"} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 hidden overflow-x-auto rounded-lg border border-slate-200 md:block">
               <table className="w-full min-w-[920px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
@@ -1924,8 +2071,8 @@ function RequestDetails({
             </div>
           </div>
 
-          <div className="grid gap-5 lg:grid-cols-3">
-            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid min-w-0 gap-5 lg:grid-cols-3">
+            <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <h3 className="text-base font-bold text-slate-950">Vendor profile</h3>
               <div className="mt-4 grid gap-3 text-sm">
                 <Detail label="Contact person" value={request.vendor.contactPerson || "Not provided"} />
@@ -1938,7 +2085,7 @@ function RequestDetails({
               </div>
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <h3 className="text-base font-bold text-slate-950">Invoice documentation</h3>
               {request.invoice ? (
                 <div className="mt-4 grid gap-3 text-sm">
@@ -1956,7 +2103,7 @@ function RequestDetails({
               )}
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <h3 className="text-base font-bold text-slate-950">Logistics tracking</h3>
               {request.logistics ? (
                 <div className="mt-4 grid gap-3 text-sm">
@@ -2007,7 +2154,7 @@ function Detail({ label, value }: { label: string; value: string }) {
 
 function AuditTrail({ logs }: { logs: AuditLog[] }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
       <div className="flex items-center gap-2">
         <History className="h-5 w-5 text-slate-700" />
         <h3 className="text-base font-bold text-slate-950">Audit trail</h3>
@@ -2328,15 +2475,15 @@ function AdminPanel({
   };
 
   return (
-    <section className="grid gap-5">
+    <section className="grid min-w-0 gap-5">
       <SystemReadiness
         hasSupabaseConfig={hasSupabaseConfig}
         onClearWorkspace={onClearWorkspace}
       />
 
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Shield className="h-5 w-5 text-blue-700" />
               <h2 className="text-lg font-bold text-slate-950">Admin controls</h2>
@@ -2356,8 +2503,8 @@ function AdminPanel({
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="grid min-w-0 gap-5 xl:grid-cols-2">
+        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center gap-2">
             <UserCog className="h-5 w-5 text-slate-700" />
             <h3 className="text-base font-bold text-slate-950">Users and roles</h3>
@@ -2407,7 +2554,7 @@ function AdminPanel({
           </div>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex items-center gap-2">
             <ArrowRightLeft className="h-5 w-5 text-slate-700" />
             <h3 className="text-base font-bold text-slate-950">Manual reassignment</h3>
@@ -2498,7 +2645,7 @@ function ProcurementAssistant({
   };
 
   return (
-    <aside className="rounded-lg border border-slate-200 bg-white shadow-sm">
+    <aside className="min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-200 p-4">
         <div className="flex items-center gap-2">
           <Bot className="h-5 w-5 text-purple-700" />
@@ -2546,9 +2693,10 @@ function ProcurementAssistant({
           </button>
         ))}
       </div>
-      <form className="flex gap-2 border-t border-slate-200 p-3" onSubmit={ask}>
+      <form className="grid gap-2 border-t border-slate-200 p-3 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={ask}>
         <TextInput
           aria-label="Ask Procurement Assistant"
+          className="min-w-0"
           placeholder="Ask about PR-102, invoices, approvals"
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
@@ -2576,7 +2724,7 @@ function EmployeeRequestStatus({
 
   if (!request) {
     return (
-      <section className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
+      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
         Select a request to view its current status.
       </section>
     );
@@ -2592,9 +2740,9 @@ function EmployeeRequestStatus({
     .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-xl font-bold text-slate-950">{request.id}</h2>
             <StatusBadge status={request.status} />
@@ -2615,7 +2763,7 @@ function EmployeeRequestStatus({
         <WorkflowTracker request={request} />
       </div>
 
-      <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-5 grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Detail label="Items" value={String(getRequestItemCount(request))} />
         <Detail label="Invoice" value={request.invoice?.invoiceNumber ?? "Pending"} />
         <Detail label="Required by" value={formatDate(request.requiredByDate)} />
@@ -2690,16 +2838,16 @@ function EmployeePortal({
     state.requests[0];
 
   return (
-    <div className="grid gap-5">
-      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="grid min-w-0 gap-5">
+      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div>
+          <div className="min-w-0">
             <h2 className="text-xl font-bold text-slate-950">Employee procurement portal</h2>
             <p className="mt-1 text-sm text-slate-500">
               Submit a new request and track company procurement status in one place.
             </p>
           </div>
-          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+          <div className="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
             {currentUser.name} - Employee
           </div>
         </div>
@@ -2824,15 +2972,15 @@ function Dashboard({
   ];
 
   return (
-    <div className="grid gap-5">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+    <div className="grid min-w-0 gap-5">
+      <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
         {metricCards.map((card) => (
           <DashboardMetric key={card.label} {...card} />
         ))}
       </div>
 
-      <div className="grid gap-5 2xl:grid-cols-[1fr_420px]">
-        <div className="grid gap-5">
+      <div className="grid min-w-0 gap-5 2xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="grid min-w-0 gap-5">
           <RequestsTable
             currentUser={currentUser}
             onSelect={setSelectedRequestId}
@@ -2849,13 +2997,13 @@ function Dashboard({
             state={state}
           />
         </div>
-        <div className="grid gap-5 content-start">
+        <div className="grid min-w-0 gap-5 content-start">
           <ProcurementAssistant
             currentUser={currentUser}
             setState={setState}
             state={state}
           />
-          <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center gap-2">
               <Filter className="h-5 w-5 text-slate-700" />
               <h2 className="text-base font-bold text-slate-950">Watchlist</h2>
@@ -2955,33 +3103,33 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-slate-100">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1800px] flex-col gap-4 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-32 shrink-0 items-center justify-center rounded-lg bg-black px-4 shadow-sm">
+        <div className="mx-auto flex max-w-[1800px] flex-col gap-3 px-3 py-3 sm:px-4 sm:py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-10 w-28 shrink-0 items-center justify-center rounded-lg bg-black px-3 shadow-sm sm:h-12 sm:w-32 sm:px-4">
               <Image
                 alt="SULMI"
-                className="h-8 w-full object-contain"
+                className="h-7 w-full object-contain sm:h-8"
                 height={36}
                 src={`${PUBLIC_BASE_PATH}/sulmi-logo.svg`}
                 unoptimized
                 width={130}
               />
             </div>
-            <div>
-              <h1 className="text-xl font-bold text-slate-950">Procurement Workflow OS</h1>
-              <p className="text-sm text-slate-500">
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold leading-tight text-slate-950 sm:text-xl">Procurement Workflow OS</h1>
+              <p className="text-xs text-slate-500 sm:text-sm">
                 Requests, approvals, purchasing, invoices, and closure
               </p>
             </div>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
             {isEmployee ? (
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+              <div className="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
                 {currentUser.name} - Employee
               </div>
             ) : (
-              <div className="grid min-w-72 gap-1">
+              <div className="grid w-full min-w-0 gap-1 sm:min-w-72">
                 <span className="text-xs font-semibold uppercase text-slate-500">
                   Active account
                 </span>
@@ -3009,13 +3157,13 @@ export default function Home() {
           </div>
         </div>
 
-        <nav className="mx-auto flex max-w-[1800px] gap-2 overflow-x-auto px-4 pb-3">
+        <nav className="mx-auto grid max-w-[1800px] grid-cols-2 gap-2 px-3 pb-3 sm:flex sm:overflow-x-auto sm:px-4">
           {navItems
             .filter((item) => !item.hidden)
             .map((item) => (
               <button
                 className={classNames(
-                  "inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-sm font-semibold transition",
+                  "inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md px-3 text-sm font-semibold transition sm:shrink-0",
                   view === item.id
                     ? "bg-slate-950 text-white"
                     : "bg-white text-slate-600 hover:bg-slate-100",
@@ -3036,7 +3184,7 @@ export default function Home() {
         </nav>
       </header>
 
-      <div className="mx-auto grid max-w-[1800px] gap-5 px-4 py-5">
+      <div className="mx-auto grid max-w-[1800px] gap-4 px-3 py-4 sm:gap-5 sm:px-4 sm:py-5">
         {view === "dashboard" ? (
           isEmployee ? (
             <EmployeePortal
