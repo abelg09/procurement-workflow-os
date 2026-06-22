@@ -24,6 +24,7 @@ export const STATUSES = [
   "Invoice Uploaded",
   "Aileen Finance Review",
   "Invoice Cleared",
+  "Edlyn Order Confirmation",
   "Delivery Tracking",
   "Order Confirmed",
   "Item Received",
@@ -878,6 +879,7 @@ export function isApprovedStatus(status: RequestStatus) {
     "Invoice Uploaded",
     "Aileen Finance Review",
     "Invoice Cleared",
+    "Edlyn Order Confirmation",
     "Delivery Tracking",
     "Order Confirmed",
     "Item Received",
@@ -905,6 +907,7 @@ export function getPendingAction(request: ProcurementRequest) {
     case "Invoice Uploaded":
       return "Aileen to document and clear invoice";
     case "Invoice Cleared":
+    case "Edlyn Order Confirmation":
       return "Edlyn to confirm the order and start delivery tracking";
     case "Delivery Tracking":
       return "Edlyn to update logistics or mark item received";
@@ -1347,7 +1350,7 @@ export function transitionRequest(
         return state;
       }
       const assignee = assignTo("Edlyn", { notify: false });
-      editable.status = "Invoice Cleared";
+      editable.status = "Edlyn Order Confirmation";
       editable.stage = "edlyn";
       editable.invoice = editable.invoice
         ? {
@@ -1376,7 +1379,9 @@ export function transitionRequest(
           userId: assignee.id,
           requestId,
           title: "Order confirmation required",
-          body: `${editable.id} is cleared by finance. Inform the employee that the order has been placed.`,
+          body: workflowAction.financeNotes?.trim()
+            ? `${editable.id} is cleared by finance and is back with Edlyn. Finance note: ${workflowAction.financeNotes.trim()}`
+            : `${editable.id} is cleared by finance and is back with Edlyn. Inform the employee that the order has been placed.`,
           type: "finance",
         },
         dateTime,
@@ -1385,7 +1390,7 @@ export function transitionRequest(
     }
     case "edlyn-confirm-order":
     case "edlyn-start-delivery-tracking": {
-      if (!canAct(["Invoice Cleared"], "Edlyn")) {
+      if (!canAct(["Invoice Cleared", "Edlyn Order Confirmation"], "Edlyn")) {
         return state;
       }
       editable.status = "Delivery Tracking";
@@ -1607,7 +1612,7 @@ export function getMetrics(requests: ProcurementRequest[]) {
     completed: completed.length,
     pendingInvoice: requests.filter((request) => request.status === "Purchase in Progress").length,
     pendingItemReceipt: requests.filter((request) =>
-      ["Invoice Cleared", "Delivery Tracking", "Order Confirmed"].includes(request.status),
+      ["Invoice Cleared", "Edlyn Order Confirmation", "Delivery Tracking", "Order Confirmed"].includes(request.status),
     ).length,
     averageProcessingTime,
     stuck: getStuckRequests(requests).length,
@@ -1842,9 +1847,14 @@ export function parseState(serialized: string | null) {
       requests: state.requests.map((request) => {
         const statusText = migrateText(String(request.status));
         const deprecatedDrDecline = statusText === "Dr. Majed Declined";
+        const migratedStage = deprecatedDrDecline ? "dr-majed" : migrateStage(request.stage);
         const migratedStatus = deprecatedDrDecline
           ? "Dr. Majed Review"
           : migrateStatus(request.status);
+        const currentStatus =
+          migratedStatus === "Invoice Cleared" && migratedStage === "edlyn"
+            ? "Edlyn Order Confirmation"
+            : migratedStatus;
 
         return normalizeRequestFinancials({
           ...request,
@@ -1854,8 +1864,8 @@ export function parseState(serialized: string | null) {
           itemDescription: migrateText(request.itemDescription),
           reasonForPurchase: migrateText(request.reasonForPurchase),
           vendorName: migrateText(request.vendorName),
-          status: migratedStatus,
-          stage: deprecatedDrDecline ? "dr-majed" : migrateStage(request.stage),
+          status: currentStatus,
+          stage: migratedStage,
           assigneeId:
             deprecatedDrDecline && drMajedUser
               ? drMajedUser.id

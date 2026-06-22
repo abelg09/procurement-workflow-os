@@ -169,6 +169,7 @@ const statusTone = (status: RequestStatus) => {
       "Invoice Uploaded",
       "Aileen Finance Review",
       "Invoice Cleared",
+      "Edlyn Order Confirmation",
       "Delivery Tracking",
       "Order Confirmed",
       "Item Received",
@@ -1984,8 +1985,15 @@ function ActionPanel({
           </div>
         ) : null}
 
-        {request.status === "Invoice Cleared" && canUse("Edlyn") ? (
+        {["Invoice Cleared", "Edlyn Order Confirmation"].includes(request.status) &&
+        canUse("Edlyn") ? (
           <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
+            {request.invoice?.financeNotes ? (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+                <p className="font-semibold">Finance note from Aileen</p>
+                <p className="mt-1 whitespace-pre-line">{request.invoice.financeNotes}</p>
+              </div>
+            ) : null}
             {logisticsFields}
             <IconButton
               icon={<Send className="h-4 w-4" />}
@@ -2063,7 +2071,7 @@ function ActionPanel({
           (request.status === "Rashid Review" && canUse("Rashid")) ||
           (["Dr. Majed Review", "Rashid Auto Approved"].includes(request.status) &&
             canUse("Dr. Majed")) ||
-          (["Edlyn Confirmation", "Purchase in Progress", "Invoice Cleared", "Delivery Tracking", "Order Confirmed"].includes(
+          (["Edlyn Confirmation", "Purchase in Progress", "Invoice Cleared", "Edlyn Order Confirmation", "Delivery Tracking", "Order Confirmed"].includes(
             request.status,
           ) &&
             canUse("Edlyn")) ||

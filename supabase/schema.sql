@@ -30,6 +30,7 @@ create type request_status as enum (
   'Invoice Uploaded',
   'Aileen Finance Review',
   'Invoice Cleared',
+  'Edlyn Order Confirmation',
   'Delivery Tracking',
   'Order Confirmed',
   'Item Received',
