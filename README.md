@@ -25,7 +25,7 @@ Use the active account selector in the header to validate each role workspace:
 - Employee: Abel Gonsalves
 - Mona
 - Rashid
-- Dr. Masjid
+- Dr. Majed
 - Edlyn
 - Aileen
 - Admin
@@ -33,6 +33,7 @@ Use the active account selector in the header to validate each role workspace:
 ## Included
 
 - Rebuilt procurement request form from the provided field list
+- Admin-maintained project dropdown with Beta, Alpha, and Sira defaults
 - CSV/Excel bulk item upload with template download and preview
 - Live FX conversion to AED for threshold routing and reporting
 - 5-stage workflow tracker

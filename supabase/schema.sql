@@ -2,7 +2,7 @@ create type user_role as enum (
   'Employee',
   'Mona',
   'Rashid',
-  'Dr. Masjid',
+  'Dr. Majed',
   'Edlyn',
   'Aileen',
   'Admin'
@@ -11,7 +11,7 @@ create type user_role as enum (
 create type workflow_stage as enum (
   'mona',
   'rashid',
-  'dr-masjid',
+  'dr-majed',
   'edlyn',
   'aileen'
 );
@@ -23,12 +23,14 @@ create type request_status as enum (
   'Rashid Review',
   'Rashid Auto Approved',
   'Rashid Declined',
-  'Dr. Masjid Review',
+  'Dr. Majed Review',
   'Edlyn Confirmation',
+  'Edlyn Clarification Requested',
   'Purchase in Progress',
   'Invoice Uploaded',
   'Aileen Finance Review',
   'Invoice Cleared',
+  'Delivery Tracking',
   'Order Confirmed',
   'Item Received',
   'Completed',
@@ -43,6 +45,14 @@ create type payment_term as enum (
   '90 days credit',
   'Bank transfer',
   'LC'
+);
+
+create table procurement_projects (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create table profiles (
@@ -60,6 +70,7 @@ create table procurement_requests (
   id text primary key,
   employee_name text not null,
   department text not null,
+  project text not null default 'Beta',
   item_name text not null,
   item_description text not null,
   quantity integer not null check (quantity > 0),
@@ -181,6 +192,7 @@ create index procurement_requests_status_idx on procurement_requests(status);
 create index procurement_requests_stage_idx on procurement_requests(stage);
 create index procurement_requests_assignee_idx on procurement_requests(assignee_id);
 create index procurement_requests_department_idx on procurement_requests(department);
+create index procurement_requests_project_idx on procurement_requests(project);
 create index procurement_request_items_request_idx on procurement_request_items(request_id);
 create index notifications_user_unread_idx on notifications(user_id, read);
 create index audit_logs_request_idx on audit_logs(request_id, created_at desc);
@@ -188,3 +200,7 @@ create index audit_logs_request_idx on audit_logs(request_id, created_at desc);
 insert into storage.buckets (id, name, public)
 values ('procurement-files', 'procurement-files', false)
 on conflict (id) do nothing;
+
+insert into procurement_projects (name)
+values ('Beta'), ('Alpha'), ('Sira')
+on conflict (name) do nothing;

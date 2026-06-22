@@ -18,7 +18,7 @@ export async function POST() {
   const { data: pendingRequests, error } = await supabase
     .from("procurement_requests")
     .select("id, assignee_id, status")
-    .in("status", ["Rashid Review", "Dr. Masjid Review"]);
+    .in("status", ["Rashid Review", "Dr. Majed Review"]);
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
@@ -29,11 +29,11 @@ export async function POST() {
       user_id: request.assignee_id,
       request_id: request.id,
       title:
-        request.status === "Dr. Masjid Review"
+        request.status === "Dr. Majed Review"
           ? "Daily review reminder"
           : "Daily approval reminder",
       body:
-        request.status === "Dr. Masjid Review"
+        request.status === "Dr. Majed Review"
           ? `${request.id} is still pending your review.`
           : `${request.id} is still pending your approval.`,
       type: "reminder",

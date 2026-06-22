@@ -38,6 +38,7 @@ import {
   CURRENCIES,
   DELIVERY_STATUSES,
   DEPARTMENTS,
+  DEFAULT_PROJECT_OPTIONS,
   InvoiceDetails,
   LogisticsDetails,
   NotificationRecord,
@@ -657,11 +658,15 @@ function buildAttachmentReferences(files: FileList | null, type: AttachmentRefer
 
 function RequestForm({
   currentUser,
+  projectOptions,
   onSubmit,
 }: {
   currentUser: UserProfile;
+  projectOptions: string[];
   onSubmit: (draft: ProcurementRequestDraft) => string | void;
 }) {
+  const availableProjects =
+    projectOptions.length > 0 ? projectOptions : [...DEFAULT_PROJECT_OPTIONS];
   const [employeeName, setEmployeeName] = useState(
     currentUser.role === "Employee" ? currentUser.name : "",
   );
@@ -670,6 +675,7 @@ function RequestForm({
       ? currentUser.department
       : "Operations",
   );
+  const [project, setProject] = useState(availableProjects[0] ?? "Beta");
   const [itemName, setItemName] = useState("");
   const [itemDescription, setItemDescription] = useState("");
   const [quantity, setQuantity] = useState(1);
@@ -702,6 +708,9 @@ function RequestForm({
 
   const isBulkMode = entryMode === "bulk";
   const hasBulkLineItems = isBulkMode && bulkLineItems.length > 0;
+  const selectedProject = availableProjects.includes(project)
+    ? project
+    : availableProjects[0] ?? "Beta";
   const bulkTotalAed = useMemo(
     () => roundMoney(bulkLineItems.reduce((total, item) => total + item.aedTotal, 0)),
     [bulkLineItems],
@@ -820,6 +829,7 @@ function RequestForm({
       const requestId = onSubmit({
         employeeName,
         department,
+        project: selectedProject,
         itemName: hasBulkLineItems
           ? `Bulk upload (${lineItems.length} items)`
           : itemName,
@@ -862,6 +872,7 @@ function RequestForm({
         `${requestId ?? "Request"} submitted to Mona for first review. Total AED ${totalAed.toFixed(2)}.`,
       );
       setItemName("");
+      setProject(availableProjects[0] ?? "Beta");
       setItemDescription("");
       setQuantity(1);
       setEstimatedAmount("");
@@ -917,6 +928,17 @@ function RequestForm({
           <Field label="Department" required>
             <SelectInput value={department} onChange={(event) => setDepartment(event.target.value)} required>
               {DEPARTMENTS.map((item) => (
+                <option key={item}>{item}</option>
+              ))}
+            </SelectInput>
+          </Field>
+          <Field label="Project" required>
+            <SelectInput
+              value={selectedProject}
+              onChange={(event) => setProject(event.target.value)}
+              required
+            >
+              {availableProjects.map((item) => (
                 <option key={item}>{item}</option>
               ))}
             </SelectInput>
@@ -1328,6 +1350,7 @@ function RequestsTable({
   const [status, setStatus] = useState("All");
   const [assignee, setAssignee] = useState("All");
   const [department, setDepartment] = useState("All");
+  const [project, setProject] = useState("All");
   const [stage, setStage] = useState("All");
   const [minAmount, setMinAmount] = useState("");
   const [maxAmount, setMaxAmount] = useState("");
@@ -1335,11 +1358,13 @@ function RequestsTable({
   const [toDate, setToDate] = useState("");
 
   const departments = Array.from(new Set(requests.map((request) => request.department))).sort();
+  const projects = Array.from(new Set(requests.map((request) => request.project))).sort();
 
   const filtered = requests.filter((request) => {
     const haystack = [
       request.id,
       request.employeeName,
+      request.project,
       request.itemName,
       request.vendorName,
       ...getRequestLineItems(request).flatMap((item) => [
@@ -1355,6 +1380,7 @@ function RequestsTable({
       (status === "All" || request.status === status) &&
       (assignee === "All" || request.assigneeId === assignee) &&
       (department === "All" || request.department === department) &&
+      (project === "All" || request.project === project) &&
       (stage === "All" || request.stage === stage) &&
       (hideFinancials || !minAmount || amount >= Number(minAmount)) &&
       (hideFinancials || !maxAmount || amount <= Number(maxAmount)) &&
@@ -1380,7 +1406,7 @@ function RequestsTable({
             <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
             <TextInput
               className="pl-9"
-              placeholder="Search ID, employee, item, vendor"
+              placeholder="Search ID, employee, project, item, vendor"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
@@ -1407,6 +1433,12 @@ function RequestsTable({
           <SelectInput value={department} onChange={(event) => setDepartment(event.target.value)}>
             <option>All</option>
             {departments.map((item) => (
+              <option key={item}>{item}</option>
+            ))}
+          </SelectInput>
+          <SelectInput value={project} onChange={(event) => setProject(event.target.value)}>
+            <option value="All">All projects</option>
+            {projects.map((item) => (
               <option key={item}>{item}</option>
             ))}
           </SelectInput>
@@ -1476,6 +1508,12 @@ function RequestsTable({
                       {getAssigneeName(request, users)}
                     </span>
                   </div>
+                  <div className="flex justify-between gap-3">
+                    <span className="text-slate-500">Project</span>
+                    <span className="min-w-0 break-words text-right font-medium text-slate-800">
+                      {request.project}
+                    </span>
+                  </div>
                   {!hideFinancials ? (
                     <div className="flex justify-between gap-3">
                       <span className="text-slate-500">Total AED</span>
@@ -1504,10 +1542,11 @@ function RequestsTable({
       </div>
 
       <div className="hidden overflow-x-auto md:block">
-        <table className={classNames("w-full border-collapse text-left text-sm", hideFinancials ? "min-w-[980px]" : "min-w-[1120px]")}>
+        <table className={classNames("w-full border-collapse text-left text-sm", hideFinancials ? "min-w-[1080px]" : "min-w-[1220px]")}>
           <thead className="bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-4 py-3">Request</th>
+              <th className="px-4 py-3">Project</th>
               <th className="px-4 py-3">Stage</th>
               <th className="px-4 py-3">Assignee</th>
               {!hideFinancials ? <th className="px-4 py-3">Total AED</th> : null}
@@ -1520,7 +1559,7 @@ function RequestsTable({
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0 ? (
               <tr>
-                <td className="px-4 py-8 text-center text-sm text-slate-500" colSpan={hideFinancials ? 7 : 8}>
+                <td className="px-4 py-8 text-center text-sm text-slate-500" colSpan={hideFinancials ? 8 : 9}>
                   No procurement requests match the current filters.
                 </td>
               </tr>
@@ -1549,6 +1588,7 @@ function RequestsTable({
                       {request.employeeName} - {request.itemName}
                     </p>
                   </td>
+                  <td className="px-4 py-3">{request.project}</td>
                   <td className="px-4 py-3">
                     {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
                   </td>
@@ -1805,11 +1845,11 @@ function ActionPanel({
           </div>
         ) : null}
 
-        {["Dr. Masjid Review", "Rashid Auto Approved"].includes(request.status) &&
-        canUse("Dr. Masjid") ? (
+        {["Dr. Majed Review", "Rashid Auto Approved"].includes(request.status) &&
+        canUse("Dr. Majed") ? (
           <div className="grid gap-3">
             <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
-              Dr. Masjid reviews the request details only. Approval decisions remain with Rashid.
+              Dr. Majed reviews the request details only. Approval decisions remain with Rashid.
             </div>
             <IconButton
               icon={<CheckCircle2 className="h-4 w-4" />}
@@ -2021,8 +2061,8 @@ function ActionPanel({
         !(
           (request.status === "Mona Review" && canUse("Mona")) ||
           (request.status === "Rashid Review" && canUse("Rashid")) ||
-          (["Dr. Masjid Review", "Rashid Auto Approved"].includes(request.status) &&
-            canUse("Dr. Masjid")) ||
+          (["Dr. Majed Review", "Rashid Auto Approved"].includes(request.status) &&
+            canUse("Dr. Majed")) ||
           (["Edlyn Confirmation", "Purchase in Progress", "Invoice Cleared", "Delivery Tracking", "Order Confirmed"].includes(
             request.status,
           ) &&
@@ -2074,7 +2114,7 @@ function RequestDetails({
             </div>
             <p className="mt-2 text-sm text-slate-500">
               {request.employeeName} requested {request.itemName} for{" "}
-              {request.department}.
+              {request.department} / {request.project}.
             </p>
           </div>
           <div className="grid gap-1 text-sm text-slate-600 xl:text-right">
@@ -2097,6 +2137,7 @@ function RequestDetails({
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <Detail label="Item" value={request.itemName} />
               <Detail label="Line items" value={String(lineItems.length)} />
+              <Detail label="Project" value={request.project} />
               <Detail label="Request amount" value={money(request.estimatedAmount, request.currency)} />
               <Detail label="Total AED" value={money(getRequestTotalAed(request), "AED")} />
               <Detail label="Priority" value={request.priority} />
@@ -2405,6 +2446,7 @@ function rowsForExport(state: ProcurementState) {
     ID: request.id,
     Employee: request.employeeName,
     Department: request.department,
+    Project: request.project,
     Item: request.itemName,
     Vendor: request.vendorName,
     "Request amount": request.estimatedAmount,
@@ -2433,6 +2475,7 @@ function lineItemRowsForExport(state: ProcurementState) {
       "Line #": index + 1,
       Employee: request.employeeName,
       Department: request.department,
+      Project: request.project,
       Item: item.itemName,
       Description: item.itemDescription,
       Quantity: item.quantity,
@@ -2554,6 +2597,7 @@ function AdminPanel({
   const [requestId, setRequestId] = useState(state.requests[0]?.id ?? "");
   const [assigneeId, setAssigneeId] = useState(state.users[0]?.id ?? "");
   const [comment, setComment] = useState("");
+  const [newProjectName, setNewProjectName] = useState("");
 
   const exportCsv = () => {
     const rows = rowsForExport(state);
@@ -2586,6 +2630,43 @@ function AdminPanel({
         user.id === userId ? { ...user, ...updates } : user,
       ),
     }));
+  };
+  const addProjectOption = () => {
+    const projectName = newProjectName.trim();
+
+    if (!projectName) {
+      return;
+    }
+
+    setState((current) => {
+      const alreadyExists = current.projectOptions.some(
+        (option) => option.toLowerCase() === projectName.toLowerCase(),
+      );
+
+      if (alreadyExists) {
+        return current;
+      }
+
+      return {
+        ...current,
+        projectOptions: [...current.projectOptions, projectName],
+      };
+    });
+    setNewProjectName("");
+  };
+  const removeProjectOption = (projectName: string) => {
+    setState((current) => {
+      if (current.projectOptions.length <= 1) {
+        return current;
+      }
+
+      return {
+        ...current,
+        projectOptions: current.projectOptions.filter(
+          (option) => option !== projectName,
+        ),
+      };
+    });
   };
 
   return (
@@ -2647,7 +2728,7 @@ function AdminPanel({
                           updateUser(user.id, { role: event.target.value as Role })
                         }
                       >
-                        {["Employee", "Mona", "Rashid", "Dr. Masjid", "Edlyn", "Aileen", "Admin"].map((role) => (
+                        {["Employee", "Mona", "Rashid", "Dr. Majed", "Edlyn", "Aileen", "Admin"].map((role) => (
                           <option key={role}>{role}</option>
                         ))}
                       </SelectInput>
@@ -2665,6 +2746,50 @@ function AdminPanel({
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal className="h-5 w-5 text-slate-700" />
+            <h3 className="text-base font-bold text-slate-950">Project dropdown</h3>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            These options appear on the procurement request form.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {state.projectOptions.map((projectName) => (
+              <span
+                className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700"
+                key={projectName}
+              >
+                {projectName}
+                <button
+                  aria-label={`Remove ${projectName}`}
+                  className="rounded text-slate-400 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={state.projectOptions.length <= 1}
+                  onClick={() => removeProjectOption(projectName)}
+                  type="button"
+                >
+                  <XCircle className="h-4 w-4" />
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <TextInput
+              placeholder="Add project name"
+              value={newProjectName}
+              onChange={(event) => setNewProjectName(event.target.value)}
+            />
+            <IconButton
+              disabled={!newProjectName.trim()}
+              icon={<Plus className="h-4 w-4" />}
+              onClick={addProjectOption}
+              variant="secondary"
+            >
+              Add project
+            </IconButton>
           </div>
         </div>
 
@@ -2862,7 +2987,7 @@ function EmployeeRequestStatus({
             <StatusBadge status={request.status} />
           </div>
           <p className="mt-2 text-sm text-slate-500">
-            {request.itemName} for {request.employeeName} in {request.department}
+            {request.itemName} for {request.employeeName} in {request.department} / {request.project}
           </p>
         </div>
         <div className="grid gap-1 text-sm text-slate-600 lg:text-right">
@@ -2879,6 +3004,7 @@ function EmployeeRequestStatus({
 
       <div className="mt-5 grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Detail label="Items" value={String(getRequestItemCount(request))} />
+        <Detail label="Project" value={request.project} />
         <Detail label="Invoice" value={request.invoice?.invoiceNumber ?? "Pending"} />
         <Detail label="Required by" value={formatDate(request.requiredByDate)} />
         <Detail label="Pending action" value={getPendingAction(request)} />
@@ -2969,6 +3095,7 @@ function EmployeePortal({
 
       <RequestForm
         currentUser={currentUser}
+        projectOptions={state.projectOptions}
         onSubmit={(draft) => {
           const nextId = nextRequestId(state.requests);
           setState((current) =>
@@ -3470,6 +3597,7 @@ export default function Home() {
         {view === "new-request" ? (
           <RequestForm
             currentUser={currentUser}
+            projectOptions={state.projectOptions}
             onSubmit={(draft) => {
               const nextId = nextRequestId(state.requests);
               setState((current) =>

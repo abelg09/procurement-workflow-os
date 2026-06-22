@@ -2,7 +2,7 @@ export const ROLES = [
   "Employee",
   "Mona",
   "Rashid",
-  "Dr. Masjid",
+  "Dr. Majed",
   "Edlyn",
   "Aileen",
   "Admin",
@@ -17,7 +17,7 @@ export const STATUSES = [
   "Rashid Review",
   "Rashid Auto Approved",
   "Rashid Declined",
-  "Dr. Masjid Review",
+  "Dr. Majed Review",
   "Edlyn Confirmation",
   "Edlyn Clarification Requested",
   "Purchase in Progress",
@@ -36,7 +36,7 @@ export type RequestStatus = (typeof STATUSES)[number];
 export type WorkflowStage =
   | "mona"
   | "rashid"
-  | "dr-masjid"
+  | "dr-majed"
   | "edlyn"
   | "aileen";
 
@@ -50,9 +50,9 @@ export const WORKFLOW_STAGES: Array<{
   { id: 2, key: "rashid", label: "Rashid Approval", ownerRole: "Rashid" },
   {
     id: 3,
-    key: "dr-masjid",
-    label: "Dr. Masjid Review",
-    ownerRole: "Dr. Masjid",
+    key: "dr-majed",
+    label: "Dr. Majed Review",
+    ownerRole: "Dr. Majed",
   },
   {
     id: 4,
@@ -93,6 +93,8 @@ export const DEPARTMENTS = [
 ] as const;
 
 export type Department = (typeof DEPARTMENTS)[number];
+
+export const DEFAULT_PROJECT_OPTIONS = ["Beta", "Alpha", "Sira"] as const;
 
 export const CURRENCIES = ["AED", "USD", "EUR", "GBP", "SAR", "INR", "Other"] as const;
 export type Currency = (typeof CURRENCIES)[number];
@@ -178,6 +180,7 @@ export type ProcurementRequest = {
   id: string;
   employeeName: string;
   department: string;
+  project: string;
   itemName: string;
   itemDescription: string;
   quantity: number;
@@ -258,6 +261,7 @@ export type ProcurementState = {
   auditLogs: AuditLog[];
   notifications: NotificationRecord[];
   chatbotMessages: ChatbotMessage[];
+  projectOptions: string[];
 };
 
 export type ProcurementRequestDraft = Omit<
@@ -374,7 +378,9 @@ export function getRequestItemCount(request: ProcurementRequest) {
   return getRequestLineItems(request).length;
 }
 
-export function normalizeRequestFinancials(request: ProcurementRequest): ProcurementRequest {
+export function normalizeRequestFinancials(
+  request: ProcurementRequest & { project?: string },
+): ProcurementRequest {
   const lineItems = getRequestLineItems(request);
   const estimatedAmountAed = roundMoney(
     lineItems.reduce((total, item) => total + item.aedTotal, 0),
@@ -394,6 +400,7 @@ export function normalizeRequestFinancials(request: ProcurementRequest): Procure
 
   return {
     ...request,
+    project: request.project || DEFAULT_PROJECT_OPTIONS[0],
     lineItems,
     estimatedAmountAed,
     logistics,
@@ -435,10 +442,10 @@ export const seedUsers: UserProfile[] = [
     active: true,
   },
   {
-    id: "user-dr-masjid",
-    name: "Dr. Masjid",
-    email: "dr.masjid@example.com",
-    role: "Dr. Masjid",
+    id: "user-dr-majed",
+    name: "Dr. Majed",
+    email: "dr.majed@example.com",
+    role: "Dr. Majed",
     department: "Executive Office",
     active: true,
   },
@@ -478,7 +485,7 @@ const roleUser = (role: Role, users: UserProfile[] = seedUsers) => {
 
 const mona = roleUser("Mona");
 const rashid = roleUser("Rashid");
-const drMasjid = roleUser("Dr. Masjid");
+const drMajed = roleUser("Dr. Majed");
 const edlyn = roleUser("Edlyn");
 const aileen = roleUser("Aileen");
 const employee = roleUser("Employee");
@@ -488,6 +495,7 @@ export const seedRequests: ProcurementRequest[] = ([
     id: "PR-101",
     employeeName: "Abel Gonsalves",
     department: "Operations",
+    project: "Beta",
     itemName: "Ergonomic office chairs",
     itemDescription: "Four mesh-back ergonomic chairs for the operations room.",
     quantity: 4,
@@ -540,6 +548,7 @@ export const seedRequests: ProcurementRequest[] = ([
     id: "PR-102",
     employeeName: "Abel Gonsalves",
     department: "Operations",
+    project: "Alpha",
     itemName: "Barcode scanner",
     itemDescription: "Wireless scanner for inventory receiving counter.",
     quantity: 2,
@@ -558,9 +567,9 @@ export const seedRequests: ProcurementRequest[] = ([
       bankDetails: "Emirates NBD, AE070331234567890123456",
       businessLocation: "Al Quoz, Dubai",
     },
-    status: "Dr. Masjid Review",
-    stage: "dr-masjid",
-    assigneeId: drMasjid.id,
+    status: "Dr. Majed Review",
+    stage: "dr-majed",
+    assigneeId: drMajed.id,
     submittedById: employee.id,
     previousResponsibleId: rashid.id,
     createdAt: "2026-06-10T06:45:00.000Z",
@@ -570,6 +579,7 @@ export const seedRequests: ProcurementRequest[] = ([
     id: "PR-103",
     employeeName: "Bilal G",
     department: "Engineering",
+    project: "Sira",
     itemName: "Laptop docking stations",
     itemDescription: "USB-C docks for hybrid desks.",
     quantity: 3,
@@ -599,6 +609,7 @@ export const seedRequests: ProcurementRequest[] = ([
     id: "PR-104",
     employeeName: "Mariam Noor",
     department: "Operations",
+    project: "Beta",
     itemName: "Pantry water filters",
     itemDescription: "Replacement cartridges and fittings for pantry filtration.",
     quantity: 6,
@@ -619,7 +630,7 @@ export const seedRequests: ProcurementRequest[] = ([
     stage: "edlyn",
     assigneeId: edlyn.id,
     submittedById: employee.id,
-    previousResponsibleId: drMasjid.id,
+    previousResponsibleId: drMajed.id,
     createdAt: "2026-06-12T05:30:00.000Z",
     updatedAt: "2026-06-14T11:10:00.000Z",
   },
@@ -627,6 +638,7 @@ export const seedRequests: ProcurementRequest[] = ([
     id: "PR-105",
     employeeName: "Fatima Ali",
     department: "Finance",
+    project: "Alpha",
     itemName: "Cheque printer toner",
     itemDescription: "MICR toner cartridge for finance printer.",
     quantity: 1,
@@ -665,6 +677,7 @@ export const seedRequests: ProcurementRequest[] = ([
     id: "PR-106",
     employeeName: "Abel Gonsalves",
     department: "Operations",
+    project: "Sira",
     itemName: "Whiteboard markers",
     itemDescription: "Assorted marker packs for meeting rooms.",
     quantity: 10,
@@ -692,6 +705,7 @@ export const seedRequests: ProcurementRequest[] = ([
     id: "PR-107",
     employeeName: "Hassan Saeed",
     department: "Marketing",
+    project: "Beta",
     itemName: "Event display stand",
     itemDescription: "Portable display frame for conference booth.",
     quantity: 1,
@@ -749,8 +763,8 @@ export const seedAuditLogs: AuditLog[] = [
     action: "Rashid approved request",
     dateTime: "2026-06-12T09:20:00.000Z",
     previousStatus: "Rashid Review",
-    newStatus: "Dr. Masjid Review",
-    assignedPerson: "Dr. Masjid",
+    newStatus: "Dr. Majed Review",
+    assignedPerson: "Dr. Majed",
   },
   {
     id: "audit-105-1",
@@ -791,10 +805,10 @@ export const seedNotifications: NotificationRecord[] = [
   },
   {
     id: "notice-2",
-    userId: drMasjid.id,
+    userId: drMajed.id,
     requestId: "PR-102",
     title: "Review pending",
-    body: "PR-102 is waiting for Dr. Masjid review.",
+    body: "PR-102 is waiting for Dr. Majed review.",
     type: "assigned",
     read: false,
     createdAt: "2026-06-12T09:20:00.000Z",
@@ -817,6 +831,7 @@ export const initialState: ProcurementState = {
   auditLogs: seedAuditLogs,
   notifications: seedNotifications,
   chatbotMessages: [],
+  projectOptions: [...DEFAULT_PROJECT_OPTIONS],
 };
 
 export function getUserById(users: UserProfile[], id: string) {
@@ -851,7 +866,7 @@ export function isApprovalStatus(status: RequestStatus) {
     status === "Mona Review" ||
     status === "Rashid Review" ||
     status === "Rashid Auto Approved" ||
-    status === "Dr. Masjid Review"
+    status === "Dr. Majed Review"
   );
 }
 
@@ -876,10 +891,10 @@ export function getPendingAction(request: ProcurementRequest) {
       return "Mona to approve or request clarification";
     case "Rashid Review":
       return "Rashid to approve or decline";
-    case "Dr. Masjid Review":
-      return "Dr. Masjid to review and forward to Edlyn";
+    case "Dr. Majed Review":
+      return "Dr. Majed to review and forward to Edlyn";
     case "Rashid Auto Approved":
-      return "Dr. Masjid to review and forward to Edlyn";
+      return "Dr. Majed to review and forward to Edlyn";
     case "Edlyn Confirmation":
       return "Edlyn to confirm item details";
     case "Edlyn Clarification Requested":
@@ -1070,20 +1085,22 @@ export function transitionRequest(
     editable.assigneeId === actor.id;
   const hasText = (value?: string) => Boolean(value?.trim());
 
-  const assignTo = (role: Role) => {
+  const assignTo = (role: Role, options: { notify?: boolean } = {}) => {
     const assignee = requireRoleUser(state.users, role);
     editable.assigneeId = assignee.id;
-    addNotification(
-      nextState.notifications,
-      {
-        userId: assignee.id,
-        requestId,
-        title: "Task assigned",
-        body: `${editable.id} is now assigned to ${assignee.name}.`,
-        type: "assigned",
-      },
-      dateTime,
-    );
+    if (options.notify !== false) {
+      addNotification(
+        nextState.notifications,
+        {
+          userId: assignee.id,
+          requestId,
+          title: "Task assigned",
+          body: `${editable.id} is now assigned to ${assignee.name}.`,
+          type: "assigned",
+        },
+        dateTime,
+      );
+    }
     return assignee;
   };
 
@@ -1095,9 +1112,9 @@ export function transitionRequest(
       comment = workflowAction.comment;
       const totalAed = getRequestTotalAed(editable);
       if (totalAed < 300) {
-        const assignee = assignTo("Dr. Masjid");
+        const assignee = assignTo("Dr. Majed", { notify: false });
         editable.status = "Rashid Auto Approved";
-        editable.stage = "dr-masjid";
+        editable.stage = "dr-majed";
         editable.previousResponsibleId = actor.id;
         actionLabel = "Mona approved request; Rashid auto approved below AED 300";
         comment =
@@ -1109,13 +1126,13 @@ export function transitionRequest(
             userId: assignee.id,
             requestId,
             title: "Auto-approved request ready",
-            body: `${editable.id} was auto approved at Rashid stage and is ready for Dr. Masjid review.`,
+            body: `${editable.id} was auto approved at Rashid stage and is ready for Dr. Majed review.`,
             type: "approved",
           },
           dateTime,
         );
       } else {
-        const assignee = assignTo("Rashid");
+        const assignee = assignTo("Rashid", { notify: false });
         editable.status = "Rashid Review";
         editable.stage = "rashid";
         editable.previousResponsibleId = actor.id;
@@ -1160,9 +1177,9 @@ export function transitionRequest(
       if (!canAct(["Rashid Review"], "Rashid")) {
         return state;
       }
-      const assignee = assignTo("Dr. Masjid");
-      editable.status = "Dr. Masjid Review";
-      editable.stage = "dr-masjid";
+      const assignee = assignTo("Dr. Majed", { notify: false });
+      editable.status = "Dr. Majed Review";
+      editable.stage = "dr-majed";
       editable.previousResponsibleId = actor.id;
       actionLabel = "Rashid approved request";
       comment = workflowAction.comment;
@@ -1172,7 +1189,7 @@ export function transitionRequest(
           userId: assignee.id,
           requestId,
           title: "Review required",
-          body: `${editable.id} is ready for Dr. Masjid review.`,
+          body: `${editable.id} is ready for Dr. Majed review.`,
           type: "assigned",
         },
         dateTime,
@@ -1183,7 +1200,7 @@ export function transitionRequest(
       if (!canAct(["Rashid Review"], "Rashid") || !hasText(workflowAction.declineReason)) {
         return state;
       }
-      const assignee = assignTo("Mona");
+      const assignee = assignTo("Mona", { notify: false });
       editable.status = "Rashid Declined";
       editable.stage = "rashid";
       editable.previousResponsibleId = actor.id;
@@ -1203,14 +1220,14 @@ export function transitionRequest(
       break;
     }
     case "dr-review": {
-      if (!canAct(["Dr. Masjid Review", "Rashid Auto Approved"], "Dr. Masjid")) {
+      if (!canAct(["Dr. Majed Review", "Rashid Auto Approved"], "Dr. Majed")) {
         return state;
       }
-      const assignee = assignTo("Edlyn");
+      const assignee = assignTo("Edlyn", { notify: false });
       editable.status = "Edlyn Confirmation";
       editable.stage = "edlyn";
       editable.previousResponsibleId = actor.id;
-      actionLabel = "Dr. Masjid completed review";
+      actionLabel = "Dr. Majed completed review";
       comment = workflowAction.comment;
       addNotification(
         nextState.notifications,
@@ -1218,7 +1235,7 @@ export function transitionRequest(
           userId: assignee.id,
           requestId,
           title: "Purchase task assigned",
-          body: `${editable.id} has been reviewed by Dr. Masjid and is ready for item confirmation.`,
+          body: `${editable.id} has been reviewed by Dr. Majed and is ready for item confirmation.`,
           type: "assigned",
         },
         dateTime,
@@ -1274,7 +1291,7 @@ export function transitionRequest(
       ) {
         return state;
       }
-      const assignee = assignTo("Edlyn");
+      const assignee = assignTo("Edlyn", { notify: false });
       editable.status = editable.edlynClarificationReturnStatus ?? "Edlyn Confirmation";
       editable.stage = "edlyn";
       editable.previousResponsibleId = actor.id;
@@ -1304,7 +1321,7 @@ export function transitionRequest(
       ) {
         return state;
       }
-      const assignee = assignTo("Aileen");
+      const assignee = assignTo("Aileen", { notify: false });
       editable.status = "Aileen Finance Review";
       editable.stage = "aileen";
       editable.previousResponsibleId = actor.id;
@@ -1329,7 +1346,7 @@ export function transitionRequest(
       if (!canAct(["Aileen Finance Review"], "Aileen") || !editable.invoice) {
         return state;
       }
-      const assignee = assignTo("Edlyn");
+      const assignee = assignTo("Edlyn", { notify: false });
       editable.status = "Invoice Cleared";
       editable.stage = "edlyn";
       editable.invoice = editable.invoice
@@ -1416,7 +1433,7 @@ export function transitionRequest(
       if (!canAct(["Order Confirmed", "Delivery Tracking"], "Edlyn")) {
         return state;
       }
-      const assignee = assignTo("Aileen");
+      const assignee = assignTo("Aileen", { notify: false });
       editable.status = "Item Received";
       editable.stage = "aileen";
       editable.itemReceivedAt = dateTime;
@@ -1600,7 +1617,7 @@ export function getMetrics(requests: ProcurementRequest[]) {
 export function createDailyReminderNotifications(state: ProcurementState) {
   const dateTime = nowIso();
   const pending = state.requests.filter((request) =>
-    ["Rashid Review", "Dr. Masjid Review"].includes(request.status),
+    ["Rashid Review", "Dr. Majed Review"].includes(request.status),
   );
   const nextNotifications = [...state.notifications];
 
@@ -1611,11 +1628,11 @@ export function createDailyReminderNotifications(state: ProcurementState) {
         userId: request.assigneeId,
         requestId: request.id,
         title:
-          request.status === "Dr. Masjid Review"
+          request.status === "Dr. Majed Review"
             ? "Daily review reminder"
             : "Daily approval reminder",
         body:
-          request.status === "Dr. Masjid Review"
+          request.status === "Dr. Majed Review"
             ? `${request.id} is still pending your review.`
             : `${request.id} is still pending your approval.`,
         type: "reminder",
@@ -1646,7 +1663,7 @@ export function answerProcurementQuestion(
     const logisticsText = request.logistics?.deliveryStatus
       ? ` Delivery: ${request.logistics.deliveryStatus}.`
       : "";
-    return `${request.id}: ${request.itemName} is ${request.status}, stage ${WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label}, assigned to ${getAssigneeName(request, state.users)}.${priceText}${logisticsText}`;
+    return `${request.id}: ${request.itemName} for ${request.project} is ${request.status}, stage ${WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label}, assigned to ${getAssigneeName(request, state.users)}.${priceText}${logisticsText}`;
   };
 
   if (!normalized) {
@@ -1667,11 +1684,15 @@ export function answerProcurementQuestion(
       : "No requests are currently pending with Rashid.";
   }
 
-  if (normalized.includes("pending with dr") || normalized.includes("pending with dr. masjid")) {
-    const rows = state.requests.filter((request) => request.status === "Dr. Masjid Review");
+  if (
+    normalized.includes("pending with dr") ||
+    normalized.includes("pending with dr. masjid") ||
+    normalized.includes("pending with dr. majed")
+  ) {
+    const rows = state.requests.filter((request) => request.status === "Dr. Majed Review");
     return rows.length
       ? rows.map(describe).join("\n")
-      : "No requests are currently pending with Dr. Masjid.";
+      : "No requests are currently pending with Dr. Majed.";
   }
 
   if (normalized.includes("invoice") && normalized.includes("aileen")) {
@@ -1725,7 +1746,7 @@ export function answerProcurementQuestion(
       : "I cannot see any procurement requests for your current role.";
   }
 
-  return "I can answer questions such as: status of my request, pending with Rashid, pending with Dr. Masjid, invoices pending with Aileen, stuck more than 2 days, order placed, request PR-102 stage, or completed requests this month.";
+  return "I can answer questions such as: status of my request, pending with Rashid, pending with Dr. Majed, invoices pending with Aileen, stuck more than 2 days, order placed, request PR-102 stage, or completed requests this month.";
 }
 
 export function serializeState(state: ProcurementState) {
@@ -1733,69 +1754,168 @@ export function serializeState(state: ProcurementState) {
 }
 
 export function parseState(serialized: string | null) {
-  const migrateNames = (state: ProcurementState): ProcurementState => {
-    const drMasjidUser = state.users.find((user) => user.role === "Dr. Masjid");
+  const migrateText = (value?: string) =>
+    (value ?? "")
+      .replaceAll("Layla Hassan", "Abel Gonsalves")
+      .replaceAll("Omar Farouk", "Bilal G")
+      .replaceAll("Dr. Masjid", "Dr. Majed")
+      .replaceAll("dr.masjid", "dr.majed")
+      .replaceAll("Dr. Majed approval", "Dr. Majed review");
+  const migrateUserId = (userId?: string) =>
+    userId === "user-dr-masjid" ? "user-dr-majed" : (userId ?? "");
+  const migrateRole = (role: unknown): Role => {
+    const roleText = migrateText(String(role));
+    return ROLES.includes(roleText as Role) ? (roleText as Role) : "Employee";
+  };
+  const migrateStatus = (status: unknown): RequestStatus => {
+    const statusText = migrateText(String(status));
+    if (statusText === "Dr. Majed Declined") {
+      return "Dr. Majed Review";
+    }
+    return STATUSES.includes(statusText as RequestStatus)
+      ? (statusText as RequestStatus)
+      : "Mona Review";
+  };
+  const migrateStage = (stage: unknown): WorkflowStage => {
+    const stageText = stage === "dr-masjid" ? "dr-majed" : String(stage);
+    return WORKFLOW_STAGES.some((candidate) => candidate.key === stageText)
+      ? (stageText as WorkflowStage)
+      : "mona";
+  };
+  const migrateDepartment = (department: string) =>
+    department === "IT"
+      ? "Engineering"
+      : department === "Facilities"
+        ? "Operations"
+        : department;
+  const normalizeProjectOptions = (options?: string[]) => {
+    const source = Array.isArray(options) ? options : [...DEFAULT_PROJECT_OPTIONS];
+    const deduped = Array.from(
+      new Set(source.map((option) => String(option).trim()).filter(Boolean)),
+    );
+    return deduped.length > 0 ? deduped : [...DEFAULT_PROJECT_OPTIONS];
+  };
+
+  const migrateState = (
+    state: ProcurementState & { projectOptions?: string[] },
+  ): ProcurementState => {
+    const migratedUsers = state.users.map((user) => ({
+      ...user,
+      id: migrateUserId(user.id),
+      name: migrateText(user.name),
+      email: migrateText(user.email),
+      role: migrateRole(user.role),
+    }));
+    const drMajedUser = migratedUsers.find((user) => user.role === "Dr. Majed");
+    const projectOptions = normalizeProjectOptions(state.projectOptions);
+    const migratedNotifications = state.notifications.map((notification) => {
+      const migratedBody = migrateText(notification.body);
+
+      return {
+        ...notification,
+        userId: migrateUserId(notification.userId),
+        title:
+          notification.title === "Approval pending" &&
+          migratedBody.includes("Dr. Majed")
+            ? "Review pending"
+            : migrateText(notification.title),
+        body: migratedBody,
+      };
+    });
+    const notificationKey = (notification: NotificationRecord) =>
+      `${notification.userId}|${notification.requestId}|${notification.createdAt}`;
+    const specificNotificationKeys = new Set(
+      migratedNotifications
+        .filter((notification) => notification.title !== "Task assigned")
+        .map(notificationKey),
+    );
+    const notifications = migratedNotifications.filter(
+      (notification) =>
+        notification.title !== "Task assigned" ||
+        !specificNotificationKeys.has(notificationKey(notification)),
+    );
 
     return {
       ...state,
-      users: state.users.map((user) =>
-        user.name === "Layla Hassan" ? { ...user, name: "Abel Gonsalves" } : user,
-      ),
+      projectOptions,
+      users: migratedUsers,
       requests: state.requests.map((request) => {
-        const deprecatedDrDecline = String(request.status) === "Dr. Masjid Declined";
+        const statusText = migrateText(String(request.status));
+        const deprecatedDrDecline = statusText === "Dr. Majed Declined";
+        const migratedStatus = deprecatedDrDecline
+          ? "Dr. Majed Review"
+          : migrateStatus(request.status);
 
         return normalizeRequestFinancials({
           ...request,
-          department:
-            request.department === "IT"
-              ? "Engineering"
-              : request.department === "Facilities"
-                ? "Operations"
-                : request.department,
-          employeeName:
-            request.employeeName === "Layla Hassan"
-              ? "Abel Gonsalves"
-              : request.employeeName === "Omar Farouk"
-                ? "Bilal G"
-                : request.employeeName,
-          status: deprecatedDrDecline ? "Dr. Masjid Review" : request.status,
-          stage: deprecatedDrDecline ? "dr-masjid" : request.stage,
+          project: request.project || projectOptions[0] || DEFAULT_PROJECT_OPTIONS[0],
+          department: migrateDepartment(request.department),
+          employeeName: migrateText(request.employeeName),
+          itemDescription: migrateText(request.itemDescription),
+          reasonForPurchase: migrateText(request.reasonForPurchase),
+          vendorName: migrateText(request.vendorName),
+          status: migratedStatus,
+          stage: deprecatedDrDecline ? "dr-majed" : migrateStage(request.stage),
           assigneeId:
-            deprecatedDrDecline && drMasjidUser
-              ? drMasjidUser.id
-              : request.assigneeId,
+            deprecatedDrDecline && drMajedUser
+              ? drMajedUser.id
+              : migrateUserId(request.assigneeId),
+          submittedById: migrateUserId(request.submittedById),
+          previousResponsibleId: request.previousResponsibleId
+            ? migrateUserId(request.previousResponsibleId)
+            : undefined,
+          lineItems: getRequestLineItems(request).map((item) => ({
+            ...item,
+            itemDescription: migrateText(item.itemDescription),
+            vendorName: migrateText(item.vendorName),
+          })),
         });
       }),
       auditLogs: state.auditLogs.map((log) => ({
         ...log,
-        userName: log.userName === "Layla Hassan" ? "Abel Gonsalves" : log.userName,
+        userId: migrateUserId(log.userId),
+        userName: migrateText(log.userName),
+        action: migrateText(log.action),
+        previousStatus: migrateStatus(log.previousStatus),
+        newStatus: migrateStatus(log.newStatus),
+        comment: log.comment ? migrateText(log.comment) : log.comment,
+        declineReason: log.declineReason
+          ? migrateText(log.declineReason)
+          : log.declineReason,
+        uploadedInvoiceReference: log.uploadedInvoiceReference
+          ? migrateText(log.uploadedInvoiceReference)
+          : log.uploadedInvoiceReference,
+        assignedPerson: log.assignedPerson
+          ? migrateText(log.assignedPerson)
+          : log.assignedPerson,
       })),
-      notifications: state.notifications.map((notification) => ({
-        ...notification,
-        title:
-          notification.title === "Approval pending" &&
-          notification.body.includes("Dr. Masjid")
-            ? "Review pending"
-            : notification.title,
-        body: notification.body
-          .replaceAll("Layla Hassan", "Abel Gonsalves")
-          .replaceAll("Omar Farouk", "Bilal G")
-          .replaceAll("Dr. Masjid approval", "Dr. Masjid review"),
+      notifications,
+      chatbotMessages: state.chatbotMessages.map((message) => ({
+        ...message,
+        userId: migrateUserId(message.userId),
+        content: migrateText(message.content),
       })),
     };
   };
 
   if (!serialized) {
-    return migrateNames(initialState);
+    return migrateState(initialState);
   }
 
   try {
-    const parsed = JSON.parse(serialized) as ProcurementState;
+    const parsed = JSON.parse(serialized) as ProcurementState & { projectOptions?: string[] };
     if (!Array.isArray(parsed.requests) || !Array.isArray(parsed.users)) {
-      return migrateNames(initialState);
+      return migrateState(initialState);
     }
-    return migrateNames(parsed);
+    return migrateState({
+      ...parsed,
+      auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
+      notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
+      chatbotMessages: Array.isArray(parsed.chatbotMessages)
+        ? parsed.chatbotMessages
+        : [],
+    });
   } catch {
-    return migrateNames(initialState);
+    return migrateState(initialState);
   }
 }
