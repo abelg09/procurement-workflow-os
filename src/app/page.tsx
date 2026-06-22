@@ -31,7 +31,7 @@ import {
   UserCog,
   XCircle,
 } from "lucide-react";
-import { FormEvent, ReactNode, useEffect, useId, useMemo, useState } from "react";
+import { FormEvent, MouseEventHandler, ReactNode, useEffect, useId, useMemo, useState } from "react";
 import {
   AuditLog,
   AttachmentReference,
@@ -470,7 +470,7 @@ function IconButton({
   icon: ReactNode;
   variant?: "primary" | "secondary" | "danger" | "ghost" | "success";
   type?: "button" | "submit";
-  onClick?: () => void;
+  onClick?: MouseEventHandler<HTMLButtonElement>;
   disabled?: boolean;
   title?: string;
 }) {
@@ -2358,11 +2358,13 @@ function AuditTrail({ logs }: { logs: AuditLog[] }) {
 function NotificationsCenter({
   currentUser,
   state,
+  onOpenRequest,
   onRead,
   onRunReminder,
 }: {
   currentUser: UserProfile;
   state: ProcurementState;
+  onOpenRequest: (requestId: string, notificationId: string) => void;
   onRead: (id: string) => void;
   onRunReminder: () => void;
 }) {
@@ -2400,6 +2402,7 @@ function NotificationsCenter({
               key={notification.id}
               notification={notification}
               users={state.users}
+              onOpenRequest={onOpenRequest}
               onRead={onRead}
             />
           ))
@@ -2412,18 +2415,33 @@ function NotificationsCenter({
 function NotificationItem({
   notification,
   users,
+  onOpenRequest,
   onRead,
 }: {
   notification: NotificationRecord;
   users: UserProfile[];
+  onOpenRequest: (requestId: string, notificationId: string) => void;
   onRead: (id: string) => void;
 }) {
+  const openNotification = () =>
+    onOpenRequest(notification.requestId, notification.id);
+
   return (
     <div
+      aria-label={`Open ${notification.requestId}`}
       className={classNames(
-        "rounded-xl border p-4",
+        "rounded-xl border p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/70 focus:outline-none focus:ring-2 focus:ring-blue-500",
         notification.read ? "border-slate-200 bg-white" : "border-blue-200 bg-blue-50",
       )}
+      onClick={openNotification}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openNotification();
+        }
+      }}
+      role="button"
+      tabIndex={0}
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -2438,7 +2456,10 @@ function NotificationItem({
         {!notification.read ? (
           <IconButton
             icon={<Check className="h-4 w-4" />}
-            onClick={() => onRead(notification.id)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRead(notification.id);
+            }}
             variant="secondary"
           >
             Mark read
@@ -3332,6 +3353,7 @@ export default function Home() {
             label: "Employee portal",
             icon: <ClipboardList className="h-4 w-4" />,
           },
+          { id: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" /> },
         ]
       : [
           { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" /> },
@@ -3621,6 +3643,11 @@ export default function Home() {
         {view === "notifications" ? (
           <NotificationsCenter
             currentUser={currentUser}
+            onOpenRequest={(requestId, notificationId) => {
+              setSelectedRequestId(requestId);
+              setState((current) => markNotificationRead(current, notificationId));
+              setView("dashboard");
+            }}
             onRead={(id) => setState((current) => markNotificationRead(current, id))}
             onRunReminder={() =>
               setState((current) => createDailyReminderNotifications(current))
