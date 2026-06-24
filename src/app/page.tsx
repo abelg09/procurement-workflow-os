@@ -60,6 +60,7 @@ import {
   getAssigneeName,
   getMetrics,
   getPendingAction,
+  getPersonalRequests,
   getRequestItemCount,
   getRequestLineItems,
   getRequestTotalAed,
@@ -116,7 +117,7 @@ const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || "")
 const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
 const LIVE_STATE_ROW_ID = "default";
 
-type View = "dashboard" | "new-request" | "notifications" | "admin";
+type View = "dashboard" | "company-dashboard" | "new-request" | "notifications" | "admin";
 type AuthStatus = "checking" | "signed-out" | "signed-in" | "blocked" | "missing-config" | "local-dev";
 type LiveSyncStatus = "idle" | "loading" | "ready" | "error";
 
@@ -888,7 +889,7 @@ function RequestForm({
   const availableProjects =
     projectOptions.length > 0 ? projectOptions : [...DEFAULT_PROJECT_OPTIONS];
   const [employeeName, setEmployeeName] = useState(
-    currentUser.role === "Employee" ? currentUser.name : "",
+    currentUser.name === "Admin" ? "" : currentUser.name,
   );
   const [department, setDepartment] = useState(
     DEPARTMENTS.includes(currentUser.department as (typeof DEPARTMENTS)[number])
@@ -2587,10 +2588,9 @@ function NotificationsCenter({
   onRead: (id: string) => void;
   onRunReminder: () => void;
 }) {
-  const notifications =
-    currentUser.role === "Admin"
-      ? state.notifications
-      : state.notifications.filter((notification) => notification.userId === currentUser.id);
+  const notifications = state.notifications.filter(
+    (notification) => notification.userId === currentUser.id,
+  );
 
   return (
     <section className={classNames(panelClass, "overflow-hidden")}>
@@ -3322,7 +3322,7 @@ function EmployeePortal({
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
 }) {
   const employeeRequests = useMemo(
-    () => getVisibleRequests(state, currentUser),
+    () => getPersonalRequests(state, currentUser),
     [state, currentUser],
   );
   const selectedRequest =
@@ -3334,13 +3334,13 @@ function EmployeePortal({
       <section className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="min-w-0">
-            <h2 className="text-xl font-bold text-slate-950">Employee procurement portal</h2>
+            <h2 className="text-xl font-bold text-slate-950">My procurement portal</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Submit a new request and track your procurement status in one place.
+              Submit a new request and track only your own procurement status.
             </p>
           </div>
           <div className="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-            {currentUser.name} - Employee
+            {currentUser.name} - {currentUser.role}
           </div>
         </div>
       </section>
@@ -3400,7 +3400,7 @@ function Dashboard({
     [state, currentUser],
   );
   const selectedRequest =
-    state.requests.find((request) => request.id === selectedRequestId) ??
+    visibleRequests.find((request) => request.id === selectedRequestId) ??
     visibleRequests[0];
   const metrics = getMetrics(currentUser.role === "Admin" ? state.requests : visibleRequests);
   const blockedTasks = getUserBlockedTasks(state.requests, currentUser);
@@ -3750,6 +3750,8 @@ export default function Home() {
     state.users.find((user) => user.id === currentUserId) ??
     state.users[0];
   const isEmployee = currentUser.role === "Employee";
+  const usesPersonalDashboard =
+    isEmployee || (authStatus === "signed-in" && currentUser.role === "Admin");
   const canSwitchRoles = authStatus === "local-dev";
   const isSignedIn = authStatus === "signed-in" || authStatus === "local-dev";
   const canUseLocalWorkspace = !isGithubPagesBuild && authStatus === "missing-config";
@@ -3809,7 +3811,24 @@ export default function Home() {
           { id: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" /> },
         ]
       : [
-          { id: "dashboard", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" /> },
+          {
+            id: "dashboard",
+            label: usesPersonalDashboard ? "My requests" : "Dashboard",
+            icon: usesPersonalDashboard ? (
+              <ClipboardList className="h-4 w-4" />
+            ) : (
+              <LayoutDashboard className="h-4 w-4" />
+            ),
+          },
+          ...(currentUser.role === "Admin"
+            ? [
+                {
+                  id: "company-dashboard" as View,
+                  label: "Company dashboard",
+                  icon: <LayoutDashboard className="h-4 w-4" />,
+                },
+              ]
+            : []),
           { id: "new-request", label: "New request", icon: <Plus className="h-4 w-4" /> },
           { id: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" /> },
           {
@@ -3821,15 +3840,19 @@ export default function Home() {
         ];
   const visibleNavItems = navItems.filter((item) => !item.hidden);
   const viewCopy: Record<View, { title: string; subtitle: string }> = {
-    dashboard: isEmployee
+    dashboard: usesPersonalDashboard
       ? {
-          title: "Employee portal",
-          subtitle: "Submit requests and track procurement status.",
+          title: "My procurement",
+          subtitle: "Submit requests and track only your own procurement status.",
         }
       : {
           title: "Dashboard",
           subtitle: "Procurement performance, requests, approvals, and closures.",
         },
+    "company-dashboard": {
+      title: "Company dashboard",
+      subtitle: "Company-wide procurement performance, approvals, and closures.",
+    },
     "new-request": {
       title: "New procurement request",
       subtitle: "Create a request for Mona review.",
@@ -3844,7 +3867,8 @@ export default function Home() {
     },
   };
   const activeView =
-    currentUser.role === "Employee" && (view === "new-request" || view === "admin")
+    currentUser.role === "Employee" &&
+    (view === "new-request" || view === "admin" || view === "company-dashboard")
       ? "dashboard"
       : view;
   const currentViewCopy = viewCopy[activeView];
@@ -4133,7 +4157,7 @@ export default function Home() {
             </div>
           ) : null}
           {activeView === "dashboard" ? (
-            isEmployee ? (
+            usesPersonalDashboard ? (
               <EmployeePortal
                 currentUser={currentUser}
                 selectedRequestId={selectedRequestId}
@@ -4150,6 +4174,16 @@ export default function Home() {
                 state={state}
               />
             )
+          ) : null}
+
+          {activeView === "company-dashboard" && currentUser.role === "Admin" ? (
+            <Dashboard
+              currentUser={currentUser}
+              selectedRequestId={selectedRequestId}
+              setSelectedRequestId={setSelectedRequestId}
+              setState={setState}
+              state={state}
+            />
           ) : null}
 
         {activeView === "new-request" ? (

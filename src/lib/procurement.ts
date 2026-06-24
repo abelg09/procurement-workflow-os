@@ -1542,10 +1542,7 @@ export function getVisibleRequests(state: ProcurementState, user: UserProfile) {
   }
 
   if (user.role === "Employee") {
-    return state.requests.filter(
-      (request) =>
-        request.submittedById === user.id || request.employeeName === user.name,
-    );
+    return getPersonalRequests(state, user);
   }
 
   return state.requests.filter(
@@ -1553,6 +1550,16 @@ export function getVisibleRequests(state: ProcurementState, user: UserProfile) {
       request.assigneeId === user.id ||
       request.submittedById === user.id ||
       request.stage === WORKFLOW_STAGES.find((stage) => stage.ownerRole === user.role)?.key,
+  );
+}
+
+export function getPersonalRequests(state: ProcurementState, user: UserProfile) {
+  const userName = user.name.trim().toLowerCase();
+
+  return state.requests.filter(
+    (request) =>
+      request.submittedById === user.id ||
+      request.employeeName.trim().toLowerCase() === userName,
   );
 }
 
