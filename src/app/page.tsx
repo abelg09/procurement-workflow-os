@@ -117,7 +117,13 @@ const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || "")
 const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
 const LIVE_STATE_ROW_ID = "default";
 
-type View = "dashboard" | "company-dashboard" | "new-request" | "notifications" | "admin";
+type View =
+  | "dashboard"
+  | "work-queue"
+  | "company-dashboard"
+  | "new-request"
+  | "notifications"
+  | "admin";
 type AuthStatus = "checking" | "signed-out" | "signed-in" | "blocked" | "missing-config" | "local-dev";
 type LiveSyncStatus = "idle" | "loading" | "ready" | "error";
 
@@ -253,19 +259,52 @@ const signedInUserFromSupabase = (user: SupabaseAuthUser): SignedInUser | null =
 
 const profileIdForSignedInUser = (user: SignedInUser) => `google-${user.id}`;
 
+const roleFromSignedInUser = (user: SignedInUser): Role => {
+  if (adminEmails.includes(user.email)) {
+    return "Admin";
+  }
+
+  const identity = `${user.email} ${user.name}`.toLowerCase();
+
+  if (identity.includes("mona")) return "Mona";
+  if (identity.includes("rashid")) return "Rashid";
+  if (identity.includes("majed") || identity.includes("masjid")) return "Dr. Majed";
+  if (identity.includes("edlyn") || identity.includes("ednyl")) return "Edlyn";
+  if (identity.includes("aileen") || identity.includes("alieen")) return "Aileen";
+
+  return "Employee";
+};
+
 const getSignedInProfile = (
   state: ProcurementState,
   user: SignedInUser,
 ): UserProfile => {
+  const inferredRole = roleFromSignedInUser(user);
+  const roleProfile =
+    inferredRole !== "Employee"
+      ? state.users.find((profile) => profile.role === inferredRole)
+      : null;
+
+  if (roleProfile) {
+    return {
+      ...roleProfile,
+      name: user.name,
+      email: user.email,
+      role: inferredRole,
+      active: true,
+    };
+  }
+
   const existing = state.users.find(
     (profile) => profile.email.toLowerCase() === user.email,
   );
 
   if (existing) {
-    if (adminEmails.includes(user.email) && existing.role !== "Admin") {
+    if (existing.role !== inferredRole) {
       return {
         ...existing,
-        role: "Admin",
+        name: user.name,
+        role: inferredRole,
       };
     }
 
@@ -276,7 +315,7 @@ const getSignedInProfile = (
     id: profileIdForSignedInUser(user),
     name: user.name,
     email: user.email,
-    role: adminEmails.includes(user.email) ? "Admin" : "Employee",
+    role: inferredRole,
     department: "Operations",
     active: true,
   };
@@ -3750,8 +3789,9 @@ export default function Home() {
     state.users.find((user) => user.id === currentUserId) ??
     state.users[0];
   const isEmployee = currentUser.role === "Employee";
+  const hasWorkflowRole = !["Employee", "Admin"].includes(currentUser.role);
   const usesPersonalDashboard =
-    isEmployee || (authStatus === "signed-in" && currentUser.role === "Admin");
+    isEmployee || authStatus === "signed-in";
   const canSwitchRoles = authStatus === "local-dev";
   const isSignedIn = authStatus === "signed-in" || authStatus === "local-dev";
   const canUseLocalWorkspace = !isGithubPagesBuild && authStatus === "missing-config";
@@ -3820,6 +3860,15 @@ export default function Home() {
               <LayoutDashboard className="h-4 w-4" />
             ),
           },
+          ...(hasWorkflowRole
+            ? [
+                {
+                  id: "work-queue" as View,
+                  label: "Work queue",
+                  icon: <LayoutDashboard className="h-4 w-4" />,
+                },
+              ]
+            : []),
           ...(currentUser.role === "Admin"
             ? [
                 {
@@ -3849,6 +3898,10 @@ export default function Home() {
           title: "Dashboard",
           subtitle: "Procurement performance, requests, approvals, and closures.",
         },
+    "work-queue": {
+      title: `${currentUser.role} work queue`,
+      subtitle: "Approvals, reviews, and procurement tasks assigned to your role.",
+    },
     "company-dashboard": {
       title: "Company dashboard",
       subtitle: "Company-wide procurement performance, approvals, and closures.",
@@ -3868,7 +3921,10 @@ export default function Home() {
   };
   const activeView =
     currentUser.role === "Employee" &&
-    (view === "new-request" || view === "admin" || view === "company-dashboard")
+    (view === "new-request" ||
+      view === "admin" ||
+      view === "company-dashboard" ||
+      view === "work-queue")
       ? "dashboard"
       : view;
   const currentViewCopy = viewCopy[activeView];
@@ -4174,6 +4230,16 @@ export default function Home() {
                 state={state}
               />
             )
+          ) : null}
+
+          {activeView === "work-queue" && hasWorkflowRole ? (
+            <Dashboard
+              currentUser={currentUser}
+              selectedRequestId={selectedRequestId}
+              setSelectedRequestId={setSelectedRequestId}
+              setState={setState}
+              state={state}
+            />
           ) : null}
 
           {activeView === "company-dashboard" && currentUser.role === "Admin" ? (
