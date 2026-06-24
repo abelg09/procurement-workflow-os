@@ -1,54 +1,74 @@
-create type user_role as enum (
-  'Employee',
-  'Mona',
-  'Rashid',
-  'Dr. Majed',
-  'Edlyn',
-  'Aileen',
-  'Admin'
-);
+do $$
+begin
+  create type user_role as enum (
+    'Employee',
+    'Mona',
+    'Rashid',
+    'Dr. Majed',
+    'Edlyn',
+    'Aileen',
+    'Admin'
+  );
+exception
+  when duplicate_object then null;
+end $$;
 
-create type workflow_stage as enum (
-  'mona',
-  'rashid',
-  'dr-majed',
-  'edlyn',
-  'aileen'
-);
+do $$
+begin
+  create type workflow_stage as enum (
+    'mona',
+    'rashid',
+    'dr-majed',
+    'edlyn',
+    'aileen'
+  );
+exception
+  when duplicate_object then null;
+end $$;
 
-create type request_status as enum (
-  'Draft',
-  'Submitted',
-  'Mona Review',
-  'Rashid Review',
-  'Rashid Auto Approved',
-  'Rashid Declined',
-  'Dr. Majed Review',
-  'Edlyn Confirmation',
-  'Edlyn Clarification Requested',
-  'Purchase in Progress',
-  'Invoice Uploaded',
-  'Aileen Finance Review',
-  'Invoice Cleared',
-  'Edlyn Order Confirmation',
-  'Delivery Tracking',
-  'Order Confirmed',
-  'Item Received',
-  'Completed',
-  'Sent Back for Clarification'
-);
+do $$
+begin
+  create type request_status as enum (
+    'Draft',
+    'Submitted',
+    'Mona Review',
+    'Rashid Review',
+    'Rashid Auto Approved',
+    'Rashid Declined',
+    'Dr. Majed Review',
+    'Edlyn Confirmation',
+    'Edlyn Clarification Requested',
+    'Purchase in Progress',
+    'Invoice Uploaded',
+    'Aileen Finance Review',
+    'Invoice Cleared',
+    'Edlyn Order Confirmation',
+    'Delivery Tracking',
+    'Order Confirmed',
+    'Item Received',
+    'Completed',
+    'Sent Back for Clarification'
+  );
+exception
+  when duplicate_object then null;
+end $$;
 
-create type payment_term as enum (
-  'COD',
-  '15 days credit',
-  '30 days credit',
-  '60 days credit',
-  '90 days credit',
-  'Bank transfer',
-  'LC'
-);
+do $$
+begin
+  create type payment_term as enum (
+    'COD',
+    '15 days credit',
+    '30 days credit',
+    '60 days credit',
+    '90 days credit',
+    'Bank transfer',
+    'LC'
+  );
+exception
+  when duplicate_object then null;
+end $$;
 
-create table procurement_projects (
+create table if not exists procurement_projects (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
   active boolean not null default true,
@@ -56,7 +76,7 @@ create table procurement_projects (
   updated_at timestamptz not null default now()
 );
 
-create table procurement_app_state (
+create table if not exists procurement_app_state (
   id text primary key default 'default',
   state jsonb not null,
   updated_by uuid references auth.users(id),
@@ -65,26 +85,59 @@ create table procurement_app_state (
 
 alter table procurement_app_state enable row level security;
 
-create policy "Authenticated users can read procurement workspace"
-  on procurement_app_state
-  for select
-  to authenticated
-  using (true);
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'procurement_app_state'
+      and policyname = 'Authenticated users can read procurement workspace'
+  ) then
+    create policy "Authenticated users can read procurement workspace"
+      on procurement_app_state
+      for select
+      to authenticated
+      using (true);
+  end if;
+end $$;
 
-create policy "Authenticated users can create procurement workspace"
-  on procurement_app_state
-  for insert
-  to authenticated
-  with check (true);
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'procurement_app_state'
+      and policyname = 'Authenticated users can create procurement workspace'
+  ) then
+    create policy "Authenticated users can create procurement workspace"
+      on procurement_app_state
+      for insert
+      to authenticated
+      with check (true);
+  end if;
+end $$;
 
-create policy "Authenticated users can update procurement workspace"
-  on procurement_app_state
-  for update
-  to authenticated
-  using (true)
-  with check (true);
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'procurement_app_state'
+      and policyname = 'Authenticated users can update procurement workspace'
+  ) then
+    create policy "Authenticated users can update procurement workspace"
+      on procurement_app_state
+      for update
+      to authenticated
+      using (true)
+      with check (true);
+  end if;
+end $$;
 
-create table profiles (
+create table if not exists profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   name text not null,
   email text not null unique,
@@ -95,7 +148,7 @@ create table profiles (
   updated_at timestamptz not null default now()
 );
 
-create table procurement_requests (
+create table if not exists procurement_requests (
   id text primary key,
   employee_name text not null,
   department text not null,
@@ -124,7 +177,7 @@ create table procurement_requests (
   updated_at timestamptz not null default now()
 );
 
-create table procurement_request_items (
+create table if not exists procurement_request_items (
   id uuid primary key default gen_random_uuid(),
   request_id text not null references procurement_requests(id) on delete cascade,
   item_name text not null,
@@ -141,7 +194,7 @@ create table procurement_request_items (
   created_at timestamptz not null default now()
 );
 
-create table vendors (
+create table if not exists vendors (
   id uuid primary key default gen_random_uuid(),
   request_id text not null references procurement_requests(id) on delete cascade,
   contact_person text,
@@ -157,7 +210,7 @@ create table vendors (
   created_at timestamptz not null default now()
 );
 
-create table invoices (
+create table if not exists invoices (
   id uuid primary key default gen_random_uuid(),
   request_id text not null references procurement_requests(id) on delete cascade,
   invoice_number text not null,
@@ -171,7 +224,7 @@ create table invoices (
   created_at timestamptz not null default now()
 );
 
-create table attachments (
+create table if not exists attachments (
   id uuid primary key default gen_random_uuid(),
   request_id text references procurement_requests(id) on delete cascade,
   invoice_id uuid references invoices(id) on delete cascade,
@@ -183,7 +236,7 @@ create table attachments (
   uploaded_at timestamptz not null default now()
 );
 
-create table notifications (
+create table if not exists notifications (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references profiles(id) on delete cascade,
   request_id text references procurement_requests(id) on delete cascade,
@@ -194,7 +247,7 @@ create table notifications (
   created_at timestamptz not null default now()
 );
 
-create table audit_logs (
+create table if not exists audit_logs (
   id uuid primary key default gen_random_uuid(),
   request_id text not null references procurement_requests(id) on delete cascade,
   user_id uuid not null references profiles(id),
@@ -209,7 +262,7 @@ create table audit_logs (
   created_at timestamptz not null default now()
 );
 
-create table chatbot_messages (
+create table if not exists chatbot_messages (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references profiles(id) on delete cascade,
   role text not null check (role in ('user', 'assistant')),
@@ -217,14 +270,14 @@ create table chatbot_messages (
   created_at timestamptz not null default now()
 );
 
-create index procurement_requests_status_idx on procurement_requests(status);
-create index procurement_requests_stage_idx on procurement_requests(stage);
-create index procurement_requests_assignee_idx on procurement_requests(assignee_id);
-create index procurement_requests_department_idx on procurement_requests(department);
-create index procurement_requests_project_idx on procurement_requests(project);
-create index procurement_request_items_request_idx on procurement_request_items(request_id);
-create index notifications_user_unread_idx on notifications(user_id, read);
-create index audit_logs_request_idx on audit_logs(request_id, created_at desc);
+create index if not exists procurement_requests_status_idx on procurement_requests(status);
+create index if not exists procurement_requests_stage_idx on procurement_requests(stage);
+create index if not exists procurement_requests_assignee_idx on procurement_requests(assignee_id);
+create index if not exists procurement_requests_department_idx on procurement_requests(department);
+create index if not exists procurement_requests_project_idx on procurement_requests(project);
+create index if not exists procurement_request_items_request_idx on procurement_request_items(request_id);
+create index if not exists notifications_user_unread_idx on notifications(user_id, read);
+create index if not exists audit_logs_request_idx on audit_logs(request_id, created_at desc);
 
 insert into storage.buckets (id, name, public)
 values ('procurement-files', 'procurement-files', false)
