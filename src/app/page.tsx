@@ -649,6 +649,7 @@ function IconButton({
 
 function StatusBadge({ status }: { status: RequestStatus }) {
   const tone = statusTone(status);
+  const label = status === "Rashid Declined" ? "Rejected" : status;
   return (
     <span
       className={classNames(
@@ -656,7 +657,7 @@ function StatusBadge({ status }: { status: RequestStatus }) {
         statusClass[tone],
       )}
     >
-      {status}
+      {label}
     </span>
   );
 }
@@ -3286,6 +3287,14 @@ function EmployeeRequestStatus({
         Boolean(log.comment?.trim()),
     )
     .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
+  const rashidRejection = state.auditLogs
+    .filter(
+      (log) =>
+        log.requestId === request.id &&
+        log.newStatus === "Rashid Declined" &&
+        Boolean(log.declineReason?.trim()),
+    )
+    .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
 
   return (
     <section className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
@@ -3318,6 +3327,20 @@ function EmployeeRequestStatus({
         <Detail label="Required by" value={formatDate(request.requiredByDate)} />
         <Detail label="Pending action" value={getPendingAction(request)} />
       </div>
+
+      {request.status === "Rashid Declined" ? (
+        <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <p className="font-semibold">Request rejected by Rashid</p>
+            {rashidRejection ? (
+              <p className="text-xs text-red-700">{formatDateTime(rashidRejection.dateTime)}</p>
+            ) : null}
+          </div>
+          <p className="mt-2 whitespace-pre-line">
+            {rashidRejection?.declineReason || "No rejection reason was recorded."}
+          </p>
+        </div>
+      ) : null}
 
       {request.status === "Edlyn Clarification Requested" &&
       request.assigneeId === currentUser.id ? (

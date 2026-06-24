@@ -965,7 +965,7 @@ export function getPendingAction(request: ProcurementRequest) {
     case "Completed":
       return "No pending action";
     case "Rashid Declined":
-      return "Decline reason recorded; Mona to review";
+      return "Rejected by Rashid; employee notified";
     case "Sent Back for Clarification":
       return "Employee to clarify request";
     default:
@@ -1288,19 +1288,19 @@ export function transitionRequest(
       if (!canAct(["Rashid Review"], "Rashid") || !hasText(workflowAction.declineReason)) {
         return state;
       }
-      const assignee = assignTo("Mona", { notify: false });
       editable.status = "Rashid Declined";
       editable.stage = "rashid";
+      editable.assigneeId = editable.submittedById;
       editable.previousResponsibleId = actor.id;
-      actionLabel = "Rashid declined request";
+      actionLabel = "Rashid rejected request";
       declineReason = workflowAction.declineReason;
       addNotification(
         nextState.notifications,
         {
-          userId: assignee.id,
+          userId: editable.submittedById,
           requestId,
-          title: "Request declined",
-          body: `${editable.id} was declined by Rashid: ${declineReason}`,
+          title: "Request rejected",
+          body: `${editable.id} was rejected by Rashid. Reason: ${declineReason}`,
           type: "declined",
         },
         dateTime,
@@ -1999,6 +1999,10 @@ export function parseState(serialized: string | null) {
             nextStage = "edlyn";
             nextAssigneeId = edlynUser.id;
           }
+        }
+
+        if (currentStatus === "Rashid Declined") {
+          nextAssigneeId = migrateUserId(request.submittedById);
         }
 
         return normalizeRequestFinancials({
