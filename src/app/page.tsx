@@ -32,7 +32,7 @@ import {
   UserCog,
   XCircle,
 } from "lucide-react";
-import { FormEvent, MouseEventHandler, ReactNode, useEffect, useId, useMemo, useState } from "react";
+import { FormEvent, MouseEventHandler, ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
 import {
   AuditLog,
@@ -109,10 +109,16 @@ const allowedEmailDomains = (process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAINS || "s
   .split(",")
   .map((domain) => domain.trim().toLowerCase())
   .filter(Boolean);
+const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || "")
+  .split(",")
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
 const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
+const LIVE_STATE_ROW_ID = "default";
 
 type View = "dashboard" | "new-request" | "notifications" | "admin";
 type AuthStatus = "checking" | "signed-out" | "signed-in" | "blocked" | "missing-config" | "local-dev";
+type LiveSyncStatus = "idle" | "loading" | "ready" | "error";
 
 type SignedInUser = {
   id: string;
@@ -255,6 +261,13 @@ const getSignedInProfile = (
   );
 
   if (existing) {
+    if (adminEmails.includes(user.email) && existing.role !== "Admin") {
+      return {
+        ...existing,
+        role: "Admin",
+      };
+    }
+
     return existing;
   }
 
@@ -262,10 +275,30 @@ const getSignedInProfile = (
     id: profileIdForSignedInUser(user),
     name: user.name,
     email: user.email,
-    role: "Employee",
+    role: adminEmails.includes(user.email) ? "Admin" : "Employee",
     department: "Operations",
     active: true,
   };
+};
+
+const stateWithSignedInProfile = (
+  state: ProcurementState,
+  user: SignedInUser,
+) => {
+  const profile = getSignedInProfile(state, user);
+  const hasProfile = state.users.some((candidate) => candidate.id === profile.id);
+
+  return hasProfile
+    ? {
+        ...state,
+        users: state.users.map((candidate) =>
+          candidate.id === profile.id ? profile : candidate,
+        ),
+      }
+    : {
+        ...state,
+        users: [...state.users, profile],
+      };
 };
 
 const panelClass =
@@ -584,6 +617,7 @@ function SignInScreen({
   authError,
   authStatus,
   canUseLocalWorkspace,
+  liveSyncStatus,
   onSignIn,
   onSignOut,
   onUseLocalWorkspace,
@@ -591,6 +625,7 @@ function SignInScreen({
   authError: string;
   authStatus: AuthStatus;
   canUseLocalWorkspace: boolean;
+  liveSyncStatus: LiveSyncStatus;
   onSignIn: () => void;
   onSignOut: () => void;
   onUseLocalWorkspace: () => void;
@@ -633,6 +668,11 @@ function SignInScreen({
         <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
           <p className="font-semibold text-slate-950">Allowed Google accounts</p>
           <p className="mt-1">{allowedDomainText || "Configured Sulmi domains only"}</p>
+          {adminEmails.length > 0 ? (
+            <p className="mt-2 text-xs text-slate-500">
+              Admin bootstrap: {adminEmails.join(", ")}
+            </p>
+          ) : null}
         </div>
 
         {authError ? (
@@ -683,6 +723,11 @@ function SignInScreen({
             </IconButton>
           ) : null}
         </div>
+        {liveSyncStatus === "ready" ? (
+          <p className="mt-4 text-xs font-semibold text-emerald-700">
+            Live Supabase workspace connected.
+          </p>
+        ) : null}
       </section>
     </main>
   );
@@ -3502,6 +3547,9 @@ export default function Home() {
   );
   const [authUser, setAuthUser] = useState<SignedInUser | null>(null);
   const [authError, setAuthError] = useState("");
+  const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>("idle");
+  const [liveSyncError, setLiveSyncError] = useState("");
+  const latestStateRef = useRef(state);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -3521,6 +3569,10 @@ export default function Home() {
       window.localStorage.setItem(STORAGE_KEY, serializeState(state));
     }
   }, [browserStateLoaded, state]);
+
+  useEffect(() => {
+    latestStateRef.current = state;
+  }, [state]);
 
   useEffect(() => {
     if (!supabaseClient) {
@@ -3597,6 +3649,98 @@ export default function Home() {
     };
   }, [authStatus, authUser, browserStateLoaded, state, state.users]);
 
+  useEffect(() => {
+    if (
+      !supabaseClient ||
+      authStatus !== "signed-in" ||
+      !authUser ||
+      !browserStateLoaded
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (cancelled) return;
+      setLiveSyncStatus("loading");
+      setLiveSyncError("");
+
+      void (async () => {
+        const { data, error } = await supabaseClient
+          .from("procurement_app_state")
+          .select("state")
+          .eq("id", LIVE_STATE_ROW_ID)
+          .maybeSingle();
+
+        if (cancelled) return;
+
+        if (error) {
+          setLiveSyncStatus("error");
+          setLiveSyncError(
+            "Supabase workspace table is not ready. Apply supabase/schema.sql and refresh.",
+          );
+          return;
+        }
+
+        const remoteState = data?.state
+          ? parseState(JSON.stringify(data.state))
+          : latestStateRef.current;
+        const hydratedState = stateWithSignedInProfile(remoteState, authUser);
+
+        setState(hydratedState);
+
+        if (!data?.state) {
+          await supabaseClient.from("procurement_app_state").upsert({
+            id: LIVE_STATE_ROW_ID,
+            state: hydratedState,
+            updated_by: authUser.id,
+            updated_at: nowIso(),
+          });
+        }
+
+        if (!cancelled) {
+          setLiveSyncStatus("ready");
+        }
+      })();
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus, authUser, browserStateLoaded, supabaseClient]);
+
+  useEffect(() => {
+    if (
+      !supabaseClient ||
+      authStatus !== "signed-in" ||
+      !authUser ||
+      liveSyncStatus !== "ready"
+    ) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void supabaseClient
+        .from("procurement_app_state")
+        .upsert({
+          id: LIVE_STATE_ROW_ID,
+          state,
+          updated_by: authUser.id,
+          updated_at: nowIso(),
+        })
+        .then(({ error }) => {
+          if (error) {
+            setLiveSyncStatus("error");
+            setLiveSyncError(error.message);
+          }
+        });
+    }, 500);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [authStatus, authUser, liveSyncStatus, state, supabaseClient]);
+
   const signedInProfile =
     authStatus === "signed-in" && authUser
       ? getSignedInProfile(state, authUser)
@@ -3648,6 +3792,8 @@ export default function Home() {
     setAuthUser(null);
     setAuthStatus(supabaseClient ? "signed-out" : "missing-config");
     setAuthError("");
+    setLiveSyncStatus("idle");
+    setLiveSyncError("");
     setCurrentUserId("user-admin");
     setView("dashboard");
   };
@@ -3722,6 +3868,7 @@ export default function Home() {
         authError={authError}
         authStatus={authStatus}
         canUseLocalWorkspace={canUseLocalWorkspace}
+        liveSyncStatus={liveSyncStatus}
         onSignIn={() => {
           void signInWithGoogle();
         }}
@@ -3975,6 +4122,16 @@ export default function Home() {
         </header>
 
         <div className="mx-auto grid max-w-[1680px] gap-5 px-3 py-4 sm:px-5 sm:py-5 lg:px-7 lg:py-7">
+          {authStatus === "signed-in" && liveSyncStatus === "loading" ? (
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm font-medium text-blue-800">
+              Connecting to the live Supabase workspace...
+            </div>
+          ) : null}
+          {authStatus === "signed-in" && liveSyncStatus === "error" ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
+              Live Supabase sync failed: {liveSyncError || "check Supabase schema and permissions."}
+            </div>
+          ) : null}
           {activeView === "dashboard" ? (
             isEmployee ? (
               <EmployeePortal

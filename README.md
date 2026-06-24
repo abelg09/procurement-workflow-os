@@ -34,6 +34,7 @@ Use the active account selector in the header to validate each role workspace:
 
 - Rebuilt procurement request form from the provided field list
 - Google sign-in gate for Sulmi employee access, with employee-only request visibility
+- Live Supabase workspace sync for shared requests, approvals, notifications, and audit history
 - Admin-maintained project dropdown with Beta, Alpha, and Sira defaults
 - CSV/Excel bulk item upload with template download and preview
 - Live FX conversion to AED for threshold routing and reporting
@@ -55,7 +56,8 @@ Copy `.env.example` to `.env.local` and add:
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 NEXT_PUBLIC_ALLOWED_EMAIL_DOMAINS=sulmi.com
+NEXT_PUBLIC_ADMIN_EMAILS=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase Auth provider and add the GitHub Pages URL to the allowed redirect URLs. The public GitHub Pages deployment is gated behind Google sign-in when Supabase client credentials are configured; connect Supabase service credentials and host the Next.js server routes for production database persistence, authentication, storage, and scheduled reminders.
+Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase Auth provider and add the GitHub Pages URL to the allowed redirect URLs. The public GitHub Pages deployment is gated behind Google sign-in when Supabase client credentials are configured. The app syncs the shared procurement workspace through the `procurement_app_state` table, so requests and workflow actions persist across signed-in users. Set `NEXT_PUBLIC_ADMIN_EMAILS` to bootstrap the first admin account, then use Admin controls to assign Mona, Rashid, Dr. Majed, Edlyn, and Aileen roles.

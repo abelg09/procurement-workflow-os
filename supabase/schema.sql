@@ -56,6 +56,34 @@ create table procurement_projects (
   updated_at timestamptz not null default now()
 );
 
+create table procurement_app_state (
+  id text primary key default 'default',
+  state jsonb not null,
+  updated_by uuid references auth.users(id),
+  updated_at timestamptz not null default now()
+);
+
+alter table procurement_app_state enable row level security;
+
+create policy "Authenticated users can read procurement workspace"
+  on procurement_app_state
+  for select
+  to authenticated
+  using (true);
+
+create policy "Authenticated users can create procurement workspace"
+  on procurement_app_state
+  for insert
+  to authenticated
+  with check (true);
+
+create policy "Authenticated users can update procurement workspace"
+  on procurement_app_state
+  for update
+  to authenticated
+  using (true)
+  with check (true);
+
 create table profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   name text not null,
