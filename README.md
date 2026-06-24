@@ -65,7 +65,7 @@ Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase A
 
 ## Custom domain
 
-For a branded GitHub Pages domain such as `procurement.sulmi.ai`, set these GitHub repository variables before deploying:
+For a branded GitHub Pages domain such as `procurement.sulmi.ai`, set both of these GitHub repository variables before deploying:
 
 ```bash
 NEXT_PUBLIC_SITE_BASE_PATH=/
@@ -73,3 +73,5 @@ GITHUB_PAGES_CUSTOM_DOMAIN=procurement.sulmi.ai
 ```
 
 Then point the DNS `CNAME` record for the subdomain to `abelg09.github.io`, set the same custom domain in the repository Pages settings, and add the custom domain URL to Supabase Auth Site URL and Redirect URLs.
+
+Until `GITHUB_PAGES_CUSTOM_DOMAIN` is set, the build keeps the normal GitHub Pages base path `/procurement-workflow-os/` even if `NEXT_PUBLIC_SITE_BASE_PATH` exists.

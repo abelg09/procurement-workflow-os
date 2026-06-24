@@ -101,9 +101,11 @@ const BULK_TEMPLATE_HEADERS = [
   "vendor_name",
 ];
 const BULK_SUPPORTED_CURRENCIES = CURRENCIES.filter((currency) => currency !== "Other");
+const hasGithubPagesCustomDomain = Boolean(process.env.NEXT_PUBLIC_GITHUB_PAGES_CUSTOM_DOMAIN);
 const configuredPublicBasePath =
-  process.env.NEXT_PUBLIC_SITE_BASE_PATH ??
-  (process.env.NEXT_PUBLIC_GITHUB_PAGES === "true" ? "/procurement-workflow-os" : "");
+  process.env.NEXT_PUBLIC_GITHUB_PAGES === "true" && !hasGithubPagesCustomDomain
+    ? "/procurement-workflow-os"
+    : (process.env.NEXT_PUBLIC_SITE_BASE_PATH ?? "");
 const PUBLIC_BASE_PATH =
   configuredPublicBasePath === "/" ? "" : configuredPublicBasePath.replace(/\/$/, "");
 const hasSupabaseClientConfig = Boolean(
