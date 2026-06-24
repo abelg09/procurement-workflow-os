@@ -658,7 +658,7 @@ function IconButton({
   return (
     <button
       className={classNames(
-        "box-border inline-flex min-h-10 max-w-full items-center justify-center gap-2 rounded-lg px-3.5 text-center text-sm font-semibold leading-5 transition disabled:opacity-50",
+        "box-border inline-flex min-h-10 w-full max-w-full items-center justify-center gap-2 rounded-lg px-3.5 text-center text-sm font-semibold leading-5 transition disabled:opacity-50 sm:w-auto",
         variants[variant],
       )}
       disabled={disabled}
@@ -678,7 +678,7 @@ function StatusBadge({ status }: { status: RequestStatus }) {
   return (
     <span
       className={classNames(
-        "inline-flex max-w-full items-center rounded-full border px-2.5 py-1 text-xs font-semibold",
+        "inline-flex max-w-full items-center justify-center whitespace-normal rounded-full border px-2.5 py-1 text-center text-xs font-semibold leading-4",
         statusClass[tone],
       )}
     >
@@ -711,7 +711,7 @@ function SignInScreen({
 
   return (
     <main className="grid min-h-screen place-items-center bg-[#f6f8fb] px-4 py-8 text-slate-900">
-      <section className="w-full max-w-xl rounded-xl border border-slate-200/80 bg-white p-6 shadow-[0_12px_40px_rgba(15,23,42,0.08)] sm:p-8">
+      <section className="w-full max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200/80 bg-white p-6 shadow-[0_12px_40px_rgba(15,23,42,0.08)] sm:max-w-xl sm:p-8">
         <div className="flex items-center gap-4">
           <div className="flex h-14 w-40 shrink-0 items-center justify-center rounded-xl bg-black px-4">
             <Image
@@ -843,7 +843,7 @@ function Field({
 }
 
 function inputClass() {
-  return "box-border min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3.5 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100/80";
+  return "box-border min-h-11 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3.5 text-sm text-slate-950 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100/80";
 }
 
 function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
@@ -894,7 +894,7 @@ function WorkflowTracker({ request }: { request: ProcurementRequest }) {
   const declined = isDeclined(request.status);
 
   return (
-    <div className="grid min-w-0 gap-3 sm:grid-cols-2 md:grid-cols-5">
+    <div className="grid min-w-0 grid-cols-2 gap-3 md:grid-cols-5">
       {WORKFLOW_STAGES.map((stage, index) => {
         const complete = request.status === "Completed" || index < currentIndex;
         const current = index === currentIndex;
@@ -1392,7 +1392,7 @@ function RequestForm({
                       quantity, unit_price, currency, and optional vendor_name.
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid gap-2 sm:flex sm:flex-wrap">
                     <IconButton
                       icon={<Download className="h-4 w-4" />}
                       onClick={downloadBulkTemplate}
@@ -1606,7 +1606,7 @@ function RequestForm({
         </div>
       </section>
 
-      <div className="flex justify-end">
+      <div className="flex justify-stretch sm:justify-end">
         <IconButton
           disabled={bulkImporting || submitting}
           icon={<Plus className="h-4 w-4" />}
@@ -1683,6 +1683,75 @@ function RequestsTable({
     );
   });
 
+  const renderFilterControls = () => (
+    <>
+      <SelectInput value={status} onChange={(event) => setStatus(event.target.value)}>
+        <option>All</option>
+        {STATUSES.map((item) => (
+          <option key={item} value={item}>
+            {displayStatus(item)}
+          </option>
+        ))}
+      </SelectInput>
+      {showAssigneeFilter ? (
+        <SelectInput value={assignee} onChange={(event) => setAssignee(event.target.value)}>
+          <option value="All">All assignees</option>
+          {users.map((user) => (
+            <option key={user.id} value={user.id}>
+              {user.name}
+            </option>
+          ))}
+        </SelectInput>
+      ) : null}
+      <SelectInput value={department} onChange={(event) => setDepartment(event.target.value)}>
+        <option>All</option>
+        {departments.map((item) => (
+          <option key={item}>{item}</option>
+        ))}
+      </SelectInput>
+      <SelectInput value={project} onChange={(event) => setProject(event.target.value)}>
+        <option value="All">All projects</option>
+        {projects.map((item) => (
+          <option key={item}>{item}</option>
+        ))}
+      </SelectInput>
+      <SelectInput value={stage} onChange={(event) => setStage(event.target.value)}>
+        <option value="All">All stages</option>
+        {WORKFLOW_STAGES.map((item) => (
+          <option key={item.key} value={item.key}>
+            {item.label}
+          </option>
+        ))}
+      </SelectInput>
+      {!hideFinancials ? (
+        <>
+          <TextInput
+            placeholder="Min amount"
+            type="number"
+            value={minAmount}
+            onChange={(event) => setMinAmount(event.target.value)}
+          />
+          <TextInput
+            placeholder="Max amount"
+            type="number"
+            value={maxAmount}
+            onChange={(event) => setMaxAmount(event.target.value)}
+          />
+        </>
+      ) : null}
+      <TextInput
+        type="date"
+        value={fromDate}
+        onChange={(event) => setFromDate(event.target.value)}
+      />
+      <TextInput
+        type="date"
+        value={toDate}
+        onChange={(event) => setToDate(event.target.value)}
+      />
+    </>
+  );
+
   return (
     <section className={classNames(panelClass, "min-w-0 overflow-hidden")}>
       <div className="border-b border-slate-200/80 p-5">
@@ -1707,53 +1776,19 @@ function RequestsTable({
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
-          <SelectInput value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option>All</option>
-            {STATUSES.map((item) => (
-              <option key={item} value={item}>
-                {displayStatus(item)}
-              </option>
-            ))}
-          </SelectInput>
-          {showAssigneeFilter ? (
-            <SelectInput value={assignee} onChange={(event) => setAssignee(event.target.value)}>
-              <option value="All">All assignees</option>
-              {users.map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.name}
-                </option>
-              ))}
-            </SelectInput>
-          ) : null}
-          <SelectInput value={department} onChange={(event) => setDepartment(event.target.value)}>
-            <option>All</option>
-            {departments.map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </SelectInput>
-          <SelectInput value={project} onChange={(event) => setProject(event.target.value)}>
-            <option value="All">All projects</option>
-            {projects.map((item) => (
-              <option key={item}>{item}</option>
-            ))}
-          </SelectInput>
-          <SelectInput value={stage} onChange={(event) => setStage(event.target.value)}>
-            <option value="All">All stages</option>
-            {WORKFLOW_STAGES.map((item) => (
-              <option key={item.key} value={item.key}>
-                {item.label}
-              </option>
-            ))}
-          </SelectInput>
-          {!hideFinancials ? (
-            <>
-              <TextInput placeholder="Min amount" type="number" value={minAmount} onChange={(event) => setMinAmount(event.target.value)} />
-              <TextInput placeholder="Max amount" type="number" value={maxAmount} onChange={(event) => setMaxAmount(event.target.value)} />
-            </>
-          ) : null}
-          <TextInput type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
-          <TextInput type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+        <details className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 md:hidden">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-slate-700">
+            <span className="inline-flex items-center gap-2">
+              <Filter className="h-4 w-4 text-blue-700" />
+              Filters
+            </span>
+            <span className="text-xs text-slate-500">{filtered.length} shown</span>
+          </summary>
+          <div className="mt-3 grid gap-3">{renderFilterControls()}</div>
+        </details>
+
+        <div className="mt-4 hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+          {renderFilterControls()}
         </div>
       </div>
 
@@ -1782,14 +1817,16 @@ function RequestsTable({
                 onClick={() => onSelect(request.id)}
                 type="button"
               >
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-start min-[420px]:justify-between">
                   <div className="min-w-0">
                     <p className="font-bold text-slate-950">{request.id}</p>
                     <p className="mt-1 truncate text-sm text-slate-500">
                       {request.employeeName} - {request.itemName}
                     </p>
                   </div>
-                  <StatusBadge status={request.status} />
+                  <span className="min-w-0 min-[420px]:shrink-0">
+                    <StatusBadge status={request.status} />
+                  </span>
                 </div>
                 <div className="mt-3 grid gap-2 text-sm text-slate-600">
                   <div className="flex justify-between gap-3">
@@ -2078,7 +2115,7 @@ function ActionPanel({
         </Field>
 
         {request.status === "Mona Review" && canUse("Mona") ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="grid gap-2 sm:flex sm:flex-wrap">
             <IconButton
               icon={<CheckCircle2 className="h-4 w-4" />}
               onClick={() => {
@@ -2113,7 +2150,7 @@ function ActionPanel({
                 onChange={(event) => setDeclineReason(event.target.value)}
               />
             </Field>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid gap-2 sm:flex sm:flex-wrap">
               <IconButton
                 icon={<CheckCircle2 className="h-4 w-4" />}
                 onClick={() => {
@@ -2167,7 +2204,7 @@ function ActionPanel({
         {((request.status === "Edlyn Confirmation") ||
           (request.status === "Rashid Auto Approved" && request.stage === "edlyn")) &&
         canUse("Edlyn") ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="grid gap-2 sm:flex sm:flex-wrap">
             <IconButton
               icon={<ShoppingCart className="h-4 w-4" />}
               onClick={() => {
@@ -2228,7 +2265,7 @@ function ActionPanel({
                 />
               </Field>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid gap-2 sm:flex sm:flex-wrap">
               <IconButton
                 icon={<Upload className="h-4 w-4" />}
                 onClick={() => {
@@ -2315,7 +2352,7 @@ function ActionPanel({
         {request.status === "Delivery Tracking" && canUse("Edlyn") ? (
           <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
             {logisticsFields}
-            <div className="flex flex-wrap gap-2">
+            <div className="grid gap-2 sm:flex sm:flex-wrap">
               <IconButton
                 icon={<Truck className="h-4 w-4" />}
                 onClick={() =>
@@ -3023,7 +3060,7 @@ function AdminPanel({
               Manage roles, export reports, view audit logs, and manually reassign work.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid gap-2 sm:flex sm:flex-wrap">
             <IconButton icon={<Download className="h-4 w-4" />} onClick={exportCsv} variant="secondary">
               CSV
             </IconButton>
@@ -3253,7 +3290,7 @@ function ProcurementAssistant({
           ))
         )}
       </div>
-      <div className="flex flex-wrap gap-2 border-t border-slate-200 p-3">
+      <div className="flex gap-2 overflow-x-auto border-t border-slate-200 p-3">
         {[
           "Which requests are pending with Rashid?",
           "Which requests are pending with Amro?",
@@ -3262,7 +3299,7 @@ function ProcurementAssistant({
           "Show all completed requests this month.",
         ].map((item) => (
           <button
-            className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            className="shrink-0 rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
             key={item}
             onClick={() => prompt(item)}
             type="button"
@@ -4207,22 +4244,26 @@ export default function Home() {
                   </IconButton>
                 </div>
               ) : null}
-              <div className="lg:hidden">
+              <div className="min-w-0 lg:hidden">
                 {!canSwitchRoles ? (
-                  <div className="grid gap-2">
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                      {currentUser.name} - {getRoleDisplayName(currentUser.role)}
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                      <span className="block truncate">{currentUser.name}</span>
+                      <span className="block truncate text-xs font-medium text-slate-500">
+                        {getRoleDisplayName(currentUser.role)}
+                      </span>
                     </div>
                     {authStatus === "signed-in" ? (
-                      <IconButton
-                        icon={<LogOut className="h-4 w-4" />}
+                      <button
+                        aria-label="Sign out"
+                        className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50"
                         onClick={() => {
                           void signOut();
                         }}
-                        variant="secondary"
+                        type="button"
                       >
-                        Sign out
-                      </IconButton>
+                        <LogOut className="h-4 w-4" />
+                      </button>
                     ) : null}
                   </div>
                 ) : (
@@ -4250,11 +4291,11 @@ export default function Home() {
             </div>
           </div>
 
-          <nav className="mx-auto grid max-w-[1680px] grid-cols-2 gap-2 px-3 pb-3 sm:flex sm:overflow-x-auto sm:px-5 lg:hidden">
+          <nav className="mx-auto flex max-w-[1680px] gap-2 overflow-x-auto px-3 pb-3 sm:px-5 lg:hidden">
             {visibleNavItems.map((item) => (
               <button
                 className={classNames(
-                  "inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold transition sm:shrink-0",
+                  "inline-flex min-h-10 min-w-0 shrink-0 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold transition",
                   activeView === item.id
                     ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
                     : "bg-white text-slate-600 shadow-sm hover:bg-slate-50",
