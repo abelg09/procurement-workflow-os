@@ -41,10 +41,12 @@ import {
   DELIVERY_STATUSES,
   DEPARTMENTS,
   DEFAULT_PROJECT_OPTIONS,
+  FINANCE_APPROVAL_EMAIL,
   InvoiceDetails,
   LogisticsDetails,
   NotificationRecord,
   PAYMENT_TERMS,
+  PROCURE_APPROVAL_EMAIL,
   PRIORITIES,
   ProcurementLineItem,
   ProcurementRequest,
@@ -63,6 +65,7 @@ import {
   getMetrics,
   getPendingAction,
   getPersonalRequests,
+  getRoleDisplayName,
   getRequestItemCount,
   getRequestLineItems,
   getRequestTotalAed,
@@ -214,6 +217,18 @@ const statusTone = (status: RequestStatus) => {
   return "Approved";
 };
 
+const displayStatus = (status: RequestStatus) => {
+  const labels: Partial<Record<RequestStatus, string>> = {
+    "Edlyn Confirmation": "Procure Confirmation",
+    "Edlyn Clarification Requested": "Procure Clarification Requested",
+    "Aileen Finance Review": "Finance Review",
+    "Edlyn Order Confirmation": "Procure Order Confirmation",
+    "Rashid Declined": "Rejected",
+  };
+
+  return labels[status] ?? status;
+};
+
 const formatDateTime = (value: string) =>
   new Intl.DateTimeFormat("en-AE", {
     dateStyle: "medium",
@@ -269,6 +284,14 @@ const roleFromSignedInUser = (user: SignedInUser): Role => {
     return "Admin";
   }
 
+  if (user.email === PROCURE_APPROVAL_EMAIL.toLowerCase()) {
+    return "Edlyn";
+  }
+
+  if (user.email === FINANCE_APPROVAL_EMAIL.toLowerCase()) {
+    return "Aileen";
+  }
+
   const identity = `${user.email} ${user.name}`.toLowerCase();
 
   if (identity.includes("mona")) return "Mona";
@@ -277,8 +300,6 @@ const roleFromSignedInUser = (user: SignedInUser): Role => {
   if (identity.includes("amro") || identity.includes("aamro") || identity.includes("mandil")) {
     return "Amro";
   }
-  if (identity.includes("edlyn") || identity.includes("ednyl")) return "Edlyn";
-  if (identity.includes("aileen") || identity.includes("alieen")) return "Aileen";
 
   return "Employee";
 };
@@ -288,6 +309,10 @@ const getSignedInProfile = (
   user: SignedInUser,
 ): UserProfile => {
   const inferredRole = roleFromSignedInUser(user);
+  const displayName =
+    inferredRole === "Edlyn" || inferredRole === "Aileen"
+      ? getRoleDisplayName(inferredRole)
+      : user.name;
   const roleProfile =
     inferredRole !== "Employee"
       ? state.users.find((profile) => profile.role === inferredRole)
@@ -296,7 +321,7 @@ const getSignedInProfile = (
   if (roleProfile) {
     return {
       ...roleProfile,
-      name: user.name,
+      name: displayName,
       email: user.email,
       role: inferredRole,
       active: true,
@@ -311,7 +336,7 @@ const getSignedInProfile = (
     if (existing.role !== inferredRole) {
       return {
         ...existing,
-        name: user.name,
+        name: displayName,
         role: inferredRole,
       };
     }
@@ -321,7 +346,7 @@ const getSignedInProfile = (
 
   return {
     id: profileIdForSignedInUser(user),
-    name: user.name,
+    name: displayName,
     email: user.email,
     role: inferredRole,
     department: "Operations",
@@ -649,7 +674,7 @@ function IconButton({
 
 function StatusBadge({ status }: { status: RequestStatus }) {
   const tone = statusTone(status);
-  const label = status === "Rashid Declined" ? "Rejected" : status;
+  const label = displayStatus(status);
   return (
     <span
       className={classNames(
@@ -1686,7 +1711,9 @@ function RequestsTable({
           <SelectInput value={status} onChange={(event) => setStatus(event.target.value)}>
             <option>All</option>
             {STATUSES.map((item) => (
-              <option key={item}>{item}</option>
+              <option key={item} value={item}>
+                {displayStatus(item)}
+              </option>
             ))}
           </SelectInput>
           {showAssigneeFilter ? (
@@ -2264,7 +2291,7 @@ function ActionPanel({
           <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
             {request.invoice?.financeNotes ? (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-                <p className="font-semibold">Finance note from Aileen</p>
+                <p className="font-semibold">Finance note</p>
                 <p className="mt-1 whitespace-pre-line">{request.invoice.financeNotes}</p>
               </div>
             ) : null}
@@ -2542,7 +2569,7 @@ function RequestDetails({
                 </div>
               ) : (
                 <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                  Invoice is pending upload by Edlyn.
+                  Invoice is pending upload by Procure.
                 </div>
               )}
             </div>
@@ -2614,7 +2641,7 @@ function AuditTrail({ logs }: { logs: AuditLog[] }) {
                 <p className="text-xs text-slate-500">{formatDateTime(log.dateTime)}</p>
               </div>
               <p className="mt-1 text-sm text-slate-600">
-                {log.userName}: {log.previousStatus} to {log.newStatus}
+                {log.userName}: {displayStatus(log.previousStatus)} to {displayStatus(log.newStatus)}
               </p>
               {log.assignedPerson ? (
                 <p className="mt-1 text-xs text-slate-500">Assigned person: {log.assignedPerson}</p>
@@ -2764,7 +2791,7 @@ function rowsForExport(state: ProcurementState) {
     "Line items": getRequestItemCount(request),
     "FX source": request.exchangeRateSource,
     "FX date": request.exchangeRateDate,
-    Status: request.status,
+    Status: displayStatus(request.status),
     Stage: WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label,
     Assignee: getAssigneeName(request, state.users),
     Invoice: request.invoice?.invoiceNumber ?? "Pending",
@@ -3038,7 +3065,9 @@ function AdminPanel({
                         }
                       >
                         {ROLES.map((role) => (
-                          <option key={role}>{role}</option>
+                          <option key={role} value={role}>
+                            {getRoleDisplayName(role)}
+                          </option>
                         ))}
                       </SelectInput>
                     </td>
@@ -3118,7 +3147,7 @@ function AdminPanel({
             <SelectInput value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)}>
               {state.users.map((user) => (
                 <option key={user.id} value={user.id}>
-                  {user.name} ({user.role})
+                  {user.name} ({getRoleDisplayName(user.role)})
                 </option>
               ))}
             </SelectInput>
@@ -3228,7 +3257,7 @@ function ProcurementAssistant({
         {[
           "Which requests are pending with Rashid?",
           "Which requests are pending with Amro?",
-          "Which invoices are pending with Aileen?",
+          "Which invoices are pending with Finance?",
           "Show me requests stuck for more than 2 days.",
           "Show all completed requests this month.",
         ].map((item) => (
@@ -3283,7 +3312,7 @@ function EmployeeRequestStatus({
     .filter(
       (log) =>
         log.requestId === request.id &&
-        log.action === "Edlyn requested clarification" &&
+        ["Edlyn requested clarification", "Procure requested clarification"].includes(log.action) &&
         Boolean(log.comment?.trim()),
     )
     .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
@@ -3346,15 +3375,15 @@ function EmployeeRequestStatus({
       request.assigneeId === currentUser.id ? (
         <div className="mt-5 grid gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
           <div>
-            <p className="font-semibold text-red-950">Clarification needed by Edlyn</p>
+            <p className="font-semibold text-red-950">Clarification needed by Procure</p>
             <p className="mt-1 text-sm text-red-800">
-              Answer the item or price question here. The request will return directly to Edlyn.
+              Answer the item or price question here. The request will return directly to Procure.
             </p>
           </div>
           {edlynClarification?.comment ? (
             <div className="rounded-xl border border-red-200 bg-white p-3">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm font-semibold text-red-950">Message from Edlyn</p>
+                <p className="text-sm font-semibold text-red-950">Message from Procure</p>
                 <p className="text-xs text-red-700">
                   {formatDateTime(edlynClarification.dateTime)}
                 </p>
@@ -3369,7 +3398,7 @@ function EmployeeRequestStatus({
             </div>
           )}
           <TextArea
-            placeholder="Write your clarification for Edlyn"
+            placeholder="Write your clarification for Procure"
             value={clarification}
             onChange={(event) => setClarification(event.target.value)}
           />
@@ -3424,7 +3453,7 @@ function EmployeePortal({
             </p>
           </div>
           <div className="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-            {currentUser.name} - {currentUser.role}
+            {currentUser.name} - {getRoleDisplayName(currentUser.role)}
           </div>
         </div>
       </section>
@@ -3944,7 +3973,7 @@ export default function Home() {
           subtitle: "Procurement performance, requests, approvals, and closures.",
         },
     "work-queue": {
-      title: `${currentUser.role} work queue`,
+      title: `${getRoleDisplayName(currentUser.role)} work queue`,
       subtitle: "Approvals, reviews, and procurement tasks assigned to your role.",
     },
     "company-dashboard": {
@@ -4029,7 +4058,7 @@ export default function Home() {
           {!canSwitchRoles ? (
             <div className="grid gap-2">
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                {currentUser.name} - {currentUser.role}
+                {currentUser.name} - {getRoleDisplayName(currentUser.role)}
               </div>
               {authStatus === "signed-in" ? (
                 <IconButton
@@ -4063,7 +4092,7 @@ export default function Home() {
               >
                 {state.users.map((user) => (
                   <option key={user.id} value={user.id}>
-                    {user.name} - {user.role}
+                    {user.name} - {getRoleDisplayName(user.role)}
                   </option>
                 ))}
               </SelectInput>
@@ -4162,7 +4191,7 @@ export default function Home() {
                 </span>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-slate-900">{currentUser.name}</p>
-                  <p className="text-xs text-slate-500">{currentUser.role}</p>
+                  <p className="text-xs text-slate-500">{getRoleDisplayName(currentUser.role)}</p>
                 </div>
               </div>
               {authStatus === "signed-in" ? (
@@ -4182,7 +4211,7 @@ export default function Home() {
                 {!canSwitchRoles ? (
                   <div className="grid gap-2">
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                      {currentUser.name} - {currentUser.role}
+                      {currentUser.name} - {getRoleDisplayName(currentUser.role)}
                     </div>
                     {authStatus === "signed-in" ? (
                       <IconButton
@@ -4212,7 +4241,7 @@ export default function Home() {
                   >
                     {state.users.map((user) => (
                       <option key={user.id} value={user.id}>
-                        {user.name} - {user.role}
+                        {user.name} - {getRoleDisplayName(user.role)}
                       </option>
                     ))}
                   </SelectInput>

@@ -27,8 +27,8 @@ Use the active account selector in the header to validate each role workspace:
 - Rashid
 - Dr. Majed
 - Amro
-- Edlyn
-- Aileen
+- Procure (`Procure@sulmi.ai`) for purchasing approvals and stages
+- Finance (`finance@sulmi.ai`) for invoice approvals
 - Admin
 
 ## Included
@@ -61,7 +61,7 @@ NEXT_PUBLIC_ADMIN_EMAILS=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase Auth provider and add the GitHub Pages URL to the allowed redirect URLs. The public GitHub Pages deployment is gated behind Google sign-in when Supabase client credentials are configured. The app syncs the shared procurement workspace through the `procurement_app_state` table, so requests and workflow actions persist across signed-in users. Set `NEXT_PUBLIC_ADMIN_EMAILS` to bootstrap the first admin account, then use Admin controls to assign Mona, Rashid, Dr. Majed, Amro, Edlyn, and Aileen roles.
+Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase Auth provider and add the GitHub Pages URL to the allowed redirect URLs. The public GitHub Pages deployment is gated behind Google sign-in when Supabase client credentials are configured. The app syncs the shared procurement workspace through the `procurement_app_state` table, so requests and workflow actions persist across signed-in users. Set `NEXT_PUBLIC_ADMIN_EMAILS` to bootstrap the first admin account, then use Admin controls to assign Mona, Rashid, Dr. Majed, Amro, Procure, and Finance roles. Edlyn's personal account remains an Employee requester account and does not receive the Procure approval queue.
 
 ## Custom domain
 

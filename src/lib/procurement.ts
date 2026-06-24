@@ -11,6 +11,24 @@ export const ROLES = [
 
 export type Role = (typeof ROLES)[number];
 
+export const PROCURE_APPROVAL_EMAIL = "Procure@sulmi.ai";
+export const FINANCE_APPROVAL_EMAIL = "finance@sulmi.ai";
+
+export const ROLE_DISPLAY_NAMES: Record<Role, string> = {
+  Employee: "Employee",
+  Mona: "Mona",
+  Rashid: "Rashid",
+  "Dr. Majed": "Dr. Majed",
+  Amro: "Amro",
+  Edlyn: "Procure",
+  Aileen: "Finance",
+  Admin: "Admin",
+};
+
+export function getRoleDisplayName(role: Role) {
+  return ROLE_DISPLAY_NAMES[role];
+}
+
 export const STATUSES = [
   "Draft",
   "Submitted",
@@ -62,14 +80,16 @@ export const WORKFLOW_STAGES: Array<{
   {
     id: 4,
     key: "edlyn",
-    label: "Edlyn Purchase and Item Confirmation",
+    label: "Procure Purchase and Item Confirmation",
     ownerRole: "Edlyn",
+    ownerLabel: "Procure",
   },
   {
     id: 5,
     key: "aileen",
-    label: "Aileen Finance Documentation",
+    label: "Finance Documentation",
     ownerRole: "Aileen",
+    ownerLabel: "Finance",
   },
 ];
 
@@ -493,16 +513,16 @@ export const seedUsers: UserProfile[] = [
   },
   {
     id: "user-edlyn",
-    name: "Edlyn",
-    email: "edlyn@example.com",
+    name: "Procure",
+    email: PROCURE_APPROVAL_EMAIL,
     role: "Edlyn",
-    department: "Purchasing",
+    department: "Procurement",
     active: true,
   },
   {
     id: "user-aileen",
-    name: "Aileen",
-    email: "aileen@example.com",
+    name: "Finance",
+    email: FINANCE_APPROVAL_EMAIL,
     role: "Aileen",
     department: "Finance",
     active: true,
@@ -818,7 +838,7 @@ export const seedAuditLogs: AuditLog[] = [
     previousStatus: "Purchase in Progress",
     newStatus: "Aileen Finance Review",
     uploadedInvoiceReference: "ol-2104.pdf",
-    assignedPerson: "Aileen",
+    assignedPerson: "Finance",
   },
   {
     id: "audit-107-1",
@@ -936,32 +956,32 @@ export function getPendingAction(request: ProcurementRequest) {
     case "Rashid Review":
       return "Rashid to approve or decline";
     case "Dr. Majed Review":
-      return "Dr. Majed to review and forward to Edlyn";
+      return "Dr. Majed to review and forward to Procure";
     case "Amro Review":
-      return "Amro to review and forward to Edlyn";
+      return "Amro to review and forward to Procure";
     case "Rashid Auto Approved":
       if (request.stage === "edlyn") {
-        return "Edlyn to confirm item details";
+        return "Procure to confirm item details";
       }
-      return `${getDepartmentReviewRole(request.department) ?? "Department reviewer"} to review and forward to Edlyn`;
+      return `${getDepartmentReviewRole(request.department) ?? "Department reviewer"} to review and forward to Procure`;
     case "Edlyn Confirmation":
-      return "Edlyn to confirm item details";
+      return "Procure to confirm item details";
     case "Edlyn Clarification Requested":
-      return "Employee to answer Edlyn clarification";
+      return "Employee to answer Procure clarification";
     case "Purchase in Progress":
-      return "Edlyn to purchase, request clarification, or upload invoice";
+      return "Procure to purchase, request clarification, or upload invoice";
     case "Aileen Finance Review":
     case "Invoice Uploaded":
-      return "Aileen to document and clear invoice";
+      return "Finance to document and clear invoice";
     case "Invoice Cleared":
     case "Edlyn Order Confirmation":
-      return "Edlyn to confirm the order and start delivery tracking";
+      return "Procure to confirm the order and start delivery tracking";
     case "Delivery Tracking":
-      return "Edlyn to update logistics or mark item received";
+      return "Procure to update logistics or mark item received";
     case "Order Confirmed":
-      return "Edlyn to mark item received";
+      return "Procure to mark item received";
     case "Item Received":
-      return "Aileen to close the case";
+      return "Finance to close the case";
     case "Completed":
       return "No pending action";
     case "Rashid Declined":
@@ -1076,8 +1096,8 @@ function getPostRashidRoute(
     stage: "edlyn",
     title: autoApproved ? "Auto-approved purchase task" : "Purchase task assigned",
     body: autoApproved
-      ? `${request.id} was auto approved at Rashid stage and is ready for Edlyn item confirmation.`
-      : `${request.id} is ready for Edlyn item confirmation.`,
+      ? `${request.id} was auto approved at Rashid stage and is ready for Procure item confirmation.`
+      : `${request.id} is ready for Procure item confirmation.`,
   };
 }
 
@@ -1344,7 +1364,7 @@ export function transitionRequest(
       editable.status = "Purchase in Progress";
       editable.stage = "edlyn";
       editable.assigneeId = actor.id;
-      actionLabel = "Edlyn confirmed item details";
+      actionLabel = "Procure confirmed item details";
       comment = workflowAction.comment;
       break;
     }
@@ -1363,14 +1383,14 @@ export function transitionRequest(
       editable.stage = "edlyn";
       editable.assigneeId = editable.submittedById;
       editable.previousResponsibleId = actor.id;
-      actionLabel = "Edlyn requested clarification";
+      actionLabel = "Procure requested clarification";
       comment = workflowAction.comment;
       addNotification(
         nextState.notifications,
         {
           userId: editable.submittedById,
           requestId,
-          title: "Edlyn needs clarification",
+          title: "Procure needs clarification",
           body: `${editable.id} needs item or price clarification from you: ${comment}`,
           type: "system",
         },
@@ -1391,7 +1411,7 @@ export function transitionRequest(
       editable.stage = "edlyn";
       editable.previousResponsibleId = actor.id;
       delete editable.edlynClarificationReturnStatus;
-      actionLabel = "Employee answered Edlyn clarification";
+      actionLabel = "Employee answered Procure clarification";
       comment = workflowAction.comment;
       addNotification(
         nextState.notifications,
@@ -1399,7 +1419,7 @@ export function transitionRequest(
           userId: assignee.id,
           requestId,
           title: "Clarification received",
-          body: `${editable.id} clarification has been submitted and is back with Edlyn.`,
+          body: `${editable.id} clarification has been submitted and is back with Procure.`,
           type: "system",
         },
         dateTime,
@@ -1472,8 +1492,8 @@ export function transitionRequest(
           requestId,
           title: "Order confirmation required",
           body: workflowAction.financeNotes?.trim()
-            ? `${editable.id} is cleared by finance and is back with Edlyn. Finance note: ${workflowAction.financeNotes.trim()}`
-            : `${editable.id} is cleared by finance and is back with Edlyn. Inform the employee that the order has been placed.`,
+            ? `${editable.id} is cleared by finance and is back with Procure. Finance note: ${workflowAction.financeNotes.trim()}`
+            : `${editable.id} is cleared by finance and is back with Procure. Inform the employee that the order has been placed.`,
           type: "finance",
         },
         dateTime,
@@ -1813,11 +1833,14 @@ export function answerProcurementQuestion(
       : "No requests are currently pending with Amro.";
   }
 
-  if (normalized.includes("invoice") && normalized.includes("aileen")) {
+  if (
+    normalized.includes("invoice") &&
+    (normalized.includes("aileen") || normalized.includes("finance"))
+  ) {
     const rows = state.requests.filter((request) => request.status === "Aileen Finance Review");
     return rows.length
       ? rows.map(describe).join("\n")
-      : "No invoices are currently pending with Aileen.";
+      : "No invoices are currently pending with Finance.";
   }
 
   if (normalized.includes("stuck") || normalized.includes("more than 2 days")) {
@@ -1864,7 +1887,7 @@ export function answerProcurementQuestion(
       : "I cannot see any procurement requests for your current role.";
   }
 
-  return "I can answer questions such as: status of my request, pending with Rashid, pending with Dr. Majed, pending with Amro, invoices pending with Aileen, stuck more than 2 days, order placed, request PR-102 stage, or completed requests this month.";
+  return "I can answer questions such as: status of my request, pending with Rashid, pending with Dr. Majed, pending with Amro, invoices pending with Finance, stuck more than 2 days, order placed, request PR-102 stage, or completed requests this month.";
 }
 
 export function serializeState(state: ProcurementState) {
@@ -1879,10 +1902,18 @@ export function parseState(serialized: string | null) {
       .replaceAll("Dr. Masjid", "Dr. Majed")
       .replaceAll("dr.masjid", "dr.majed")
       .replaceAll("Dr. Majed approval", "Dr. Majed review");
+  const migrateApprovalDisplayText = (value?: string) =>
+    migrateText(value)
+      .replaceAll("edlyn@example.com", PROCURE_APPROVAL_EMAIL)
+      .replaceAll("aileen@example.com", FINANCE_APPROVAL_EMAIL)
+      .replaceAll("Edlyn", "Procure")
+      .replaceAll("Aileen", "Finance");
   const migrateUserId = (userId?: string) =>
     userId === "user-dr-masjid" ? "user-dr-majed" : (userId ?? "");
   const migrateRole = (role: unknown): Role => {
     const roleText = migrateText(String(role));
+    if (roleText === "Procure") return "Edlyn";
+    if (roleText === "Finance") return "Aileen";
     return ROLES.includes(roleText as Role) ? (roleText as Role) : "Employee";
   };
   const migrateStatus = (status: unknown): RequestStatus => {
@@ -1913,26 +1944,78 @@ export function parseState(serialized: string | null) {
     );
     return deduped.length > 0 ? deduped : [...DEFAULT_PROJECT_OPTIONS];
   };
-
-  const migrateState = (
-    state: ProcurementState & { projectOptions?: string[] },
-  ): ProcurementState => {
-    const migratedUsers = state.users.map((user) => ({
+  const normalizeApprovalUser = (user: UserProfile): UserProfile => {
+    const migratedUser = {
       ...user,
       id: migrateUserId(user.id),
       name: migrateText(user.name),
       email: migrateText(user.email),
       role: migrateRole(user.role),
-    }));
-    if (!migratedUsers.some((user) => user.role === "Amro")) {
-      migratedUsers.push(requireRoleUser(seedUsers, "Amro"));
+    };
+    const email = migratedUser.email.toLowerCase();
+    const personalRequesterEmails = new Set([
+      "edlyn@sulmi.ai",
+      "ednyl@sulmi.ai",
+      "endyl@sulmi.ai",
+      "aileen@sulmi.ai",
+      "alieen@sulmi.ai",
+    ]);
+
+    if (
+      migratedUser.id === "user-edlyn" ||
+      email === "edlyn@example.com" ||
+      email === PROCURE_APPROVAL_EMAIL.toLowerCase()
+    ) {
+      return {
+        ...migratedUser,
+        name: "Procure",
+        email: PROCURE_APPROVAL_EMAIL,
+        role: "Edlyn",
+        department: "Procurement",
+        active: true,
+      };
+    }
+
+    if (
+      migratedUser.id === "user-aileen" ||
+      email === "aileen@example.com" ||
+      email === FINANCE_APPROVAL_EMAIL.toLowerCase()
+    ) {
+      return {
+        ...migratedUser,
+        name: "Finance",
+        email: FINANCE_APPROVAL_EMAIL,
+        role: "Aileen",
+        department: "Finance",
+        active: true,
+      };
+    }
+
+    if (personalRequesterEmails.has(email)) {
+      return {
+        ...migratedUser,
+        role: "Employee",
+      };
+    }
+
+    return migratedUser;
+  };
+
+  const migrateState = (
+    state: ProcurementState & { projectOptions?: string[] },
+  ): ProcurementState => {
+    const migratedUsers = state.users.map(normalizeApprovalUser);
+    for (const role of ["Amro", "Edlyn", "Aileen"] as const) {
+      if (!migratedUsers.some((user) => user.role === role)) {
+        migratedUsers.push(requireRoleUser(seedUsers, role));
+      }
     }
     const drMajedUser = migratedUsers.find((user) => user.role === "Dr. Majed");
     const amroUser = migratedUsers.find((user) => user.role === "Amro");
     const edlynUser = migratedUsers.find((user) => user.role === "Edlyn");
     const projectOptions = normalizeProjectOptions(state.projectOptions);
     const migratedNotifications = state.notifications.map((notification) => {
-      const migratedBody = migrateText(notification.body);
+      const migratedBody = migrateApprovalDisplayText(notification.body);
 
       return {
         ...notification,
@@ -1941,7 +2024,7 @@ export function parseState(serialized: string | null) {
           notification.title === "Approval pending" &&
           migratedBody.includes("Dr. Majed")
             ? "Review pending"
-            : migrateText(notification.title),
+            : migrateApprovalDisplayText(notification.title),
         body: migratedBody,
       };
     });
@@ -2030,11 +2113,11 @@ export function parseState(serialized: string | null) {
       auditLogs: state.auditLogs.map((log) => ({
         ...log,
         userId: migrateUserId(log.userId),
-        userName: migrateText(log.userName),
-        action: migrateText(log.action),
+        userName: migrateApprovalDisplayText(log.userName),
+        action: migrateApprovalDisplayText(log.action),
         previousStatus: migrateStatus(log.previousStatus),
         newStatus: migrateStatus(log.newStatus),
-        comment: log.comment ? migrateText(log.comment) : log.comment,
+        comment: log.comment ? migrateApprovalDisplayText(log.comment) : log.comment,
         declineReason: log.declineReason
           ? migrateText(log.declineReason)
           : log.declineReason,
@@ -2042,14 +2125,14 @@ export function parseState(serialized: string | null) {
           ? migrateText(log.uploadedInvoiceReference)
           : log.uploadedInvoiceReference,
         assignedPerson: log.assignedPerson
-          ? migrateText(log.assignedPerson)
+          ? migrateApprovalDisplayText(log.assignedPerson)
           : log.assignedPerson,
       })),
       notifications,
       chatbotMessages: state.chatbotMessages.map((message) => ({
         ...message,
         userId: migrateUserId(message.userId),
-        content: migrateText(message.content),
+        content: migrateApprovalDisplayText(message.content),
       })),
     };
   };
