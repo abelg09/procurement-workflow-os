@@ -36,6 +36,10 @@ try {
     exitCode = result.status ?? 1;
   } else {
     writeFileSync(join(root, "out/.nojekyll"), "");
+    const customDomain = process.env.GITHUB_PAGES_CUSTOM_DOMAIN?.trim();
+    if (customDomain) {
+      writeFileSync(join(root, "out/CNAME"), `${customDomain}\n`);
+    }
   }
 } finally {
   restoreApiRoutes();

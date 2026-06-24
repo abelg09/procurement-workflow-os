@@ -61,3 +61,14 @@ SUPABASE_SERVICE_ROLE_KEY=
 ```
 
 Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase Auth provider and add the GitHub Pages URL to the allowed redirect URLs. The public GitHub Pages deployment is gated behind Google sign-in when Supabase client credentials are configured. The app syncs the shared procurement workspace through the `procurement_app_state` table, so requests and workflow actions persist across signed-in users. Set `NEXT_PUBLIC_ADMIN_EMAILS` to bootstrap the first admin account, then use Admin controls to assign Mona, Rashid, Dr. Majed, Edlyn, and Aileen roles.
+
+## Custom domain
+
+For a branded GitHub Pages domain such as `procurement.sulmi.ai`, set these GitHub repository variables before deploying:
+
+```bash
+NEXT_PUBLIC_SITE_BASE_PATH=/
+GITHUB_PAGES_CUSTOM_DOMAIN=procurement.sulmi.ai
+```
+
+Then point the DNS `CNAME` record for the subdomain to `abelg09.github.io`, set the same custom domain in the repository Pages settings, and add the custom domain URL to Supabase Auth Site URL and Redirect URLs.

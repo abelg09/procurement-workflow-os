@@ -99,10 +99,11 @@ const BULK_TEMPLATE_HEADERS = [
   "vendor_name",
 ];
 const BULK_SUPPORTED_CURRENCIES = CURRENCIES.filter((currency) => currency !== "Other");
+const configuredPublicBasePath =
+  process.env.NEXT_PUBLIC_SITE_BASE_PATH ??
+  (process.env.NEXT_PUBLIC_GITHUB_PAGES === "true" ? "/procurement-workflow-os" : "");
 const PUBLIC_BASE_PATH =
-  process.env.NEXT_PUBLIC_GITHUB_PAGES === "true"
-    ? "/procurement-workflow-os"
-    : "";
+  configuredPublicBasePath === "/" ? "" : configuredPublicBasePath.replace(/\/$/, "");
 const hasSupabaseClientConfig = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
 );
