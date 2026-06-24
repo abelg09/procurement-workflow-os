@@ -17,28 +17,33 @@ export async function POST() {
 
   const { data: pendingRequests, error } = await supabase
     .from("procurement_requests")
-    .select("id, assignee_id, status")
-    .in("status", ["Rashid Review", "Dr. Majed Review"]);
+    .select("id, assignee_id, status, stage")
+    .in("status", ["Rashid Review", "Dr. Majed Review", "Amro Review", "Rashid Auto Approved"]);
 
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
   const notifications =
-    pendingRequests?.map((request) => ({
-      user_id: request.assignee_id,
-      request_id: request.id,
-      title:
-        request.status === "Dr. Majed Review"
-          ? "Daily review reminder"
-          : "Daily approval reminder",
-      body:
-        request.status === "Dr. Majed Review"
-          ? `${request.id} is still pending your review.`
-          : `${request.id} is still pending your approval.`,
-      type: "reminder",
-      read: false,
-    })) ?? [];
+    pendingRequests
+      ?.filter(
+        (request) =>
+          request.status !== "Rashid Auto Approved" || request.stage === "dr-majed",
+      )
+      .map((request) => ({
+        user_id: request.assignee_id,
+        request_id: request.id,
+        title:
+          request.status === "Rashid Review"
+            ? "Daily approval reminder"
+            : "Daily review reminder",
+        body:
+          request.status === "Rashid Review"
+            ? `${request.id} is still pending your approval.`
+            : `${request.id} is still pending your department review.`,
+        type: "reminder",
+        read: false,
+      })) ?? [];
 
   if (notifications.length > 0) {
     const { error: insertError } = await supabase

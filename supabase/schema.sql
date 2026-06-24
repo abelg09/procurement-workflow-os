@@ -5,6 +5,7 @@ begin
     'Mona',
     'Rashid',
     'Dr. Majed',
+    'Amro',
     'Edlyn',
     'Aileen',
     'Admin'
@@ -36,6 +37,7 @@ begin
     'Rashid Auto Approved',
     'Rashid Declined',
     'Dr. Majed Review',
+    'Amro Review',
     'Edlyn Confirmation',
     'Edlyn Clarification Requested',
     'Purchase in Progress',
@@ -53,6 +55,8 @@ exception
   when duplicate_object then null;
 end $$;
 
+alter type user_role add value if not exists 'Amro';
+
 do $$
 begin
   create type payment_term as enum (
@@ -67,6 +71,8 @@ begin
 exception
   when duplicate_object then null;
 end $$;
+
+alter type request_status add value if not exists 'Amro Review';
 
 create table if not exists procurement_projects (
   id uuid primary key default gen_random_uuid(),

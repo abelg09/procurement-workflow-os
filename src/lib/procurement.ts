@@ -3,6 +3,7 @@ export const ROLES = [
   "Mona",
   "Rashid",
   "Dr. Majed",
+  "Amro",
   "Edlyn",
   "Aileen",
   "Admin",
@@ -18,6 +19,7 @@ export const STATUSES = [
   "Rashid Auto Approved",
   "Rashid Declined",
   "Dr. Majed Review",
+  "Amro Review",
   "Edlyn Confirmation",
   "Edlyn Clarification Requested",
   "Purchase in Progress",
@@ -46,14 +48,16 @@ export const WORKFLOW_STAGES: Array<{
   key: WorkflowStage;
   label: string;
   ownerRole: Role;
+  ownerLabel?: string;
 }> = [
   { id: 1, key: "mona", label: "Mona Review", ownerRole: "Mona" },
   { id: 2, key: "rashid", label: "Rashid Approval", ownerRole: "Rashid" },
   {
     id: 3,
     key: "dr-majed",
-    label: "Dr. Majed Review",
+    label: "Department Review",
     ownerRole: "Dr. Majed",
+    ownerLabel: "Dr. Majed / Amro",
   },
   {
     id: 4,
@@ -110,6 +114,34 @@ export const DELIVERY_STATUSES = [
 ] as const;
 
 export type DeliveryStatus = (typeof DELIVERY_STATUSES)[number];
+
+type DepartmentReviewRole = "Dr. Majed" | "Amro";
+
+const DR_MAJED_REVIEW_DEPARTMENTS = ["Operations", "Engineering"];
+const AMRO_REVIEW_DEPARTMENTS = ["Marketing", "Sales"];
+
+export function getDepartmentReviewRole(department: string): DepartmentReviewRole | null {
+  if (DR_MAJED_REVIEW_DEPARTMENTS.includes(department)) {
+    return "Dr. Majed";
+  }
+
+  if (AMRO_REVIEW_DEPARTMENTS.includes(department)) {
+    return "Amro";
+  }
+
+  return null;
+}
+
+export function getDepartmentReviewStatus(
+  department: string,
+): "Dr. Majed Review" | "Amro Review" | null {
+  const reviewRole = getDepartmentReviewRole(department);
+
+  if (reviewRole === "Dr. Majed") return "Dr. Majed Review";
+  if (reviewRole === "Amro") return "Amro Review";
+
+  return null;
+}
 
 export type UserProfile = {
   id: string;
@@ -286,6 +318,7 @@ export type WorkflowAction =
   | { type: "rashid-approve"; comment?: string }
   | { type: "rashid-decline"; declineReason: string }
   | { type: "dr-review"; comment?: string }
+  | { type: "department-review"; comment?: string }
   | { type: "edlyn-confirm"; comment?: string }
   | { type: "edlyn-request-clarification"; comment: string }
   | { type: "employee-submit-edlyn-clarification"; comment: string }
@@ -448,6 +481,14 @@ export const seedUsers: UserProfile[] = [
     email: "dr.majed@example.com",
     role: "Dr. Majed",
     department: "Executive Office",
+    active: true,
+  },
+  {
+    id: "user-amro",
+    name: "Amro",
+    email: "Aamro.mandil@sulmi.ai",
+    role: "Amro",
+    department: "Commercial",
     active: true,
   },
   {
@@ -867,7 +908,8 @@ export function isApprovalStatus(status: RequestStatus) {
     status === "Mona Review" ||
     status === "Rashid Review" ||
     status === "Rashid Auto Approved" ||
-    status === "Dr. Majed Review"
+    status === "Dr. Majed Review" ||
+    status === "Amro Review"
   );
 }
 
@@ -895,8 +937,13 @@ export function getPendingAction(request: ProcurementRequest) {
       return "Rashid to approve or decline";
     case "Dr. Majed Review":
       return "Dr. Majed to review and forward to Edlyn";
+    case "Amro Review":
+      return "Amro to review and forward to Edlyn";
     case "Rashid Auto Approved":
-      return "Dr. Majed to review and forward to Edlyn";
+      if (request.stage === "edlyn") {
+        return "Edlyn to confirm item details";
+      }
+      return `${getDepartmentReviewRole(request.department) ?? "Department reviewer"} to review and forward to Edlyn`;
     case "Edlyn Confirmation":
       return "Edlyn to confirm item details";
     case "Edlyn Clarification Requested":
@@ -996,6 +1043,42 @@ function requireRoleUser(users: UserProfile[], role: Role) {
     throw new Error(`No active ${role} user found`);
   }
   return user;
+}
+
+function getPostRashidRoute(
+  request: ProcurementRequest,
+  autoApproved: boolean,
+): {
+  role: Role;
+  status: RequestStatus;
+  stage: WorkflowStage;
+  title: string;
+  body: string;
+} {
+  const reviewRole = getDepartmentReviewRole(request.department);
+
+  if (reviewRole) {
+    const reviewStatus = getDepartmentReviewStatus(request.department) ?? "Dr. Majed Review";
+    return {
+      role: reviewRole,
+      status: autoApproved ? "Rashid Auto Approved" : reviewStatus,
+      stage: "dr-majed",
+      title: autoApproved ? "Auto-approved request ready" : "Review required",
+      body: autoApproved
+        ? `${request.id} was auto approved at Rashid stage and is ready for ${reviewRole} review.`
+        : `${request.id} is ready for ${reviewRole} review.`,
+    };
+  }
+
+  return {
+    role: "Edlyn",
+    status: autoApproved ? "Rashid Auto Approved" : "Edlyn Confirmation",
+    stage: "edlyn",
+    title: autoApproved ? "Auto-approved purchase task" : "Purchase task assigned",
+    body: autoApproved
+      ? `${request.id} was auto approved at Rashid stage and is ready for Edlyn item confirmation.`
+      : `${request.id} is ready for Edlyn item confirmation.`,
+  };
 }
 
 export function submitProcurementRequest(
@@ -1115,9 +1198,10 @@ export function transitionRequest(
       comment = workflowAction.comment;
       const totalAed = getRequestTotalAed(editable);
       if (totalAed < 300) {
-        const assignee = assignTo("Dr. Majed", { notify: false });
-        editable.status = "Rashid Auto Approved";
-        editable.stage = "dr-majed";
+        const route = getPostRashidRoute(editable, true);
+        const assignee = assignTo(route.role, { notify: false });
+        editable.status = route.status;
+        editable.stage = route.stage;
         editable.previousResponsibleId = actor.id;
         actionLabel = "Mona approved request; Rashid auto approved below AED 300";
         comment =
@@ -1128,8 +1212,8 @@ export function transitionRequest(
           {
             userId: assignee.id,
             requestId,
-            title: "Auto-approved request ready",
-            body: `${editable.id} was auto approved at Rashid stage and is ready for Dr. Majed review.`,
+            title: route.title,
+            body: route.body,
             type: "approved",
           },
           dateTime,
@@ -1180,9 +1264,10 @@ export function transitionRequest(
       if (!canAct(["Rashid Review"], "Rashid")) {
         return state;
       }
-      const assignee = assignTo("Dr. Majed", { notify: false });
-      editable.status = "Dr. Majed Review";
-      editable.stage = "dr-majed";
+      const route = getPostRashidRoute(editable, false);
+      const assignee = assignTo(route.role, { notify: false });
+      editable.status = route.status;
+      editable.stage = route.stage;
       editable.previousResponsibleId = actor.id;
       actionLabel = "Rashid approved request";
       comment = workflowAction.comment;
@@ -1191,8 +1276,8 @@ export function transitionRequest(
         {
           userId: assignee.id,
           requestId,
-          title: "Review required",
-          body: `${editable.id} is ready for Dr. Majed review.`,
+          title: route.title,
+          body: route.body,
           type: "assigned",
         },
         dateTime,
@@ -1222,15 +1307,22 @@ export function transitionRequest(
       );
       break;
     }
-    case "dr-review": {
-      if (!canAct(["Dr. Majed Review", "Rashid Auto Approved"], "Dr. Majed")) {
+    case "dr-review":
+    case "department-review": {
+      const reviewRole = getDepartmentReviewRole(editable.department);
+      const reviewStatuses: RequestStatus[] =
+        reviewRole === "Amro"
+          ? ["Amro Review", "Rashid Auto Approved"]
+          : ["Dr. Majed Review", "Rashid Auto Approved"];
+
+      if (!reviewRole || !canAct(reviewStatuses, reviewRole)) {
         return state;
       }
       const assignee = assignTo("Edlyn", { notify: false });
       editable.status = "Edlyn Confirmation";
       editable.stage = "edlyn";
       editable.previousResponsibleId = actor.id;
-      actionLabel = "Dr. Majed completed review";
+      actionLabel = `${actor.name} completed department review`;
       comment = workflowAction.comment;
       addNotification(
         nextState.notifications,
@@ -1238,7 +1330,7 @@ export function transitionRequest(
           userId: assignee.id,
           requestId,
           title: "Purchase task assigned",
-          body: `${editable.id} has been reviewed by Dr. Majed and is ready for item confirmation.`,
+          body: `${editable.id} has been reviewed by ${actor.name} and is ready for item confirmation.`,
           type: "assigned",
         },
         dateTime,
@@ -1246,7 +1338,7 @@ export function transitionRequest(
       break;
     }
     case "edlyn-confirm": {
-      if (!canAct(["Edlyn Confirmation"], "Edlyn")) {
+      if (!canAct(["Edlyn Confirmation", "Rashid Auto Approved"], "Edlyn")) {
         return state;
       }
       editable.status = "Purchase in Progress";
@@ -1548,8 +1640,7 @@ export function getVisibleRequests(state: ProcurementState, user: UserProfile) {
   return state.requests.filter(
     (request) =>
       request.assigneeId === user.id ||
-      request.submittedById === user.id ||
-      request.stage === WORKFLOW_STAGES.find((stage) => stage.ownerRole === user.role)?.key,
+      request.submittedById === user.id,
   );
 }
 
@@ -1629,24 +1720,22 @@ export function getMetrics(requests: ProcurementRequest[]) {
 export function createDailyReminderNotifications(state: ProcurementState) {
   const dateTime = nowIso();
   const pending = state.requests.filter((request) =>
-    ["Rashid Review", "Dr. Majed Review"].includes(request.status),
+    ["Rashid Review", "Dr. Majed Review", "Amro Review"].includes(request.status) ||
+    (request.status === "Rashid Auto Approved" && request.stage === "dr-majed"),
   );
   const nextNotifications = [...state.notifications];
 
   pending.forEach((request) => {
+    const reviewReminder = request.status !== "Rashid Review";
     addNotification(
       nextNotifications,
       {
         userId: request.assigneeId,
         requestId: request.id,
-        title:
-          request.status === "Dr. Majed Review"
-            ? "Daily review reminder"
-            : "Daily approval reminder",
-        body:
-          request.status === "Dr. Majed Review"
-            ? `${request.id} is still pending your review.`
-            : `${request.id} is still pending your approval.`,
+        title: reviewReminder ? "Daily review reminder" : "Daily approval reminder",
+        body: reviewReminder
+          ? `${request.id} is still pending your department review.`
+          : `${request.id} is still pending your approval.`,
         type: "reminder",
       },
       dateTime,
@@ -1701,10 +1790,27 @@ export function answerProcurementQuestion(
     normalized.includes("pending with dr. masjid") ||
     normalized.includes("pending with dr. majed")
   ) {
-    const rows = state.requests.filter((request) => request.status === "Dr. Majed Review");
+    const rows = state.requests.filter(
+      (request) =>
+        request.status === "Dr. Majed Review" ||
+        (request.status === "Rashid Auto Approved" &&
+          getDepartmentReviewRole(request.department) === "Dr. Majed"),
+    );
     return rows.length
       ? rows.map(describe).join("\n")
       : "No requests are currently pending with Dr. Majed.";
+  }
+
+  if (normalized.includes("pending with amro") || normalized.includes("pending with aamro")) {
+    const rows = state.requests.filter(
+      (request) =>
+        request.status === "Amro Review" ||
+        (request.status === "Rashid Auto Approved" &&
+          getDepartmentReviewRole(request.department) === "Amro"),
+    );
+    return rows.length
+      ? rows.map(describe).join("\n")
+      : "No requests are currently pending with Amro.";
   }
 
   if (normalized.includes("invoice") && normalized.includes("aileen")) {
@@ -1758,7 +1864,7 @@ export function answerProcurementQuestion(
       : "I cannot see any procurement requests for your current role.";
   }
 
-  return "I can answer questions such as: status of my request, pending with Rashid, pending with Dr. Majed, invoices pending with Aileen, stuck more than 2 days, order placed, request PR-102 stage, or completed requests this month.";
+  return "I can answer questions such as: status of my request, pending with Rashid, pending with Dr. Majed, pending with Amro, invoices pending with Aileen, stuck more than 2 days, order placed, request PR-102 stage, or completed requests this month.";
 }
 
 export function serializeState(state: ProcurementState) {
@@ -1818,7 +1924,12 @@ export function parseState(serialized: string | null) {
       email: migrateText(user.email),
       role: migrateRole(user.role),
     }));
+    if (!migratedUsers.some((user) => user.role === "Amro")) {
+      migratedUsers.push(requireRoleUser(seedUsers, "Amro"));
+    }
     const drMajedUser = migratedUsers.find((user) => user.role === "Dr. Majed");
+    const amroUser = migratedUsers.find((user) => user.role === "Amro");
+    const edlynUser = migratedUsers.find((user) => user.role === "Edlyn");
     const projectOptions = normalizeProjectOptions(state.projectOptions);
     const migratedNotifications = state.notifications.map((notification) => {
       const migratedBody = migrateText(notification.body);
@@ -1862,21 +1973,45 @@ export function parseState(serialized: string | null) {
           migratedStatus === "Invoice Cleared" && migratedStage === "edlyn"
             ? "Edlyn Order Confirmation"
             : migratedStatus;
+        const department = migrateDepartment(request.department);
+        const reviewRole = getDepartmentReviewRole(department);
+        const reroutePendingDepartmentReview =
+          migratedStage === "dr-majed" &&
+          ["Dr. Majed Review", "Amro Review", "Rashid Auto Approved"].includes(currentStatus);
+        let nextStatus = currentStatus;
+        let nextStage = migratedStage;
+        let nextAssigneeId =
+          deprecatedDrDecline && drMajedUser
+            ? drMajedUser.id
+            : migrateUserId(request.assigneeId);
+
+        if (reroutePendingDepartmentReview) {
+          if (reviewRole === "Dr. Majed" && drMajedUser) {
+            nextStatus =
+              currentStatus === "Rashid Auto Approved" ? currentStatus : "Dr. Majed Review";
+            nextAssigneeId = drMajedUser.id;
+          } else if (reviewRole === "Amro" && amroUser) {
+            nextStatus = currentStatus === "Rashid Auto Approved" ? currentStatus : "Amro Review";
+            nextAssigneeId = amroUser.id;
+          } else if (!reviewRole && edlynUser) {
+            nextStatus =
+              currentStatus === "Rashid Auto Approved" ? currentStatus : "Edlyn Confirmation";
+            nextStage = "edlyn";
+            nextAssigneeId = edlynUser.id;
+          }
+        }
 
         return normalizeRequestFinancials({
           ...request,
           project: request.project || projectOptions[0] || DEFAULT_PROJECT_OPTIONS[0],
-          department: migrateDepartment(request.department),
+          department,
           employeeName: migrateText(request.employeeName),
           itemDescription: migrateText(request.itemDescription),
           reasonForPurchase: migrateText(request.reasonForPurchase),
           vendorName: migrateText(request.vendorName),
-          status: currentStatus,
-          stage: migratedStage,
-          assigneeId:
-            deprecatedDrDecline && drMajedUser
-              ? drMajedUser.id
-              : migrateUserId(request.assigneeId),
+          status: nextStatus,
+          stage: nextStage,
+          assigneeId: nextAssigneeId,
           submittedById: migrateUserId(request.submittedById),
           previousResponsibleId: request.previousResponsibleId
             ? migrateUserId(request.previousResponsibleId)

@@ -51,6 +51,7 @@ import {
   ProcurementRequestDraft,
   ProcurementState,
   RequestStatus,
+  ROLES,
   Role,
   STATUSES,
   UserProfile,
@@ -58,6 +59,7 @@ import {
   answerProcurementQuestion,
   createDailyReminderNotifications,
   getAssigneeName,
+  getDepartmentReviewRole,
   getMetrics,
   getPendingAction,
   getPersonalRequests,
@@ -270,6 +272,9 @@ const roleFromSignedInUser = (user: SignedInUser): Role => {
   if (identity.includes("mona")) return "Mona";
   if (identity.includes("rashid")) return "Rashid";
   if (identity.includes("majed") || identity.includes("masjid")) return "Dr. Majed";
+  if (identity.includes("amro") || identity.includes("aamro") || identity.includes("mandil")) {
+    return "Amro";
+  }
   if (identity.includes("edlyn") || identity.includes("ednyl")) return "Edlyn";
   if (identity.includes("aileen") || identity.includes("alieen")) return "Aileen";
 
@@ -898,7 +903,7 @@ function WorkflowTracker({ request }: { request: ProcurementRequest }) {
             <p className="mt-3 break-words text-sm font-bold leading-5 text-slate-950">
               {stage.label}
             </p>
-            <p className="mt-1 text-xs text-slate-500">{stage.ownerRole}</p>
+            <p className="mt-1 text-xs text-slate-500">{stage.ownerLabel ?? stage.ownerRole}</p>
           </div>
         );
       })}
@@ -1941,6 +1946,7 @@ function ActionPanel({
   const deliveryNotesId = `${fieldPrefix}-delivery-notes`;
 
   const role = currentUser.role;
+  const departmentReviewRole = getDepartmentReviewRole(request.department);
   const clearText = () => {
     setComment("");
     setDeclineReason("");
@@ -2106,16 +2112,19 @@ function ActionPanel({
           </div>
         ) : null}
 
-        {["Dr. Majed Review", "Rashid Auto Approved"].includes(request.status) &&
-        canUse("Dr. Majed") ? (
+        {["Dr. Majed Review", "Amro Review", "Rashid Auto Approved"].includes(request.status) &&
+        departmentReviewRole &&
+        request.stage === "dr-majed" &&
+        canUse(departmentReviewRole) ? (
           <div className="grid gap-3">
             <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
-              Dr. Majed reviews the request details only. Approval decisions remain with Rashid.
+              {departmentReviewRole} reviews this department request. Approval decisions remain
+              with Rashid.
             </div>
             <IconButton
               icon={<CheckCircle2 className="h-4 w-4" />}
               onClick={() => {
-                onTransition(request.id, { type: "dr-review", comment });
+                onTransition(request.id, { type: "department-review", comment });
                 clearText();
               }}
               variant="success"
@@ -2125,7 +2134,9 @@ function ActionPanel({
           </div>
         ) : null}
 
-        {request.status === "Edlyn Confirmation" && canUse("Edlyn") ? (
+        {((request.status === "Edlyn Confirmation") ||
+          (request.status === "Rashid Auto Approved" && request.stage === "edlyn")) &&
+        canUse("Edlyn") ? (
           <div className="flex flex-wrap gap-2">
             <IconButton
               icon={<ShoppingCart className="h-4 w-4" />}
@@ -2329,11 +2340,18 @@ function ActionPanel({
         !(
           (request.status === "Mona Review" && canUse("Mona")) ||
           (request.status === "Rashid Review" && canUse("Rashid")) ||
-          (["Dr. Majed Review", "Rashid Auto Approved"].includes(request.status) &&
-            canUse("Dr. Majed")) ||
+          (["Dr. Majed Review", "Amro Review", "Rashid Auto Approved"].includes(
+            request.status,
+          ) &&
+            departmentReviewRole &&
+            request.stage === "dr-majed" &&
+            canUse(departmentReviewRole)) ||
           (["Edlyn Confirmation", "Purchase in Progress", "Invoice Cleared", "Edlyn Order Confirmation", "Delivery Tracking", "Order Confirmed"].includes(
             request.status,
           ) &&
+            canUse("Edlyn")) ||
+          (request.status === "Rashid Auto Approved" &&
+            request.stage === "edlyn" &&
             canUse("Edlyn")) ||
           (["Aileen Finance Review", "Item Received"].includes(request.status) &&
             canUse("Aileen"))
@@ -3016,7 +3034,7 @@ function AdminPanel({
                           updateUser(user.id, { role: event.target.value as Role })
                         }
                       >
-                        {["Employee", "Mona", "Rashid", "Dr. Majed", "Edlyn", "Aileen", "Admin"].map((role) => (
+                        {ROLES.map((role) => (
                           <option key={role}>{role}</option>
                         ))}
                       </SelectInput>
@@ -3206,6 +3224,7 @@ function ProcurementAssistant({
       <div className="flex flex-wrap gap-2 border-t border-slate-200 p-3">
         {[
           "Which requests are pending with Rashid?",
+          "Which requests are pending with Amro?",
           "Which invoices are pending with Aileen?",
           "Show me requests stuck for more than 2 days.",
           "Show all completed requests this month.",
