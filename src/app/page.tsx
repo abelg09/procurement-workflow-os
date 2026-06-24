@@ -105,7 +105,7 @@ const PUBLIC_BASE_PATH =
 const hasSupabaseClientConfig = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
 );
-const allowedEmailDomains = (process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAINS || "sulmi.com")
+const allowedEmailDomains = (process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAINS || "sulmi.ai")
   .split(",")
   .map((domain) => domain.trim().toLowerCase())
   .filter(Boolean);
