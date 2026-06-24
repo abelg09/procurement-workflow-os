@@ -18,6 +18,7 @@ import {
   Filter,
   History,
   LayoutDashboard,
+  LogOut,
   PackageCheck,
   Plus,
   RefreshCcw,
@@ -32,6 +33,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { FormEvent, MouseEventHandler, ReactNode, useEffect, useId, useMemo, useState } from "react";
+import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
 import {
   AuditLog,
   AttachmentReference,
@@ -81,6 +83,7 @@ import {
   submitProcurementRequest,
   transitionRequest,
 } from "@/lib/procurement";
+import { getSupabaseBrowserClient } from "@/lib/supabase";
 
 const STORAGE_KEY = "procurement-workflow-state-v1";
 const FX_CACHE_KEY = "procurement-fx-rates-v1";
@@ -102,8 +105,21 @@ const PUBLIC_BASE_PATH =
 const hasSupabaseClientConfig = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
 );
+const allowedEmailDomains = (process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAINS || "sulmi.com")
+  .split(",")
+  .map((domain) => domain.trim().toLowerCase())
+  .filter(Boolean);
+const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
 
 type View = "dashboard" | "new-request" | "notifications" | "admin";
+type AuthStatus = "checking" | "signed-out" | "signed-in" | "blocked" | "missing-config" | "local-dev";
+
+type SignedInUser = {
+  id: string;
+  email: string;
+  name: string;
+  avatarUrl?: string;
+};
 
 type FxRateResult = {
   rate: number;
@@ -201,6 +217,56 @@ const money = (amount: number, currency = "AED") =>
 
 const classNames = (...values: Array<string | false | null | undefined>) =>
   values.filter(Boolean).join(" ");
+
+const isAllowedEmail = (email: string) => {
+  const domain = email.toLowerCase().split("@")[1] ?? "";
+  return allowedEmailDomains.includes(domain);
+};
+
+const signedInUserFromSupabase = (user: SupabaseAuthUser): SignedInUser | null => {
+  const email = user.email?.toLowerCase();
+
+  if (!email) {
+    return null;
+  }
+
+  const metadata = user.user_metadata as {
+    avatar_url?: string;
+    full_name?: string;
+    name?: string;
+  };
+
+  return {
+    id: user.id,
+    email,
+    name: metadata.full_name || metadata.name || email.split("@")[0] || "Employee",
+    avatarUrl: metadata.avatar_url,
+  };
+};
+
+const profileIdForSignedInUser = (user: SignedInUser) => `google-${user.id}`;
+
+const getSignedInProfile = (
+  state: ProcurementState,
+  user: SignedInUser,
+): UserProfile => {
+  const existing = state.users.find(
+    (profile) => profile.email.toLowerCase() === user.email,
+  );
+
+  if (existing) {
+    return existing;
+  }
+
+  return {
+    id: profileIdForSignedInUser(user),
+    name: user.name,
+    email: user.email,
+    role: "Employee",
+    department: "Operations",
+    active: true,
+  };
+};
 
 const panelClass =
   "rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.05)]";
@@ -511,6 +577,114 @@ function StatusBadge({ status }: { status: RequestStatus }) {
     >
       {status}
     </span>
+  );
+}
+
+function SignInScreen({
+  authError,
+  authStatus,
+  canUseLocalWorkspace,
+  onSignIn,
+  onSignOut,
+  onUseLocalWorkspace,
+}: {
+  authError: string;
+  authStatus: AuthStatus;
+  canUseLocalWorkspace: boolean;
+  onSignIn: () => void;
+  onSignOut: () => void;
+  onUseLocalWorkspace: () => void;
+}) {
+  const isChecking = authStatus === "checking";
+  const isBlocked = authStatus === "blocked";
+  const isMissingConfig = authStatus === "missing-config";
+  const allowedDomainText = allowedEmailDomains.map((domain) => `@${domain}`).join(", ");
+
+  return (
+    <main className="grid min-h-screen place-items-center bg-[#f6f8fb] px-4 py-8 text-slate-900">
+      <section className="w-full max-w-xl rounded-xl border border-slate-200/80 bg-white p-6 shadow-[0_12px_40px_rgba(15,23,42,0.08)] sm:p-8">
+        <div className="flex items-center gap-4">
+          <div className="flex h-14 w-40 shrink-0 items-center justify-center rounded-xl bg-black px-4">
+            <Image
+              alt="SULMI"
+              className="h-9 w-full object-contain"
+              height={36}
+              src={`${PUBLIC_BASE_PATH}/sulmi-logo.svg`}
+              unoptimized
+              width={130}
+            />
+          </div>
+        </div>
+
+        <div className="mt-8">
+          <div className="inline-flex items-center gap-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800">
+            <Shield className="h-4 w-4" />
+            Sulmi employee access only
+          </div>
+          <h1 className="mt-4 text-2xl font-bold tracking-tight text-slate-950">
+            Sign in to Procurement Workflow OS
+          </h1>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            Employees must sign in with their Sulmi Google account to submit procurement
+            requests and track only their own request status.
+          </p>
+        </div>
+
+        <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+          <p className="font-semibold text-slate-950">Allowed Google accounts</p>
+          <p className="mt-1">{allowedDomainText || "Configured Sulmi domains only"}</p>
+        </div>
+
+        {authError ? (
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
+            {authError}
+          </div>
+        ) : null}
+
+        {isBlocked ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            This Google account is not part of the configured Sulmi domain. Sign out and use
+            your company Google account.
+          </div>
+        ) : null}
+
+        {isMissingConfig ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            Google sign-in is not configured yet. Add Supabase Google OAuth credentials and
+            set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and
+            `NEXT_PUBLIC_ALLOWED_EMAIL_DOMAINS`.
+          </div>
+        ) : null}
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <IconButton
+            disabled={isChecking || isMissingConfig}
+            icon={<Shield className="h-4 w-4" />}
+            onClick={onSignIn}
+          >
+            {isChecking ? "Checking session..." : "Sign in with Google"}
+          </IconButton>
+          {isBlocked ? (
+            <IconButton
+              icon={<LogOut className="h-4 w-4" />}
+              onClick={onSignOut}
+              variant="secondary"
+            >
+              Sign out
+            </IconButton>
+          ) : null}
+          {canUseLocalWorkspace ? (
+            <IconButton
+              icon={<Shield className="h-4 w-4" />}
+              onClick={onUseLocalWorkspace}
+              variant="secondary"
+            >
+              Local admin workspace
+            </IconButton>
+          ) : null}
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -3102,9 +3276,13 @@ function EmployeePortal({
   setSelectedRequestId: (id: string) => void;
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
 }) {
+  const employeeRequests = useMemo(
+    () => getVisibleRequests(state, currentUser),
+    [state, currentUser],
+  );
   const selectedRequest =
-    state.requests.find((request) => request.id === selectedRequestId) ??
-    state.requests[0];
+    employeeRequests.find((request) => request.id === selectedRequestId) ??
+    employeeRequests[0];
 
   return (
     <div className="grid min-w-0 gap-5">
@@ -3113,7 +3291,7 @@ function EmployeePortal({
           <div className="min-w-0">
             <h2 className="text-xl font-bold text-slate-950">Employee procurement portal</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Submit a new request and track company procurement status in one place.
+              Submit a new request and track your procurement status in one place.
             </p>
           </div>
           <div className="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
@@ -3137,13 +3315,13 @@ function EmployeePortal({
 
       <RequestsTable
         currentUser={currentUser}
-        description="Read-only company status view for submitted requests and workflow progress."
+        description="Private status view for requests submitted from your employee account."
         hideFinancials
         onSelect={setSelectedRequestId}
-        requests={state.requests}
+        requests={employeeRequests}
         selectedRequestId={selectedRequest?.id}
         showAssigneeFilter={false}
-        title="Company procurement status"
+        title="My procurement status"
         users={state.users}
       />
 
@@ -3313,11 +3491,17 @@ function Dashboard({
 }
 
 export default function Home() {
+  const supabaseClient = useMemo(() => getSupabaseBrowserClient(), []);
   const [state, setState] = useState<ProcurementState>(initialState);
   const [browserStateLoaded, setBrowserStateLoaded] = useState(false);
   const [currentUserId, setCurrentUserId] = useState("user-admin");
   const [view, setView] = useState<View>("dashboard");
   const [selectedRequestId, setSelectedRequestId] = useState("PR-102");
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(
+    hasSupabaseClientConfig ? "checking" : "missing-config",
+  );
+  const [authUser, setAuthUser] = useState<SignedInUser | null>(null);
+  const [authError, setAuthError] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -3338,12 +3522,135 @@ export default function Home() {
     }
   }, [browserStateLoaded, state]);
 
+  useEffect(() => {
+    if (!supabaseClient) {
+      return;
+    }
+
+    let active = true;
+    const handleAuthUser = (user: SupabaseAuthUser | null) => {
+      if (!active) return;
+      const signedInUser = user ? signedInUserFromSupabase(user) : null;
+
+      setAuthUser(signedInUser);
+      setAuthError("");
+
+      if (!signedInUser) {
+        setAuthStatus("signed-out");
+        return;
+      }
+
+      if (!isAllowedEmail(signedInUser.email)) {
+        setAuthStatus("blocked");
+        setAuthError(`Use a Sulmi Google account (${allowedEmailDomains.map((domain) => `@${domain}`).join(", ")}).`);
+        return;
+      }
+
+      setAuthStatus("signed-in");
+    };
+
+    void supabaseClient.auth.getSession().then(({ data }) => {
+      handleAuthUser(data.session?.user ?? null);
+    });
+    const {
+      data: { subscription },
+    } = supabaseClient.auth.onAuthStateChange((_event, session) => {
+      handleAuthUser(session?.user ?? null);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, [supabaseClient]);
+
+  useEffect(() => {
+    if (authStatus !== "signed-in" || !authUser || !browserStateLoaded) {
+      return;
+    }
+
+    const profile = getSignedInProfile(state, authUser);
+
+    if (state.users.some((user) => user.id === profile.id)) {
+      return;
+    }
+
+    let cancelled = false;
+    window.queueMicrotask(() => {
+      if (cancelled) return;
+      setState((current) => {
+        const currentProfile = getSignedInProfile(current, authUser);
+
+        if (current.users.some((user) => user.id === currentProfile.id)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          users: [...current.users, currentProfile],
+        };
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus, authUser, browserStateLoaded, state, state.users]);
+
+  const signedInProfile =
+    authStatus === "signed-in" && authUser
+      ? getSignedInProfile(state, authUser)
+      : null;
   const currentUser =
-    state.users.find((user) => user.id === currentUserId) ?? state.users[0];
+    signedInProfile ??
+    state.users.find((user) => user.id === currentUserId) ??
+    state.users[0];
   const isEmployee = currentUser.role === "Employee";
+  const canSwitchRoles = authStatus === "local-dev";
+  const isSignedIn = authStatus === "signed-in" || authStatus === "local-dev";
+  const canUseLocalWorkspace = !isGithubPagesBuild && authStatus === "missing-config";
   const unread = state.notifications.filter(
     (notification) => !notification.read && notification.userId === currentUser.id,
   ).length;
+
+  const signInWithGoogle = async () => {
+    setAuthError("");
+
+    if (!supabaseClient) {
+      setAuthStatus("missing-config");
+      setAuthError("Google sign-in needs Supabase Auth configuration first.");
+      return;
+    }
+
+    const redirectTo =
+      typeof window === "undefined"
+        ? undefined
+        : `${window.location.origin}${PUBLIC_BASE_PATH || ""}/`;
+    const { error } = await supabaseClient.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo,
+        queryParams: {
+          hd: allowedEmailDomains[0] ?? "",
+        },
+      },
+    });
+
+    if (error) {
+      setAuthError(error.message);
+    }
+  };
+
+  const signOut = async () => {
+    if (supabaseClient) {
+      await supabaseClient.auth.signOut();
+    }
+    setAuthUser(null);
+    setAuthStatus(supabaseClient ? "signed-out" : "missing-config");
+    setAuthError("");
+    setCurrentUserId("user-admin");
+    setView("dashboard");
+  };
 
   const navItems: Array<{ id: View; label: string; icon: ReactNode; hidden?: boolean }> =
     isEmployee
@@ -3390,7 +3697,11 @@ export default function Home() {
       subtitle: "Users, reassignment, exports, and audit visibility.",
     },
   };
-  const currentViewCopy = viewCopy[view];
+  const activeView =
+    currentUser.role === "Employee" && (view === "new-request" || view === "admin")
+      ? "dashboard"
+      : view;
+  const currentViewCopy = viewCopy[activeView];
 
   const clearBrowserWorkspace = () => {
     if (
@@ -3404,6 +3715,27 @@ export default function Home() {
     setSelectedRequestId("PR-102");
     window.localStorage.removeItem(STORAGE_KEY);
   };
+
+  if (!isSignedIn) {
+    return (
+      <SignInScreen
+        authError={authError}
+        authStatus={authStatus}
+        canUseLocalWorkspace={canUseLocalWorkspace}
+        onSignIn={() => {
+          void signInWithGoogle();
+        }}
+        onSignOut={() => {
+          void signOut();
+        }}
+        onUseLocalWorkspace={() => {
+          setAuthStatus("local-dev");
+          setCurrentUserId("user-admin");
+          setView("dashboard");
+        }}
+      />
+    );
+  }
 
   return (
     <main className="min-h-screen bg-[#f6f8fb] text-slate-900">
@@ -3422,9 +3754,22 @@ export default function Home() {
         </div>
 
         <div className="border-b border-slate-200/80 p-4">
-          {isEmployee ? (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-              {currentUser.name} - Employee
+          {!canSwitchRoles ? (
+            <div className="grid gap-2">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                {currentUser.name} - {currentUser.role}
+              </div>
+              {authStatus === "signed-in" ? (
+                <IconButton
+                  icon={<LogOut className="h-4 w-4" />}
+                  onClick={() => {
+                    void signOut();
+                  }}
+                  variant="secondary"
+                >
+                  Sign out
+                </IconButton>
+              ) : null}
             </div>
           ) : (
             <div className="grid gap-1">
@@ -3459,7 +3804,7 @@ export default function Home() {
             <button
               className={classNames(
                 "inline-flex min-h-11 items-center gap-3 rounded-xl px-3 text-left text-sm font-semibold transition",
-                view === item.id
+                activeView === item.id
                   ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
                   : "text-slate-500 hover:bg-slate-50 hover:text-slate-900",
               )}
@@ -3511,7 +3856,7 @@ export default function Home() {
             </div>
 
             <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
-              {!isEmployee && view !== "new-request" ? (
+              {!isEmployee && activeView !== "new-request" ? (
                 <div className="hidden lg:block">
                   <IconButton
                     icon={<Plus className="h-4 w-4" />}
@@ -3548,10 +3893,36 @@ export default function Home() {
                   <p className="text-xs text-slate-500">{currentUser.role}</p>
                 </div>
               </div>
+              {authStatus === "signed-in" ? (
+                <div className="hidden lg:block">
+                  <IconButton
+                    icon={<LogOut className="h-4 w-4" />}
+                    onClick={() => {
+                      void signOut();
+                    }}
+                    variant="secondary"
+                  >
+                    Sign out
+                  </IconButton>
+                </div>
+              ) : null}
               <div className="lg:hidden">
-                {isEmployee ? (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                    {currentUser.name} - Employee
+                {!canSwitchRoles ? (
+                  <div className="grid gap-2">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                      {currentUser.name} - {currentUser.role}
+                    </div>
+                    {authStatus === "signed-in" ? (
+                      <IconButton
+                        icon={<LogOut className="h-4 w-4" />}
+                        onClick={() => {
+                          void signOut();
+                        }}
+                        variant="secondary"
+                      >
+                        Sign out
+                      </IconButton>
+                    ) : null}
                   </div>
                 ) : (
                   <SelectInput
@@ -3583,7 +3954,7 @@ export default function Home() {
               <button
                 className={classNames(
                   "inline-flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold transition sm:shrink-0",
-                  view === item.id
+                  activeView === item.id
                     ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
                     : "bg-white text-slate-600 shadow-sm hover:bg-slate-50",
                 )}
@@ -3604,7 +3975,7 @@ export default function Home() {
         </header>
 
         <div className="mx-auto grid max-w-[1680px] gap-5 px-3 py-4 sm:px-5 sm:py-5 lg:px-7 lg:py-7">
-          {view === "dashboard" ? (
+          {activeView === "dashboard" ? (
             isEmployee ? (
               <EmployeePortal
                 currentUser={currentUser}
@@ -3624,7 +3995,7 @@ export default function Home() {
             )
           ) : null}
 
-        {view === "new-request" ? (
+        {activeView === "new-request" ? (
           <RequestForm
             currentUser={currentUser}
             projectOptions={state.projectOptions}
@@ -3640,7 +4011,7 @@ export default function Home() {
           />
         ) : null}
 
-        {view === "notifications" ? (
+        {activeView === "notifications" ? (
           <NotificationsCenter
             currentUser={currentUser}
             onOpenRequest={(requestId, notificationId) => {
@@ -3656,7 +4027,7 @@ export default function Home() {
           />
         ) : null}
 
-        {view === "admin" && currentUser.role === "Admin" ? (
+        {activeView === "admin" && currentUser.role === "Admin" ? (
           <AdminPanel
             hasSupabaseConfig={hasSupabaseClientConfig}
             onClearWorkspace={clearBrowserWorkspace}

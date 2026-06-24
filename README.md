@@ -33,6 +33,7 @@ Use the active account selector in the header to validate each role workspace:
 ## Included
 
 - Rebuilt procurement request form from the provided field list
+- Google sign-in gate for Sulmi employee access, with employee-only request visibility
 - Admin-maintained project dropdown with Beta, Alpha, and Sira defaults
 - CSV/Excel bulk item upload with template download and preview
 - Live FX conversion to AED for threshold routing and reporting
@@ -53,7 +54,8 @@ Copy `.env.example` to `.env.local` and add:
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
+NEXT_PUBLIC_ALLOWED_EMAIL_DOMAINS=sulmi.com
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-Apply `supabase/schema.sql` to a Supabase project. The public GitHub Pages deployment runs as a static browser workspace; connect Supabase credentials and host the Next.js server routes for production database persistence, authentication, storage, and scheduled reminders.
+Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase Auth provider and add the GitHub Pages URL to the allowed redirect URLs. The public GitHub Pages deployment is gated behind Google sign-in when Supabase client credentials are configured; connect Supabase service credentials and host the Next.js server routes for production database persistence, authentication, storage, and scheduled reminders.
