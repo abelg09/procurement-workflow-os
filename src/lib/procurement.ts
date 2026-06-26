@@ -14,6 +14,8 @@ export type Role = (typeof ROLES)[number];
 export const PROCURE_APPROVAL_EMAIL = "Procure@sulmi.ai";
 export const FINANCE_APPROVAL_EMAIL = "finance@sulmi.ai";
 export const OVERDUE_REQUEST_HOURS = 24;
+export const LAUNCH_CLEANUP_VERSION = "team-launch-2026-06-26";
+export const LAUNCH_CLEANUP_CUTOFF_ISO = "2026-06-26T08:30:00.000Z";
 export const DAILY_REMINDER_ROLES = [
   "Mona",
   "Rashid",
@@ -324,6 +326,11 @@ export type ProcurementState = {
   notifications: NotificationRecord[];
   chatbotMessages: ChatbotMessage[];
   projectOptions: string[];
+  maintenance?: {
+    launchCleanupVersion?: string;
+    launchCleanupAt?: string;
+    launchCleanupRemovedRequests?: number;
+  };
 };
 
 export type DailyReminderEmail = {
@@ -913,9 +920,9 @@ export const seedNotifications: NotificationRecord[] = [
 
 export const initialState: ProcurementState = {
   users: seedUsers,
-  requests: seedRequests,
-  auditLogs: seedAuditLogs,
-  notifications: seedNotifications,
+  requests: [],
+  auditLogs: [],
+  notifications: [],
   chatbotMessages: [],
   projectOptions: [...DEFAULT_PROJECT_OPTIONS],
 };
@@ -1885,6 +1892,36 @@ export function createDailyReminderNotifications(state: ProcurementState) {
   return {
     ...state,
     notifications: nextNotifications,
+  };
+}
+
+export function applyLaunchCleanup(state: ProcurementState): ProcurementState {
+  if (state.maintenance?.launchCleanupVersion === LAUNCH_CLEANUP_VERSION) {
+    return state;
+  }
+
+  const cleanupCutoff = new Date(LAUNCH_CLEANUP_CUTOFF_ISO).getTime();
+  const requestIdsToRemove = new Set(
+    state.requests
+      .filter((request) => {
+        const createdAt = new Date(request.createdAt).getTime();
+        return Number.isFinite(createdAt) && createdAt <= cleanupCutoff;
+      })
+      .map((request) => request.id),
+  );
+
+  return {
+    ...state,
+    requests: state.requests.filter((request) => !requestIdsToRemove.has(request.id)),
+    auditLogs: state.auditLogs.filter((log) => !requestIdsToRemove.has(log.requestId)),
+    notifications: [],
+    chatbotMessages: [],
+    maintenance: {
+      ...state.maintenance,
+      launchCleanupVersion: LAUNCH_CLEANUP_VERSION,
+      launchCleanupAt: nowIso(),
+      launchCleanupRemovedRequests: requestIdsToRemove.size,
+    },
   };
 }
 

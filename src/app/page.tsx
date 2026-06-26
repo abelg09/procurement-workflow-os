@@ -59,6 +59,7 @@ import {
   STATUSES,
   UserProfile,
   WORKFLOW_STAGES,
+  applyLaunchCleanup,
   answerProcurementQuestion,
   createDailyReminderNotifications,
   getAssigneeName,
@@ -3851,11 +3852,15 @@ export default function Home() {
         const remoteState = data?.state
           ? parseState(JSON.stringify(data.state))
           : latestStateRef.current;
-        const hydratedState = stateWithSignedInProfile(remoteState, authUser);
+        const profileHydratedState = stateWithSignedInProfile(remoteState, authUser);
+        const hydratedState = applyLaunchCleanup(profileHydratedState);
+        const cleanupApplied =
+          hydratedState.maintenance?.launchCleanupVersion !==
+          profileHydratedState.maintenance?.launchCleanupVersion;
 
         setState(hydratedState);
 
-        if (!data?.state) {
+        if (!data?.state || cleanupApplied) {
           await supabaseClient.from("procurement_app_state").upsert({
             id: LIVE_STATE_ROW_ID,
             state: hydratedState,
