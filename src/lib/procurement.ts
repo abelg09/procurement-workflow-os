@@ -13,6 +13,15 @@ export type Role = (typeof ROLES)[number];
 
 export const PROCURE_APPROVAL_EMAIL = "Procure@sulmi.ai";
 export const FINANCE_APPROVAL_EMAIL = "finance@sulmi.ai";
+export const OVERDUE_REQUEST_HOURS = 24;
+export const DAILY_REMINDER_ROLES = [
+  "Mona",
+  "Rashid",
+  "Dr. Majed",
+  "Amro",
+  "Edlyn",
+  "Aileen",
+] as const satisfies readonly Role[];
 
 export const ROLE_DISPLAY_NAMES: Record<Role, string> = {
   Employee: "Employee",
@@ -282,7 +291,7 @@ export type AuditLog = {
 export type NotificationRecord = {
   id: string;
   userId: string;
-  requestId: string;
+  requestId?: string | null;
   title: string;
   body: string;
   type:
@@ -315,6 +324,21 @@ export type ProcurementState = {
   notifications: NotificationRecord[];
   chatbotMessages: ChatbotMessage[];
   projectOptions: string[];
+};
+
+export type DailyReminderEmail = {
+  userId: string;
+  name: string;
+  role: Role;
+  roleLabel: string;
+  email: string;
+  activeCount: number;
+  overdueCount: number;
+  activeRequestIds: string[];
+  overdueRequestIds: string[];
+  subject: string;
+  text: string;
+  html: string;
 };
 
 export type ProcurementRequestDraft = Omit<
@@ -921,6 +945,20 @@ export function isDeclined(status: RequestStatus) {
 
 export function isClosed(status: RequestStatus) {
   return status === "Completed" || isDeclined(status);
+}
+
+export function isRequestOverdue(
+  request: ProcurementRequest,
+  referenceDate = new Date(),
+) {
+  if (isClosed(request.status)) {
+    return false;
+  }
+
+  return (
+    referenceDate.getTime() - new Date(request.updatedAt).getTime() >
+    OVERDUE_REQUEST_HOURS * 60 * 60 * 1000
+  );
 }
 
 export function isApprovalStatus(status: RequestStatus) {
@@ -1678,13 +1716,7 @@ export function getStuckRequests(
   requests: ProcurementRequest[],
   referenceDate = new Date(),
 ) {
-  const twoDaysMs = 1000 * 60 * 60 * 24 * 2;
-  return requests.filter((request) => {
-    if (isClosed(request.status)) {
-      return false;
-    }
-    return referenceDate.getTime() - new Date(request.updatedAt).getTime() > twoDaysMs;
-  });
+  return requests.filter((request) => isRequestOverdue(request, referenceDate));
 }
 
 export function isUserBlockedTask(
@@ -1705,6 +1737,90 @@ export function getUserBlockedTasks(
   referenceDate = new Date(),
 ) {
   return requests.filter((request) => isUserBlockedTask(request, user, referenceDate));
+}
+
+export function getDailyReminderRecipients(users: UserProfile[]) {
+  return DAILY_REMINDER_ROLES.map((role) =>
+    users.find((user) => user.role === role && user.active),
+  ).filter((user): user is UserProfile => Boolean(user));
+}
+
+export function getActiveAssignedRequests(
+  requests: ProcurementRequest[],
+  user: UserProfile,
+) {
+  return requests.filter(
+    (request) => request.assigneeId === user.id && !isClosed(request.status),
+  );
+}
+
+function htmlEscape(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+export function getDailyReminderEmailPayloads(
+  state: ProcurementState,
+  dashboardUrl: string,
+  referenceDate = new Date(),
+): DailyReminderEmail[] {
+  const dashboardLink = dashboardUrl || "https://abelg09.github.io/procurement-workflow-os/";
+
+  return getDailyReminderRecipients(state.users).map((user) => {
+    const activeRequests = getActiveAssignedRequests(state.requests, user);
+    const overdueRequests = activeRequests.filter((request) =>
+      isRequestOverdue(request, referenceDate),
+    );
+    const activeRequestIds = activeRequests.map((request) => request.id);
+    const overdueRequestIds = overdueRequests.map((request) => request.id);
+    const roleLabel = getRoleDisplayName(user.role);
+    const subject =
+      overdueRequests.length > 0
+        ? `Procurement dashboard reminder: ${overdueRequests.length} overdue task(s)`
+        : "Procurement dashboard reminder";
+    const activeText =
+      activeRequestIds.length > 0 ? activeRequestIds.join(", ") : "No active tasks";
+    const overdueText =
+      overdueRequestIds.length > 0 ? overdueRequestIds.join(", ") : "None";
+    const text = [
+      `Hi ${user.name},`,
+      "",
+      "Please check the Procurement Workflow OS dashboard today.",
+      `Role queue: ${roleLabel}`,
+      `Active assigned tasks: ${activeRequests.length} (${activeText})`,
+      `Over 24 hours: ${overdueRequests.length} (${overdueText})`,
+      "",
+      `Dashboard: ${dashboardLink}`,
+    ].join("\n");
+    const html = [
+      `<p>Hi ${htmlEscape(user.name)},</p>`,
+      "<p>Please check the Procurement Workflow OS dashboard today.</p>",
+      "<ul>",
+      `<li><strong>Role queue:</strong> ${htmlEscape(roleLabel)}</li>`,
+      `<li><strong>Active assigned tasks:</strong> ${activeRequests.length} (${htmlEscape(activeText)})</li>`,
+      `<li><strong>Over 24 hours:</strong> ${overdueRequests.length} (${htmlEscape(overdueText)})</li>`,
+      "</ul>",
+      `<p><a href="${htmlEscape(dashboardLink)}">Open Procurement Workflow OS</a></p>`,
+    ].join("");
+
+    return {
+      userId: user.id,
+      name: user.name,
+      role: user.role,
+      roleLabel,
+      email: user.email,
+      activeCount: activeRequests.length,
+      overdueCount: overdueRequests.length,
+      activeRequestIds,
+      overdueRequestIds,
+      subject,
+      text,
+      html,
+    };
+  });
 }
 
 export function getMetrics(requests: ProcurementRequest[]) {
@@ -1739,23 +1855,27 @@ export function getMetrics(requests: ProcurementRequest[]) {
 
 export function createDailyReminderNotifications(state: ProcurementState) {
   const dateTime = nowIso();
-  const pending = state.requests.filter((request) =>
-    ["Rashid Review", "Dr. Majed Review", "Amro Review"].includes(request.status) ||
-    (request.status === "Rashid Auto Approved" && request.stage === "dr-majed"),
-  );
+  const recipients = getDailyReminderRecipients(state.users);
   const nextNotifications = [...state.notifications];
 
-  pending.forEach((request) => {
-    const reviewReminder = request.status !== "Rashid Review";
+  recipients.forEach((user) => {
+    const activeRequests = getActiveAssignedRequests(state.requests, user);
+    const overdueRequests = activeRequests.filter((request) =>
+      isRequestOverdue(request),
+    );
+    const requestIds = activeRequests.map((request) => request.id);
+    const overdueIds = overdueRequests.map((request) => request.id);
+
     addNotification(
       nextNotifications,
       {
-        userId: request.assigneeId,
-        requestId: request.id,
-        title: reviewReminder ? "Daily review reminder" : "Daily approval reminder",
-        body: reviewReminder
-          ? `${request.id} is still pending your department review.`
-          : `${request.id} is still pending your approval.`,
+        userId: user.id,
+        requestId: activeRequests[0]?.id ?? null,
+        title: "Daily dashboard reminder",
+        body:
+          overdueRequests.length > 0
+            ? `Please check your procurement dashboard. ${overdueRequests.length} task(s) are over ${OVERDUE_REQUEST_HOURS} hours: ${overdueIds.join(", ")}.`
+            : `Please check your procurement dashboard. Active task(s): ${requestIds.length > 0 ? requestIds.join(", ") : "none"}.`,
         type: "reminder",
       },
       dateTime,
@@ -1788,7 +1908,7 @@ export function answerProcurementQuestion(
   };
 
   if (!normalized) {
-    return "Ask me about request status, pending approvals, invoices, stuck requests, order placement, or completed requests.";
+    return `Ask me about request status, pending approvals, invoices, requests over ${OVERDUE_REQUEST_HOURS} hours, order placement, or completed requests.`;
   }
 
   if (requestId) {
@@ -1843,11 +1963,16 @@ export function answerProcurementQuestion(
       : "No invoices are currently pending with Finance.";
   }
 
-  if (normalized.includes("stuck") || normalized.includes("more than 2 days")) {
+  if (
+    normalized.includes("stuck") ||
+    normalized.includes("more than 2 days") ||
+    normalized.includes("over 24") ||
+    normalized.includes("24 hours")
+  ) {
     const rows = getStuckRequests(state.requests);
     return rows.length
       ? rows.map(describe).join("\n")
-      : "No active requests are stuck for more than 2 days.";
+      : `No active requests are over ${OVERDUE_REQUEST_HOURS} hours without an update.`;
   }
 
   if (normalized.includes("order") && normalized.includes("placed")) {
@@ -1887,7 +2012,7 @@ export function answerProcurementQuestion(
       : "I cannot see any procurement requests for your current role.";
   }
 
-  return "I can answer questions such as: status of my request, pending with Rashid, pending with Dr. Majed, pending with Amro, invoices pending with Finance, stuck more than 2 days, order placed, request PR-102 stage, or completed requests this month.";
+  return `I can answer questions such as: status of my request, pending with Rashid, pending with Dr. Majed, pending with Amro, invoices pending with Finance, over ${OVERDUE_REQUEST_HOURS} hours, order placed, request PR-102 stage, or completed requests this month.`;
 }
 
 export function serializeState(state: ProcurementState) {

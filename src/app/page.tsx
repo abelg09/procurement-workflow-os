@@ -45,6 +45,7 @@ import {
   InvoiceDetails,
   LogisticsDetails,
   NotificationRecord,
+  OVERDUE_REQUEST_HOURS,
   PAYMENT_TERMS,
   PROCURE_APPROVAL_EMAIL,
   PRIORITIES,
@@ -78,6 +79,7 @@ import {
   isApprovalStatus,
   isClosed,
   isDeclined,
+  isRequestOverdue,
   isUserBlockedTask,
   makeId,
   markNotificationRead,
@@ -1800,12 +1802,14 @@ function RequestsTable({
         ) : (
           filtered.map((request) => {
             const blocked = currentUser ? isUserBlockedTask(request, currentUser) : false;
+            const overdue = isRequestOverdue(request);
+            const needsAttention = blocked || overdue;
 
             return (
               <button
                 className={classNames(
                   "box-border min-w-0 w-full rounded-xl border p-3 text-left transition",
-                  blocked
+                  needsAttention
                     ? selectedRequestId === request.id
                       ? "border-red-300 bg-red-100"
                       : "border-red-200 bg-red-50"
@@ -1828,6 +1832,11 @@ function RequestsTable({
                     <StatusBadge status={request.status} />
                   </span>
                 </div>
+                {overdue ? (
+                  <div className="mt-2 inline-flex rounded-md border border-red-200 bg-white/70 px-2 py-1 text-xs font-semibold text-red-800">
+                    Over {OVERDUE_REQUEST_HOURS}h without update
+                  </div>
+                ) : null}
                 <div className="mt-3 grid gap-2 text-sm text-slate-600">
                   <div className="flex justify-between gap-3">
                     <span className="text-slate-500">Stage</span>
@@ -1899,12 +1908,14 @@ function RequestsTable({
             ) : (
               filtered.map((request) => {
                 const blocked = currentUser ? isUserBlockedTask(request, currentUser) : false;
+                const overdue = isRequestOverdue(request);
+                const needsAttention = blocked || overdue;
 
                 return (
                 <tr
                   className={classNames(
                     "cursor-pointer transition hover:bg-blue-50/60",
-                    blocked
+                    needsAttention
                       ? selectedRequestId === request.id
                         ? "bg-red-100 hover:bg-red-100"
                         : "bg-red-50 hover:bg-red-100"
@@ -1920,6 +1931,11 @@ function RequestsTable({
                     <p className="mt-1 max-w-52 truncate text-slate-500">
                       {request.employeeName} - {request.itemName}
                     </p>
+                    {overdue ? (
+                      <p className="mt-1 text-xs font-semibold text-red-700">
+                        Over {OVERDUE_REQUEST_HOURS}h without update
+                      </p>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3">{request.project}</td>
                   <td className="px-4 py-3">
@@ -1945,7 +1961,7 @@ function RequestsTable({
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <span className={classNames("line-clamp-2 max-w-72", blocked ? "font-semibold text-red-800" : "text-slate-600")}>
+                    <span className={classNames("line-clamp-2 max-w-72", needsAttention ? "font-semibold text-red-800" : "text-slate-600")}>
                       {getPendingAction(request)}
                     </span>
                   </td>
@@ -2709,7 +2725,7 @@ function NotificationsCenter({
 }: {
   currentUser: UserProfile;
   state: ProcurementState;
-  onOpenRequest: (requestId: string, notificationId: string) => void;
+  onOpenRequest: (requestId: string | null | undefined, notificationId: string) => void;
   onRead: (id: string) => void;
   onRunReminder: () => void;
 }) {
@@ -2764,7 +2780,7 @@ function NotificationItem({
 }: {
   notification: NotificationRecord;
   users: UserProfile[];
-  onOpenRequest: (requestId: string, notificationId: string) => void;
+  onOpenRequest: (requestId: string | null | undefined, notificationId: string) => void;
   onRead: (id: string) => void;
 }) {
   const openNotification = () =>
@@ -2772,7 +2788,7 @@ function NotificationItem({
 
   return (
     <div
-      aria-label={`Open ${notification.requestId}`}
+      aria-label={notification.requestId ? `Open ${notification.requestId}` : "Open dashboard"}
       className={classNames(
         "rounded-xl border p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/70 focus:outline-none focus:ring-2 focus:ring-blue-500",
         notification.read ? "border-slate-200 bg-white" : "border-blue-200 bg-blue-50",
@@ -2792,7 +2808,7 @@ function NotificationItem({
           <p className="font-semibold text-slate-950">{notification.title}</p>
           <p className="mt-1 text-sm text-slate-600">{notification.body}</p>
           <p className="mt-2 text-xs text-slate-500">
-            {notification.requestId} -{" "}
+            {notification.requestId ?? "Dashboard"} -{" "}
             {getUserById(users, notification.userId)?.name ?? "Unknown"} -{" "}
             {formatDateTime(notification.createdAt)}
           </p>
@@ -3266,7 +3282,7 @@ function ProcurementAssistant({
           <h2 className="text-base font-bold text-slate-950">Procurement Assistant</h2>
         </div>
         <p className="mt-1 text-sm text-slate-500">
-          Procurement data answers for status, approvals, invoices, and stuck requests.
+          Procurement data answers for status, approvals, invoices, and requests over 24 hours.
         </p>
       </div>
       <div className="grid max-h-[460px] gap-3 overflow-y-auto p-4">
@@ -3295,7 +3311,7 @@ function ProcurementAssistant({
           "Which requests are pending with Rashid?",
           "Which requests are pending with Amro?",
           "Which invoices are pending with Finance?",
-          "Show me requests stuck for more than 2 days.",
+          `Show me requests over ${OVERDUE_REQUEST_HOURS} hours.`,
           "Show all completed requests this month.",
         ].map((item) => (
           <button
@@ -3607,7 +3623,7 @@ function Dashboard({
       tone: "bg-purple-100 text-purple-700",
     },
     {
-      label: "Stuck more than 2 days",
+      label: `Over ${OVERDUE_REQUEST_HOURS} hours`,
       value: metrics.stuck,
       icon: <AlertCircle className="h-4 w-4" />,
       tone: "bg-orange-100 text-orange-700",
@@ -3654,7 +3670,7 @@ function Dashboard({
             <div className="mt-3 grid gap-2">
               {watchlistRequests.length === 0 ? (
                 <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                  No blocked tasks assigned to you.
+                  No overdue tasks assigned to you.
                 </div>
               ) : null}
               {watchlistRequests.map((request) => (
@@ -3669,10 +3685,10 @@ function Dashboard({
                   onClick={() => setSelectedRequestId(request.id)}
                   type="button"
                 >
-                  <strong>{request.id}</strong> has been waiting since{" "}
+                  <strong>{request.id}</strong> has been over {OVERDUE_REQUEST_HOURS}h since{" "}
                   {formatDateTime(request.updatedAt)}
                   <span className="mt-1 block text-xs">
-                    {showingPersonalBlockages ? "Blocked on you" : getAssigneeName(request, state.users)} -{" "}
+                    {showingPersonalBlockages ? "Overdue on you" : getAssigneeName(request, state.users)} -{" "}
                     {getPendingAction(request)}
                   </span>
                 </button>
@@ -4387,7 +4403,9 @@ export default function Home() {
           <NotificationsCenter
             currentUser={currentUser}
             onOpenRequest={(requestId, notificationId) => {
-              setSelectedRequestId(requestId);
+              if (requestId) {
+                setSelectedRequestId(requestId);
+              }
               setState((current) => markNotificationRead(current, notificationId));
               setView("dashboard");
             }}

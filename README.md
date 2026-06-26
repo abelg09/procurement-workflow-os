@@ -42,7 +42,7 @@ Use the active account selector in the header to validate each role workspace:
 - 5-stage workflow tracker
 - AED 300 Rashid auto-approval rule based on converted AED total
 - Role-specific approvals, declines, invoice upload, finance clearance, order confirmation, receipt, and closure
-- Internal notification center and 3 PM reminder simulation
+- Internal notification center and daily 3 PM Dubai email reminders
 - Full audit trail
 - Admin role/user editing, reassignment, CSV export, and Excel export with line-item reporting
 - Procurement Assistant chatbot with deterministic procurement-data answers
@@ -59,9 +59,26 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 NEXT_PUBLIC_ALLOWED_EMAIL_DOMAINS=sulmi.ai
 NEXT_PUBLIC_ADMIN_EMAILS=
 SUPABASE_SERVICE_ROLE_KEY=
+RESEND_API_KEY=
+REMINDER_EMAIL_FROM=
+REMINDER_EMAIL_OVERRIDES=
+PROCUREMENT_DASHBOARD_URL=
 ```
 
 Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase Auth provider and add the GitHub Pages URL to the allowed redirect URLs. The public GitHub Pages deployment is gated behind Google sign-in when Supabase client credentials are configured. The app syncs the shared procurement workspace through the `procurement_app_state` table, so requests and workflow actions persist across signed-in users. Set `NEXT_PUBLIC_ADMIN_EMAILS` to bootstrap the first admin account, then use Admin controls to assign Mona, Rashid, Dr. Majed, Amro, Procure, and Finance roles. Edlyn's personal account remains an Employee requester account and does not receive the Procure approval queue.
+
+## Daily reminders
+
+Daily reminder emails run from `.github/workflows/daily-reminders.yml` at `11:00 UTC`, which is `3:00 PM Asia/Dubai`. Configure these repository secrets or variables:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `RESEND_API_KEY`
+- `REMINDER_EMAIL_FROM`, for example `Procurement Workflow <procurement@sulmi.ai>`
+- `PROCUREMENT_DASHBOARD_URL`, optional
+- `REMINDER_EMAIL_OVERRIDES`, optional comma-separated role or name mappings such as `Mona:mona@sulmi.ai,Rashid:rashid@sulmi.ai,Dr. Majed:dr.majed@sulmi.ai`
+
+The reminder job emails Mona, Rashid, Dr. Majed, Amro, Procure, and Finance. It uses the email saved on each role profile unless an override is provided.
 
 ## Custom domain
 
