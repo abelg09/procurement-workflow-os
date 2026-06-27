@@ -65,7 +65,7 @@ REMINDER_EMAIL_OVERRIDES=
 PROCUREMENT_DASHBOARD_URL=
 ```
 
-Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase Auth provider and add the GitHub Pages URL to the allowed redirect URLs. The public GitHub Pages deployment is gated behind Google sign-in when Supabase client credentials are configured. The app syncs the shared procurement workspace through the `procurement_app_state` table, so requests and workflow actions persist across signed-in users. Set `NEXT_PUBLIC_ADMIN_EMAILS` to bootstrap the first admin account, then use Admin controls to assign Mona, Rashid, Dr. Majed, Amro, Procure, and Finance roles. Edlyn's personal account remains an Employee requester account and does not receive the Procure approval queue.
+Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase Auth provider and add the production URL to the allowed redirect URLs. The public deployment is gated behind Google sign-in when Supabase client credentials are configured. The app syncs the shared procurement workspace through the `procurement_app_state` table, so requests and workflow actions persist across signed-in users. Set `NEXT_PUBLIC_ADMIN_EMAILS` to bootstrap the first admin account, then use Admin controls to assign Mona, Rashid, Dr. Majed, Amro, Procure, and Finance roles. Edlyn's personal account remains an Employee requester account and does not receive the Procure approval queue.
 
 ## Daily reminders
 
@@ -75,20 +75,19 @@ Daily reminder emails run from `.github/workflows/daily-reminders.yml` at `11:00
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `RESEND_API_KEY`
 - `REMINDER_EMAIL_FROM`, for example `Procurement Workflow <procurement@sulmi.ai>`
-- `PROCUREMENT_DASHBOARD_URL`, optional
+- `PROCUREMENT_DASHBOARD_URL`, optional. Defaults to `https://procurement.sulmi.ai/`.
 - `REMINDER_EMAIL_OVERRIDES`, optional comma-separated role or name mappings such as `Mona:mona@sulmi.ai,Rashid:rashid@sulmi.ai,Dr. Majed:dr.majed@sulmi.ai`
 
 The reminder job emails Mona, Rashid, Dr. Majed, Amro, Procure, and Finance. It uses the email saved on each role profile unless an override is provided.
 
 ## Custom domain
 
-For a branded GitHub Pages domain such as `procurement.sulmi.ai`, set both of these GitHub repository variables before deploying:
+The production GitHub Pages deployment is configured for:
 
 ```bash
-NEXT_PUBLIC_SITE_BASE_PATH=/
-GITHUB_PAGES_CUSTOM_DOMAIN=procurement.sulmi.ai
+https://procurement.sulmi.ai/
 ```
 
-Then point the DNS `CNAME` record for the subdomain to `abelg09.github.io`, set the same custom domain in the repository Pages settings, and add the custom domain URL to Supabase Auth Site URL and Redirect URLs.
+Point the DNS `CNAME` record for the subdomain to `abelg09.github.io`, set the same custom domain in the repository Pages settings, and add the custom domain URL to Supabase Auth Site URL and Redirect URLs.
 
-Until `GITHUB_PAGES_CUSTOM_DOMAIN` is set, the build keeps the normal GitHub Pages base path `/procurement-workflow-os/` even if `NEXT_PUBLIC_SITE_BASE_PATH` exists.
+The Pages workflow sets `GITHUB_PAGES_CUSTOM_DOMAIN=procurement.sulmi.ai` by default so the static export serves from the domain root instead of `/procurement-workflow-os/`.

@@ -1774,7 +1774,7 @@ export function getDailyReminderEmailPayloads(
   dashboardUrl: string,
   referenceDate = new Date(),
 ): DailyReminderEmail[] {
-  const dashboardLink = dashboardUrl || "https://abelg09.github.io/procurement-workflow-os/";
+  const dashboardLink = dashboardUrl || "https://procurement.sulmi.ai/";
 
   return getDailyReminderRecipients(state.users).map((user) => {
     const activeRequests = getActiveAssignedRequests(state.requests, user);

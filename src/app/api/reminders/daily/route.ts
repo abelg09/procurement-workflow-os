@@ -9,7 +9,7 @@ import type { DailyReminderEmail, ProcurementState } from "@/lib/procurement";
 import { getSupabaseServiceClient } from "@/lib/supabase";
 
 const LIVE_STATE_ROW_ID = "default";
-const DEFAULT_DASHBOARD_URL = "https://abelg09.github.io/procurement-workflow-os/";
+const DEFAULT_DASHBOARD_URL = "https://procurement.sulmi.ai/";
 
 type EmailResult = {
   email: string;

@@ -1,5 +1,5 @@
 const LIVE_STATE_ROW_ID = "default";
-const DEFAULT_DASHBOARD_URL = "https://abelg09.github.io/procurement-workflow-os/";
+const DEFAULT_DASHBOARD_URL = "https://procurement.sulmi.ai/";
 const OVERDUE_REQUEST_HOURS = 24;
 const DAILY_REMINDER_ROLES = ["Mona", "Rashid", "Dr. Majed", "Amro", "Edlyn", "Aileen"];
 

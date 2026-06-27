@@ -25,5 +25,5 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           REMINDER_EMAIL_FROM: ${{ vars.REMINDER_EMAIL_FROM || secrets.REMINDER_EMAIL_FROM }}
           REMINDER_EMAIL_OVERRIDES: ${{ vars.REMINDER_EMAIL_OVERRIDES || secrets.REMINDER_EMAIL_OVERRIDES }}
-          PROCUREMENT_DASHBOARD_URL: ${{ vars.PROCUREMENT_DASHBOARD_URL || 'https://abelg09.github.io/procurement-workflow-os/' }}
+          PROCUREMENT_DASHBOARD_URL: ${{ vars.PROCUREMENT_DASHBOARD_URL || 'https://procurement.sulmi.ai/' }}
         run: node scripts/send-daily-reminders.mjs
