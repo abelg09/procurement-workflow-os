@@ -229,6 +229,7 @@ export type ProcurementLineItem = {
   id: string;
   itemName: string;
   itemDescription: string;
+  productUrl?: string;
   quantity: number;
   unitPrice: number;
   currency: string;
@@ -432,6 +433,7 @@ export function getRequestLineItems(request: ProcurementRequest) {
       id: `${request.id.toLowerCase()}-item-1`,
       itemName: request.itemName,
       itemDescription: request.itemDescription,
+      productUrl: "",
       quantity,
       unitPrice: roundMoney(originalTotal / quantity),
       currency,
@@ -2268,6 +2270,7 @@ export function parseState(serialized: string | null) {
           lineItems: getRequestLineItems(request).map((item) => ({
             ...item,
             itemDescription: migrateText(item.itemDescription),
+            productUrl: item.productUrl ?? "",
             vendorName: migrateText(item.vendorName),
           })),
         });

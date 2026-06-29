@@ -188,6 +188,7 @@ create table if not exists procurement_request_items (
   request_id text not null references procurement_requests(id) on delete cascade,
   item_name text not null,
   item_description text not null,
+  product_url text,
   quantity numeric(12, 2) not null check (quantity > 0),
   unit_price numeric(12, 2) not null check (unit_price > 0),
   currency text not null,
@@ -199,6 +200,9 @@ create table if not exists procurement_request_items (
   exchange_rate_date date not null,
   created_at timestamptz not null default now()
 );
+
+alter table procurement_request_items
+  add column if not exists product_url text;
 
 create table if not exists vendors (
   id uuid primary key default gen_random_uuid(),

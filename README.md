@@ -37,7 +37,7 @@ Use the active account selector in the header to validate each role workspace:
 - Google sign-in gate for Sulmi employee access, with employee-only request visibility
 - Live Supabase workspace sync for shared requests, approvals, notifications, and audit history
 - Admin-maintained project dropdown with Beta, Alpha, and Sira defaults
-- CSV/Excel bulk item upload with template download and preview
+- CSV/Excel bulk item upload with template download, product links, and preview
 - Live FX conversion to AED for threshold routing and reporting
 - 5-stage workflow tracker
 - AED 300 Rashid auto-approval rule based on converted AED total

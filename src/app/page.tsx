@@ -13,6 +13,7 @@ import {
   ClipboardList,
   Clock,
   Download,
+  ExternalLink,
   FileSpreadsheet,
   FileText,
   Filter,
@@ -101,6 +102,7 @@ const FX_RATE_ENDPOINT = "https://api.frankfurter.dev/v2/rates";
 const BULK_TEMPLATE_HEADERS = [
   "item_name",
   "item_description",
+  "product_link",
   "quantity",
   "unit_price",
   "currency",
@@ -155,6 +157,7 @@ type FxRateResult = {
 type BulkImportRow = {
   itemName: string;
   itemDescription: string;
+  productUrl: string;
   quantity: number;
   unitPrice: number;
   currency: string;
@@ -173,6 +176,28 @@ const BULK_FIELD_ALIASES = {
     "description",
     "item details",
     "details",
+  ],
+  productUrl: [
+    "product_link",
+    "product link",
+    "product_url",
+    "product url",
+    "item_link",
+    "item link",
+    "item_url",
+    "item url",
+    "link",
+    "links",
+    "url",
+    "urls",
+    "website",
+    "web link",
+    "source",
+    "source link",
+    "product links",
+    "item links",
+    "amazon_link",
+    "amazon link",
   ],
   quantity: ["quantity", "qty", "qnty"],
   unitPrice: [
@@ -486,6 +511,26 @@ function parseNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : NaN;
 }
 
+function normaliseOptionalUrl(value: unknown) {
+  const rawValue = String(value ?? "").trim();
+  if (!rawValue) return "";
+
+  const withoutWhitespace = rawValue.replace(/\s+/g, "");
+  const withProtocol = /^[a-z][a-z\d+.-]*:\/\//i.test(withoutWhitespace)
+    ? withoutWhitespace
+    : `https://${withoutWhitespace}`;
+
+  try {
+    const url = new URL(withProtocol);
+    if (!url.hostname.includes(".") && url.hostname !== "localhost") {
+      return "";
+    }
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
 function rowHasValue(values: unknown[]) {
   return values.some((value) => String(value ?? "").trim() !== "");
 }
@@ -523,7 +568,7 @@ async function parseBulkWorkbook(file: File) {
   const headerIndex = sheetRows.findIndex((row) => rowHasValue(row) && isBulkHeaderRow(row));
   if (headerIndex < 0) {
     throw new Error(
-      "Could not find bulk item headers. Use columns: item_name, item_description, quantity, unit_price, currency, vendor_name.",
+      "Could not find bulk item headers. Use columns: item_name, item_description, product_link, quantity, unit_price, currency, vendor_name.",
     );
   }
 
@@ -531,12 +576,45 @@ async function parseBulkWorkbook(file: File) {
     const header = String(value ?? "").trim();
     return header || `column_${index + 1}`;
   });
+  const productLinkHeaders = new Set(normalizedAliases(BULK_FIELD_ALIASES.productUrl));
+  const hyperlinkSourceHeaders = new Set([
+    ...normalizedAliases(BULK_FIELD_ALIASES.itemName),
+    ...normalizedAliases(BULK_FIELD_ALIASES.itemDescription),
+    ...normalizedAliases(BULK_FIELD_ALIASES.productUrl),
+  ]);
   const rows = sheetRows
     .slice(headerIndex + 1)
     .map((values, index): BulkWorkbookRow => {
+      const worksheetRowIndex = headerIndex + index + 1;
+      let rowProductLink = "";
       const row = Object.fromEntries(
-        headers.map((header, cellIndex) => [header, values[cellIndex] ?? ""]),
+        headers.map((header, cellIndex) => {
+          const normalizedHeader = normaliseHeader(header);
+          const cellAddress = XLSX.utils.encode_cell({
+            c: cellIndex,
+            r: worksheetRowIndex,
+          });
+          const cell = worksheet[cellAddress] as
+            | { l?: { Target?: string; target?: string } }
+            | undefined;
+          const cellTarget = cell?.l?.Target || cell?.l?.target || "";
+          if (cellTarget && hyperlinkSourceHeaders.has(normalizedHeader) && !rowProductLink) {
+            rowProductLink = cellTarget;
+          }
+          const linkedTarget = productLinkHeaders.has(normalizedHeader) ? cellTarget : "";
+
+          return [header, linkedTarget || (values[cellIndex] ?? "")];
+        }),
       ) as BulkWorkbookRow;
+      const productLinkHeader = headers.find((header) =>
+        productLinkHeaders.has(normaliseHeader(header)),
+      );
+      if (rowProductLink && productLinkHeader && !String(row[productLinkHeader] ?? "").trim()) {
+        row[productLinkHeader] = rowProductLink;
+      }
+      if (rowProductLink && !productLinkHeader) {
+        row.product_link = rowProductLink;
+      }
       row.__rowNumber = headerIndex + index + 2;
       return row;
     })
@@ -575,6 +653,8 @@ function mapBulkRows(rows: BulkWorkbookRow[]) {
     const itemDescription = String(
       getBulkField(normalized, BULK_FIELD_ALIASES.itemDescription) ?? "",
     ).trim();
+    const rawProductUrl = getBulkField(normalized, BULK_FIELD_ALIASES.productUrl);
+    const productUrl = normaliseOptionalUrl(rawProductUrl);
     const vendorName = String(getBulkField(normalized, BULK_FIELD_ALIASES.vendorName) ?? "").trim();
     const rowNumber = row.__rowNumber ?? index + 2;
 
@@ -595,10 +675,14 @@ function mapBulkRows(rows: BulkWorkbookRow[]) {
         `Row ${rowNumber}: currency must be one of ${BULK_SUPPORTED_CURRENCIES.join(", ")}.`,
       );
     }
+    if (String(rawProductUrl ?? "").trim() && !productUrl) {
+      throw new Error(`Row ${rowNumber}: product link must be a valid http or https URL.`);
+    }
 
     return {
       itemName,
       itemDescription,
+      productUrl,
       quantity,
       unitPrice,
       currency,
@@ -617,6 +701,7 @@ async function convertRowsToLineItems(rows: BulkImportRow[]) {
       id: makeId("item"),
       itemName: row.itemName,
       itemDescription: row.itemDescription,
+      productUrl: row.productUrl,
       quantity: row.quantity,
       unitPrice: roundMoney(row.unitPrice),
       currency: row.currency,
@@ -1016,8 +1101,8 @@ function RequestForm({
   const downloadBulkTemplate = () => {
     const rows = [
       BULK_TEMPLATE_HEADERS.join(","),
-      "Laptop stand,Adjustable laptop stand for operations desk,2,95,AED,OfficeLine",
-      "Wireless mouse,USB-C wireless mouse,3,25,USD,TechGate Supplies",
+      "Laptop stand,Adjustable laptop stand for operations desk,https://example.com/laptop-stand,2,95,AED,OfficeLine",
+      "Wireless mouse,USB-C wireless mouse,https://example.com/wireless-mouse,3,25,USD,TechGate Supplies",
     ];
     downloadBlob(
       rows.join("\n"),
@@ -1113,6 +1198,7 @@ function RequestForm({
             {
               itemName,
               itemDescription,
+              productUrl: "",
               quantity: quantityValue,
               unitPrice: amountValue / quantityValue,
               currency: selectedCurrency,
@@ -1392,7 +1478,7 @@ function RequestForm({
                     <h3 className="text-sm font-bold text-slate-950">Bulk item upload</h3>
                     <p className="mt-1 text-sm text-slate-500">
                       Upload CSV or Excel rows with item_name, item_description,
-                      quantity, unit_price, currency, and optional vendor_name.
+                      optional product_link, quantity, unit_price, currency, and optional vendor_name.
                     </p>
                   </div>
                   <div className="grid gap-2 sm:flex sm:flex-wrap">
@@ -1488,6 +1574,9 @@ function RequestForm({
                             <div className="col-span-2">
                               <Detail label="Vendor" value={item.vendorName || "Not provided"} />
                             </div>
+                            <div className="col-span-2">
+                              <LineItemLink productUrl={item.productUrl} />
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -1496,7 +1585,7 @@ function RequestForm({
                       </div>
                     </div>
                     <div className="mt-4 hidden overflow-x-auto rounded-xl border border-slate-200 bg-white md:block">
-                      <table className="w-full min-w-[860px] text-left text-sm">
+                      <table className="w-full min-w-[980px] text-left text-sm">
                     <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                       <tr>
                         <th className="px-3 py-2">No.</th>
@@ -1504,6 +1593,7 @@ function RequestForm({
                         <th className="px-3 py-2">Qty</th>
                         <th className="px-3 py-2">Unit price</th>
                         <th className="px-3 py-2">Original total</th>
+                        <th className="px-3 py-2">Product link</th>
                         <th className="px-3 py-2">FX to AED</th>
                         <th className="px-3 py-2">AED total</th>
                         <th className="px-3 py-2">Vendor</th>
@@ -1525,6 +1615,9 @@ function RequestForm({
                           <td className="px-3 py-2">{money(item.unitPrice, item.currency)}</td>
                           <td className="px-3 py-2">{money(item.originalTotal, item.currency)}</td>
                           <td className="px-3 py-2">
+                            <LineItemLink productUrl={item.productUrl} compact />
+                          </td>
+                          <td className="px-3 py-2">
                             {item.fxRateToAed.toFixed(4)}
                             <p className="text-xs text-slate-500">{item.exchangeRateDate}</p>
                           </td>
@@ -1537,7 +1630,7 @@ function RequestForm({
                     </tbody>
                     <tfoot className="bg-slate-50">
                       <tr>
-                        <td className="px-3 py-2 font-bold text-slate-950" colSpan={6}>
+                        <td className="px-3 py-2 font-bold text-slate-950" colSpan={7}>
                           Total converted value
                         </td>
                         <td className="px-3 py-2 font-bold text-slate-950">
@@ -1667,6 +1760,7 @@ function RequestsTable({
       ...getRequestLineItems(request).flatMap((item) => [
         item.itemName,
         item.vendorName,
+        item.productUrl ?? "",
       ]),
     ]
       .join(" ")
@@ -2548,12 +2642,15 @@ function RequestDetails({
                     <div className="col-span-2">
                       <Detail label="Vendor" value={item.vendorName || "Not provided"} />
                     </div>
+                    <div className="col-span-2">
+                      <LineItemLink productUrl={item.productUrl} />
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
             <div className="mt-4 hidden overflow-x-auto rounded-xl border border-slate-200 md:block">
-              <table className="w-full min-w-[920px] text-left text-sm">
+              <table className="w-full min-w-[1040px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
                     <th className="px-3 py-2">No.</th>
@@ -2561,6 +2658,7 @@ function RequestDetails({
                     <th className="px-3 py-2">Qty</th>
                     <th className="px-3 py-2">Unit price</th>
                     <th className="px-3 py-2">Original total</th>
+                    <th className="px-3 py-2">Product link</th>
                     <th className="px-3 py-2">FX to AED</th>
                     <th className="px-3 py-2">AED total</th>
                     <th className="px-3 py-2">Vendor</th>
@@ -2581,6 +2679,9 @@ function RequestDetails({
                       <td className="px-3 py-2">{item.quantity}</td>
                       <td className="px-3 py-2">{money(item.unitPrice, item.currency)}</td>
                       <td className="px-3 py-2">{money(item.originalTotal, item.currency)}</td>
+                      <td className="px-3 py-2">
+                        <LineItemLink productUrl={item.productUrl} compact />
+                      </td>
                       <td className="px-3 py-2">
                         {item.fxRateToAed.toFixed(4)}
                         <p className="text-xs text-slate-500">{item.exchangeRateDate}</p>
@@ -2673,6 +2774,40 @@ function Detail({ label, value }: { label: string; value: string }) {
     <div>
       <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
       <p className="mt-1 break-words text-sm text-slate-900">{value}</p>
+    </div>
+  );
+}
+
+function LineItemLink({
+  productUrl,
+  compact = false,
+}: {
+  productUrl?: string;
+  compact?: boolean;
+}) {
+  if (!productUrl) {
+    return compact ? (
+      <span className="text-slate-400">Not provided</span>
+    ) : (
+      <Detail label="Product link" value="Not provided" />
+    );
+  }
+
+  return (
+    <div>
+      {compact ? null : (
+        <p className="text-xs font-semibold uppercase text-slate-500">Product link</p>
+      )}
+      <a
+        className="mt-1 inline-flex max-w-full items-center gap-1 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-sm font-semibold text-blue-700 hover:border-blue-200 hover:bg-blue-100"
+        href={productUrl}
+        rel="noopener noreferrer"
+        target="_blank"
+        title={productUrl}
+      >
+        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+        <span className="truncate">{compact ? "Open link" : productUrl}</span>
+      </a>
     </div>
   );
 }
@@ -2872,6 +3007,7 @@ function lineItemRowsForExport(state: ProcurementState) {
       "Unit price": item.unitPrice,
       Currency: item.currency,
       "Original total": item.originalTotal,
+      "Product link": item.productUrl ?? "",
       "FX to AED": item.fxRateToAed,
       "AED total": item.aedTotal,
       Vendor: item.vendorName,
