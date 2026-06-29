@@ -3492,6 +3492,193 @@ function ProcurementAssistant({
   );
 }
 
+function EmployeeMonaClarificationPanel({
+  request,
+  clarificationLog,
+  onTransition,
+}: {
+  request: ProcurementRequest;
+  clarificationLog?: AuditLog;
+  onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
+}) {
+  const initialLineItems = getRequestLineItems(request).map((item) => ({
+    ...item,
+    productUrl: item.productUrl ?? "",
+  }));
+  const [response, setResponse] = useState("");
+  const [lineItems, setLineItems] = useState<ProcurementLineItem[]>(() =>
+    initialLineItems,
+  );
+  const [productLinks, setProductLinks] = useState<Record<string, string>>(() =>
+    Object.fromEntries(initialLineItems.map((item) => [item.id, item.productUrl ?? ""])),
+  );
+  const [uploading, setUploading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const updateBulkFile = async (file: File | undefined) => {
+    if (!file) return;
+
+    setUploading(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const rows = await parseBulkWorkbook(file);
+      if (rows.length === 0) {
+        throw new Error("The uploaded file contains headers but no item rows.");
+      }
+      const converted = await convertRowsToLineItems(mapBulkRows(rows));
+      setLineItems(converted);
+      setProductLinks(
+        Object.fromEntries(converted.map((item) => [item.id, item.productUrl ?? ""])),
+      );
+      setMessage(`${converted.length} corrected line item(s) loaded from ${file.name}.`);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Could not import the file.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const buildUpdatedLineItems = () =>
+    lineItems.map((item, index) => {
+      const rawLink = productLinks[item.id] ?? "";
+      const productUrl = normaliseOptionalUrl(rawLink);
+      if (rawLink.trim() && !productUrl) {
+        throw new Error(`Item ${index + 1}: product link must be a valid website URL.`);
+      }
+
+      return {
+        ...item,
+        productUrl,
+      };
+    });
+
+  return (
+    <div className="mt-5 grid gap-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+      <div>
+        <p className="font-semibold text-amber-950">Clarification needed by Mona</p>
+        <p className="mt-1 text-sm text-amber-800">
+          Update the same request here. You can add product links directly or upload a
+          corrected bulk file, then send it back to Mona for review.
+        </p>
+      </div>
+
+      {clarificationLog?.comment ? (
+        <div className="rounded-xl border border-amber-200 bg-white p-3">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm font-semibold text-amber-950">Message from Mona</p>
+            <p className="text-xs text-amber-700">
+              {formatDateTime(clarificationLog.dateTime)}
+            </p>
+          </div>
+          <p className="mt-2 whitespace-pre-line text-sm text-slate-800">
+            {clarificationLog.comment}
+          </p>
+        </div>
+      ) : null}
+
+      {error ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
+          {error}
+        </div>
+      ) : null}
+      {message ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium text-emerald-800">
+          {message}
+        </div>
+      ) : null}
+
+      <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-bold text-slate-950">Correct request items</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Re-upload CSV/Excel to replace all line items, or just paste links below.
+            </p>
+          </div>
+          {uploading ? (
+            <span className="text-sm font-semibold text-blue-700">Importing...</span>
+          ) : null}
+        </div>
+        <input
+          accept=".csv,.xlsx,.xls"
+          className={inputClass()}
+          disabled={uploading}
+          type="file"
+          onChange={(event) => {
+            void updateBulkFile(event.target.files?.[0]);
+            event.currentTarget.value = "";
+          }}
+        />
+      </div>
+
+      <div className="grid gap-3">
+        {lineItems.map((item, index) => (
+          <div className={classNames(insetPanelClass, "grid gap-3 p-3")} key={item.id}>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase text-slate-500">
+                Item {index + 1}
+              </p>
+              <p className="mt-1 font-semibold text-slate-950">{item.itemName}</p>
+              <p className="mt-1 line-clamp-2 text-sm text-slate-500">
+                {item.itemDescription}
+              </p>
+            </div>
+            <Field label="Product link">
+              <TextInput
+                inputMode="url"
+                placeholder="Paste product URL"
+                value={productLinks[item.id] ?? ""}
+                onChange={(event) =>
+                  setProductLinks((current) => ({
+                    ...current,
+                    [item.id]: event.target.value,
+                  }))
+                }
+              />
+            </Field>
+          </div>
+        ))}
+      </div>
+
+      <Field label="Reply to Mona" required>
+        <TextArea
+          placeholder="Explain what you updated"
+          value={response}
+          onChange={(event) => setResponse(event.target.value)}
+        />
+      </Field>
+
+      <IconButton
+        disabled={uploading || !response.trim()}
+        icon={<Send className="h-4 w-4" />}
+        onClick={() => {
+          try {
+            const updatedLineItems = buildUpdatedLineItems();
+            onTransition(request.id, {
+              type: "employee-resubmit-mona-clarification",
+              comment: response,
+              lineItems: updatedLineItems,
+            });
+            setResponse("");
+            setError("");
+          } catch (submitError) {
+            setError(
+              submitError instanceof Error
+                ? submitError.message
+                : "Could not resubmit the request.",
+            );
+          }
+        }}
+      >
+        Send updated request to Mona
+      </IconButton>
+    </div>
+  );
+}
+
 function EmployeeRequestStatus({
   request,
   state,
@@ -3518,6 +3705,14 @@ function EmployeeRequestStatus({
       (log) =>
         log.requestId === request.id &&
         ["Edlyn requested clarification", "Procure requested clarification"].includes(log.action) &&
+        Boolean(log.comment?.trim()),
+    )
+    .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
+  const monaClarification = state.auditLogs
+    .filter(
+      (log) =>
+        log.requestId === request.id &&
+        log.action === "Sent back for clarification" &&
         Boolean(log.comment?.trim()),
     )
     .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
@@ -3574,6 +3769,16 @@ function EmployeeRequestStatus({
             {rashidRejection?.declineReason || "No rejection reason was recorded."}
           </p>
         </div>
+      ) : null}
+
+      {request.status === "Sent Back for Clarification" &&
+      request.assigneeId === currentUser.id ? (
+        <EmployeeMonaClarificationPanel
+          clarificationLog={monaClarification}
+          key={`${request.id}-${request.updatedAt}`}
+          onTransition={onTransition}
+          request={request}
+        />
       ) : null}
 
       {request.status === "Edlyn Clarification Requested" &&

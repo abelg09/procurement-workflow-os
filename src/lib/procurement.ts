@@ -367,6 +367,7 @@ export type ProcurementRequestDraft = Omit<
 export type WorkflowAction =
   | { type: "mona-approve"; comment?: string }
   | { type: "mona-clarify"; comment: string }
+  | { type: "employee-resubmit-mona-clarification"; comment: string; lineItems: ProcurementLineItem[] }
   | { type: "rashid-approve"; comment?: string }
   | { type: "rashid-decline"; declineReason: string }
   | { type: "dr-review"; comment?: string }
@@ -1321,6 +1322,74 @@ export function transitionRequest(
           requestId,
           title: "Clarification required",
           body: `${editable.id} needs clarification before it can continue.`,
+          type: "system",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "employee-resubmit-mona-clarification": {
+      if (
+        editable.status !== "Sent Back for Clarification" ||
+        actor.id !== editable.submittedById ||
+        !hasText(workflowAction.comment) ||
+        workflowAction.lineItems.length === 0
+      ) {
+        return state;
+      }
+
+      const lineItems = workflowAction.lineItems.map((item) => ({
+        ...item,
+        productUrl: item.productUrl ?? "",
+      }));
+      const totalAed = roundMoney(
+        lineItems.reduce((total, item) => total + item.aedTotal, 0),
+      );
+      const totalQuantity = lineItems.reduce((total, item) => total + item.quantity, 0);
+      const vendorName =
+        Array.from(new Set(lineItems.map((item) => item.vendorName).filter(Boolean))).join(
+          ", ",
+        ) || editable.vendorName;
+      const assignee = assignTo("Mona", { notify: false });
+
+      editable.lineItems = lineItems;
+      editable.estimatedAmountAed = totalAed;
+      editable.quantity = totalQuantity;
+      editable.exchangeRateDate = lineItems[0]?.exchangeRateDate ?? DEFAULT_EXCHANGE_RATE_DATE;
+      editable.exchangeRateSource =
+        Array.from(new Set(lineItems.map((item) => item.exchangeRateSource))).join(", ") ||
+        editable.exchangeRateSource;
+      editable.vendorName = vendorName;
+      editable.vendor = {
+        ...editable.vendor,
+        companyName: vendorName || editable.vendor.companyName,
+      };
+
+      if (lineItems.length === 1) {
+        const [item] = lineItems;
+        editable.itemName = item.itemName;
+        editable.itemDescription = item.itemDescription;
+        editable.estimatedAmount = item.originalTotal;
+        editable.currency = item.currency;
+      } else {
+        editable.itemName = `Bulk upload (${lineItems.length} items)`;
+        editable.itemDescription = `Bulk procurement upload containing ${lineItems.length} item(s).`;
+        editable.estimatedAmount = totalAed;
+        editable.currency = "AED";
+      }
+
+      editable.status = "Mona Review";
+      editable.stage = "mona";
+      editable.previousResponsibleId = actor.id;
+      actionLabel = "Employee updated request and resubmitted";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: assignee.id,
+          requestId,
+          title: "Clarification received",
+          body: `${editable.id} was updated by ${actor.name} and is back for Mona review.`,
           type: "system",
         },
         dateTime,
