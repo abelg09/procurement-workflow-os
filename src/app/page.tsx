@@ -1060,6 +1060,7 @@ function RequestForm({
   const [project, setProject] = useState(availableProjects[0] ?? "Beta");
   const [itemName, setItemName] = useState("");
   const [itemDescription, setItemDescription] = useState("");
+  const [productLink, setProductLink] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [estimatedAmount, setEstimatedAmount] = useState("");
   const [currency, setCurrency] = useState<(typeof CURRENCIES)[number]>("AED");
@@ -1180,6 +1181,10 @@ function RequestForm({
       if (!hasBulkLineItems && currency === "Other" && !customCurrency.trim()) {
         throw new Error("Enter the currency when selecting Other.");
       }
+      const normalizedProductLink = hasBulkLineItems ? "" : normaliseOptionalUrl(productLink);
+      if (!hasBulkLineItems && productLink.trim() && !normalizedProductLink) {
+        throw new Error("Product link must be a valid website URL.");
+      }
       if (!reasonForPurchase.trim()) {
         throw new Error("Reason for purchase is required.");
       }
@@ -1198,7 +1203,7 @@ function RequestForm({
             {
               itemName,
               itemDescription,
-              productUrl: "",
+              productUrl: normalizedProductLink,
               quantity: quantityValue,
               unitPrice: amountValue / quantityValue,
               currency: selectedCurrency,
@@ -1257,6 +1262,7 @@ function RequestForm({
       setItemName("");
       setProject(availableProjects[0] ?? "Beta");
       setItemDescription("");
+      setProductLink("");
       setQuantity(1);
       setEstimatedAmount("");
       setCurrency("AED");
@@ -1436,6 +1442,15 @@ function RequestForm({
               ) : null}
               <Field label="Vendor name">
                 <TextInput value={vendorName} onChange={(event) => setVendorName(event.target.value)} />
+              </Field>
+              <Field label="Product link">
+                <TextInput
+                  inputMode="url"
+                  placeholder="Paste product URL"
+                  type="text"
+                  value={productLink}
+                  onChange={(event) => setProductLink(event.target.value)}
+                />
               </Field>
             </>
           )}
