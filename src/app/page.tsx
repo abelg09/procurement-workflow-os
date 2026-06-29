@@ -3911,21 +3911,26 @@ function Dashboard({
   selectedRequestId,
   setSelectedRequestId,
   setState,
+  requestScope = "visible",
 }: {
   state: ProcurementState;
   currentUser: UserProfile;
   selectedRequestId?: string;
   setSelectedRequestId: (id: string) => void;
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
+  requestScope?: "visible" | "company";
 }) {
   const visibleRequests = useMemo(
-    () => getVisibleRequests(state, currentUser),
-    [state, currentUser],
+    () =>
+      requestScope === "company"
+        ? state.requests
+        : getVisibleRequests(state, currentUser),
+    [currentUser, requestScope, state],
   );
   const selectedRequest =
     visibleRequests.find((request) => request.id === selectedRequestId) ??
     visibleRequests[0];
-  const metrics = getMetrics(currentUser.role === "Admin" ? state.requests : visibleRequests);
+  const metrics = getMetrics(visibleRequests);
   const blockedTasks = getUserBlockedTasks(state.requests, currentUser);
   const watchlistRequests = blockedTasks.length > 0 ? blockedTasks : getStuckRequests(state.requests);
   const showingPersonalBlockages = blockedTasks.length > 0;
@@ -4278,6 +4283,7 @@ export default function Home() {
     state.users[0];
   const isEmployee = currentUser.role === "Employee";
   const hasWorkflowRole = !["Employee", "Admin"].includes(currentUser.role);
+  const canViewCompanyDashboard = currentUser.role === "Admin" || hasWorkflowRole;
   const usesPersonalDashboard =
     isEmployee || authStatus === "signed-in";
   const canSwitchRoles = authStatus === "local-dev";
@@ -4355,6 +4361,11 @@ export default function Home() {
                   label: "Work queue",
                   icon: <LayoutDashboard className="h-4 w-4" />,
                 },
+                {
+                  id: "company-dashboard" as View,
+                  label: "Company dashboard",
+                  icon: <LayoutDashboard className="h-4 w-4" />,
+                },
               ]
             : []),
           ...(currentUser.role === "Admin"
@@ -4413,6 +4424,8 @@ export default function Home() {
       view === "admin" ||
       view === "company-dashboard" ||
       view === "work-queue")
+      ? "dashboard"
+      : view === "company-dashboard" && !canViewCompanyDashboard
       ? "dashboard"
       : view;
   const currentViewCopy = viewCopy[activeView];
@@ -4734,9 +4747,10 @@ export default function Home() {
             />
           ) : null}
 
-          {activeView === "company-dashboard" && currentUser.role === "Admin" ? (
+          {activeView === "company-dashboard" && canViewCompanyDashboard ? (
             <Dashboard
               currentUser={currentUser}
+              requestScope="company"
               selectedRequestId={selectedRequestId}
               setSelectedRequestId={setSelectedRequestId}
               setState={setState}
