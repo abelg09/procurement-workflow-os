@@ -3509,10 +3509,8 @@ function EmployeeMonaClarificationPanel({
   const [lineItems, setLineItems] = useState<ProcurementLineItem[]>(() =>
     initialLineItems,
   );
-  const [productLinks, setProductLinks] = useState<Record<string, string>>(() =>
-    Object.fromEntries(initialLineItems.map((item) => [item.id, item.productUrl ?? ""])),
-  );
   const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -3530,9 +3528,6 @@ function EmployeeMonaClarificationPanel({
       }
       const converted = await convertRowsToLineItems(mapBulkRows(rows));
       setLineItems(converted);
-      setProductLinks(
-        Object.fromEntries(converted.map((item) => [item.id, item.productUrl ?? ""])),
-      );
       setMessage(`${converted.length} corrected line item(s) loaded from ${file.name}.`);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : "Could not import the file.");
@@ -3541,27 +3536,78 @@ function EmployeeMonaClarificationPanel({
     }
   };
 
-  const buildUpdatedLineItems = () =>
-    lineItems.map((item, index) => {
-      const rawLink = productLinks[item.id] ?? "";
+  const updateLineItem = (
+    itemId: string,
+    updater: (item: ProcurementLineItem) => ProcurementLineItem,
+  ) => {
+    setLineItems((current) =>
+      current.map((item) => (item.id === itemId ? updater(item) : item)),
+    );
+  };
+
+  const buildUpdatedLineItems = async () => {
+    const updatedItems: ProcurementLineItem[] = [];
+
+    for (const [index, item] of lineItems.entries()) {
+      const itemName = item.itemName.trim();
+      const itemDescription = item.itemDescription.trim();
+      const vendorName = item.vendorName.trim();
+      const currency = item.currency.trim().toUpperCase();
+      const quantity = Number(item.quantity);
+      const unitPrice = Number(item.unitPrice);
+      const rawLink = item.productUrl ?? "";
       const productUrl = normaliseOptionalUrl(rawLink);
+
+      if (!itemName) {
+        throw new Error(`Item ${index + 1}: item name is required.`);
+      }
+      if (!itemDescription) {
+        throw new Error(`Item ${index + 1}: item description is required.`);
+      }
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new Error(`Item ${index + 1}: quantity must be greater than 0.`);
+      }
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+        throw new Error(`Item ${index + 1}: unit price must be greater than 0.`);
+      }
+      if (!BULK_SUPPORTED_CURRENCIES.includes(currency as (typeof BULK_SUPPORTED_CURRENCIES)[number])) {
+        throw new Error(
+          `Item ${index + 1}: currency must be one of ${BULK_SUPPORTED_CURRENCIES.join(", ")}.`,
+        );
+      }
       if (rawLink.trim() && !productUrl) {
         throw new Error(`Item ${index + 1}: product link must be a valid website URL.`);
       }
 
-      return {
+      const fx = await getFxRateToAed(currency);
+      const originalTotal = roundMoney(quantity * unitPrice);
+      updatedItems.push({
         ...item,
+        itemName,
+        itemDescription,
         productUrl,
-      };
-    });
+        quantity,
+        unitPrice: roundMoney(unitPrice),
+        currency,
+        originalTotal,
+        fxRateToAed: fx.rate,
+        aedTotal: roundMoney(originalTotal * fx.rate),
+        vendorName,
+        exchangeRateDate: fx.date,
+        exchangeRateSource: fx.cached ? `${fx.source} cached` : fx.source,
+      });
+    }
+
+    return updatedItems;
+  };
 
   return (
     <div className="mt-5 grid gap-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
       <div>
         <p className="font-semibold text-amber-950">Clarification needed by Mona</p>
         <p className="mt-1 text-sm text-amber-800">
-          Update the same request here. You can add product links directly or upload a
-          corrected bulk file, then send it back to Mona for review.
+          Update the same request here. You can edit quantities, prices, item details,
+          vendors, and links, or upload a corrected bulk file before sending it back to Mona.
         </p>
       </div>
 
@@ -3595,7 +3641,7 @@ function EmployeeMonaClarificationPanel({
           <div>
             <p className="text-sm font-bold text-slate-950">Correct request items</p>
             <p className="mt-1 text-xs text-slate-500">
-              Re-upload CSV/Excel to replace all line items, or just paste links below.
+              Re-upload CSV/Excel to replace all line items, or edit any item field below.
             </p>
           </div>
           {uploading ? (
@@ -3621,22 +3667,106 @@ function EmployeeMonaClarificationPanel({
               <p className="text-xs font-semibold uppercase text-slate-500">
                 Item {index + 1}
               </p>
-              <p className="mt-1 font-semibold text-slate-950">{item.itemName}</p>
-              <p className="mt-1 line-clamp-2 text-sm text-slate-500">
-                {item.itemDescription}
+              <p className="mt-1 text-sm text-slate-500">
+                Saved AED total: {money(item.aedTotal, "AED")}
               </p>
             </div>
-            <Field label="Product link">
-              <TextInput
-                inputMode="url"
-                placeholder="Paste product URL"
-                value={productLinks[item.id] ?? ""}
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Item name" required>
+                <TextInput
+                  value={item.itemName}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      itemName: event.target.value,
+                    }))
+                  }
+                  required
+                />
+              </Field>
+              <Field label="Vendor">
+                <TextInput
+                  value={item.vendorName}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      vendorName: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+              <Field label="Quantity" required>
+                <TextInput
+                  inputMode="decimal"
+                  min={0}
+                  step="any"
+                  type="number"
+                  value={item.quantity}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      quantity: Number(event.target.value),
+                    }))
+                  }
+                  required
+                />
+              </Field>
+              <Field label="Unit price" required>
+                <TextInput
+                  inputMode="decimal"
+                  min={0}
+                  step="any"
+                  type="number"
+                  value={item.unitPrice}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      unitPrice: Number(event.target.value),
+                    }))
+                  }
+                  required
+                />
+              </Field>
+              <Field label="Currency" required>
+                <SelectInput
+                  value={item.currency}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      currency: event.target.value,
+                    }))
+                  }
+                  required
+                >
+                  {BULK_SUPPORTED_CURRENCIES.map((currency) => (
+                    <option key={currency}>{currency}</option>
+                  ))}
+                </SelectInput>
+              </Field>
+              <Field label="Product link">
+                <TextInput
+                  inputMode="url"
+                  placeholder="Paste product URL"
+                  value={item.productUrl ?? ""}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      productUrl: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+            </div>
+            <Field label="Item description" required>
+              <TextArea
+                value={item.itemDescription}
                 onChange={(event) =>
-                  setProductLinks((current) => ({
+                  updateLineItem(item.id, (current) => ({
                     ...current,
-                    [item.id]: event.target.value,
+                    itemDescription: event.target.value,
                   }))
                 }
+                required
               />
             </Field>
           </div>
@@ -3652,11 +3782,13 @@ function EmployeeMonaClarificationPanel({
       </Field>
 
       <IconButton
-        disabled={uploading || !response.trim()}
+        disabled={uploading || saving || !response.trim()}
         icon={<Send className="h-4 w-4" />}
-        onClick={() => {
+        onClick={async () => {
           try {
-            const updatedLineItems = buildUpdatedLineItems();
+            setSaving(true);
+            setError("");
+            const updatedLineItems = await buildUpdatedLineItems();
             onTransition(request.id, {
               type: "employee-resubmit-mona-clarification",
               comment: response,
@@ -3670,10 +3802,12 @@ function EmployeeMonaClarificationPanel({
                 ? submitError.message
                 : "Could not resubmit the request.",
             );
+          } finally {
+            setSaving(false);
           }
         }}
       >
-        Send updated request to Mona
+        {saving ? "Saving updates..." : "Send updated request to Mona"}
       </IconButton>
     </div>
   );
