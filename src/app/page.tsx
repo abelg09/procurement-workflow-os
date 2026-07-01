@@ -99,6 +99,8 @@ const STORAGE_KEY = "procurement-workflow-state-v1";
 const FX_CACHE_KEY = "procurement-fx-rates-v1";
 const FX_RATE_SOURCE = "Frankfurter v2";
 const FX_RATE_ENDPOINT = "https://api.frankfurter.dev/v2/rates";
+const INVOICE_STORAGE_BUCKET = "procurement-files";
+const MAX_INVOICE_FILE_BYTES = 10 * 1024 * 1024;
 const BULK_TEMPLATE_HEADERS = [
   "item_name",
   "item_description",
@@ -275,6 +277,22 @@ const money = (amount: number, currency = "AED") =>
     maximumFractionDigits: 2,
     minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
   }).format(amount)}`;
+
+const fileSizeLabel = (bytes?: number) => {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(bytes / 1024).toFixed(1)} KB`;
+};
+
+const safeStorageFileName = (value: string) =>
+  value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 120) || "invoice-file";
 
 const classNames = (...values: Array<string | false | null | undefined>) =>
   values.filter(Boolean).join(" ");
@@ -2109,6 +2127,22 @@ function ActionPanel({
   );
   const [invoiceDate, setInvoiceDate] = useState(request.invoice?.invoiceDate ?? dubaiDateKey());
   const [invoiceFile, setInvoiceFile] = useState(request.invoice?.uploadedInvoiceFile ?? "");
+  const [invoiceFileMeta, setInvoiceFileMeta] = useState<{
+    name: string;
+    size: number;
+    type: string;
+  } | null>(
+    request.invoice?.uploadedInvoiceFile
+      ? {
+          name: request.invoice.uploadedInvoiceFile,
+          size: request.invoice.uploadedInvoiceFileSize ?? 0,
+          type: request.invoice.uploadedInvoiceFileType ?? "",
+        }
+      : null,
+  );
+  const [selectedInvoiceFile, setSelectedInvoiceFile] = useState<File | null>(null);
+  const [invoiceUploading, setInvoiceUploading] = useState(false);
+  const [invoiceUploadError, setInvoiceUploadError] = useState("");
   const [paymentTerms, setPaymentTerms] = useState<(typeof PAYMENT_TERMS)[number]>(
     request.invoice?.paymentTerms ?? "COD",
   );
@@ -2165,15 +2199,62 @@ function ActionPanel({
     (["Edlyn Confirmation", "Purchase in Progress"].includes(request.status) ||
       (request.status === "Rashid Auto Approved" && request.stage === "edlyn"));
 
-  const invoicePayload = (): InvoiceDetails => ({
+  const invoicePayload = (storage?: { bucket: string; path: string }): InvoiceDetails => ({
     invoiceNumber: invoiceNumber || `${request.id}-INV`,
     invoiceAmount,
     invoiceDate: invoiceDate || dubaiDateKey(),
     vendor: request.vendorName || request.vendor.companyName,
-    uploadedInvoiceFile: invoiceFile || `${request.id.toLowerCase()}-invoice.pdf`,
+    uploadedInvoiceFile: invoiceFile.trim(),
+    uploadedInvoiceFileSize: invoiceFileMeta?.size,
+    uploadedInvoiceFileType: invoiceFileMeta?.type,
+    uploadedInvoiceUploadedAt: nowIso(),
+    uploadedInvoiceStorageBucket: storage?.bucket,
+    uploadedInvoiceStoragePath: storage?.path,
     paymentTerms,
     financeNotes,
   });
+  const canUploadInvoice =
+    Boolean(selectedInvoiceFile) &&
+    Boolean(invoiceFile.trim()) &&
+    Number.isFinite(invoiceAmount) &&
+    invoiceAmount > 0 &&
+    !invoiceUploading;
+  const invoiceFileSizeLabel = fileSizeLabel(invoiceFileMeta?.size);
+  const uploadInvoiceFile = async () => {
+    if (!selectedInvoiceFile) {
+      throw new Error("Choose the invoice file before sending this request to Finance.");
+    }
+    if (selectedInvoiceFile.size > MAX_INVOICE_FILE_BYTES) {
+      throw new Error("Invoice file must be 10 MB or smaller.");
+    }
+
+    const supabaseClient = getSupabaseBrowserClient();
+    if (!supabaseClient) {
+      throw new Error("Supabase Storage is not configured for invoice uploads.");
+    }
+
+    const storagePath = [
+      "invoices",
+      request.id,
+      `${Date.now()}-${safeStorageFileName(selectedInvoiceFile.name)}`,
+    ].join("/");
+    const { error } = await supabaseClient.storage
+      .from(INVOICE_STORAGE_BUCKET)
+      .upload(storagePath, selectedInvoiceFile, {
+        cacheControl: "3600",
+        contentType: selectedInvoiceFile.type || undefined,
+        upsert: false,
+      });
+
+    if (error) {
+      throw new Error(`Invoice file could not be uploaded: ${error.message}`);
+    }
+
+    return {
+      bucket: INVOICE_STORAGE_BUCKET,
+      path: storagePath,
+    };
+  };
   const logisticsPayload = (): LogisticsDetails => ({
     deliveryStatus,
     provider: deliveryProvider,
@@ -2448,28 +2529,84 @@ function ActionPanel({
                   ))}
                 </SelectInput>
               </Field>
-              <Field label="Uploaded invoice file name" htmlFor={invoiceFileId}>
+              <Field label="Upload invoice file" htmlFor={invoiceFileId} required>
                 <TextInput
                   id={invoiceFileId}
-                  placeholder="invoice-pr-001.pdf"
-                  value={invoiceFile}
-                  onChange={(event) => setInvoiceFile(event.target.value)}
+                  accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx"
+                  type="file"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) {
+                      setInvoiceFile("");
+                      setInvoiceFileMeta(null);
+                      setSelectedInvoiceFile(null);
+                      return;
+                    }
+                    if (file.size > MAX_INVOICE_FILE_BYTES) {
+                      setInvoiceFile("");
+                      setInvoiceFileMeta(null);
+                      setSelectedInvoiceFile(null);
+                      setInvoiceUploadError("Invoice file must be 10 MB or smaller.");
+                      event.currentTarget.value = "";
+                      return;
+                    }
+                    setInvoiceUploadError("");
+                    setInvoiceFile(file.name);
+                    setSelectedInvoiceFile(file);
+                    setInvoiceFileMeta({
+                      name: file.name,
+                      size: file.size,
+                      type: file.type,
+                    });
+                  }}
                 />
               </Field>
+              {invoiceFile ? (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+                  <p className="font-semibold">Selected invoice file</p>
+                  <p className="mt-1 break-words">
+                    {invoiceFile}
+                    {invoiceFileSizeLabel ? ` - ${invoiceFileSizeLabel}` : ""}
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  Choose the invoice file before sending this request to Finance.
+                </div>
+              )}
+              {invoiceUploadError ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-800">
+                  {invoiceUploadError}
+                </div>
+              ) : null}
             </div>
             <div className="grid gap-2 sm:flex sm:flex-wrap">
               <IconButton
+                disabled={!canUploadInvoice}
                 icon={<Upload className="h-4 w-4" />}
-                onClick={() => {
-                  onTransition(request.id, {
-                    type: "edlyn-upload-invoice",
-                    invoice: invoicePayload(),
-                    comment,
-                  });
-                  clearText();
+                onClick={async () => {
+                  try {
+                    setInvoiceUploading(true);
+                    setInvoiceUploadError("");
+                    const storage = await uploadInvoiceFile();
+                    onTransition(request.id, {
+                      type: "edlyn-upload-invoice",
+                      invoice: invoicePayload(storage),
+                      comment,
+                    });
+                    clearText();
+                  } catch (error) {
+                    setInvoiceUploadError(
+                      error instanceof Error
+                        ? error.message
+                        : "Invoice file could not be uploaded.",
+                    );
+                  } finally {
+                    setInvoiceUploading(false);
+                  }
                 }}
               >
-                Upload invoice
+                {invoiceUploading ? "Uploading invoice..." : "Upload invoice"}
               </IconButton>
               <IconButton
                 disabled={!hasProcureClarification}
@@ -2822,7 +2959,23 @@ function RequestDetails({
                   <Detail label="Amount" value={money(request.invoice.invoiceAmount, "AED")} />
                   <Detail label="Invoice date" value={formatDate(request.invoice.invoiceDate)} />
                   <Detail label="Payment terms" value={request.invoice.paymentTerms} />
-                  <Detail label="Uploaded file" value={request.invoice.uploadedInvoiceFile} />
+                  <InvoiceFileLink invoice={request.invoice} />
+                  <Detail
+                    label="File size"
+                    value={fileSizeLabel(request.invoice.uploadedInvoiceFileSize) || "Not recorded"}
+                  />
+                  <Detail
+                    label="File type"
+                    value={request.invoice.uploadedInvoiceFileType || "Not recorded"}
+                  />
+                  <Detail
+                    label="Uploaded at"
+                    value={
+                      request.invoice.uploadedInvoiceUploadedAt
+                        ? formatDateTime(request.invoice.uploadedInvoiceUploadedAt)
+                        : "Not recorded"
+                    }
+                  />
                   <Detail label="Finance notes" value={request.invoice.financeNotes || "No notes"} />
                 </div>
               ) : (
@@ -2911,6 +3064,91 @@ function LineItemLink({
         <ExternalLink className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">{compact ? "Open link" : productUrl}</span>
       </a>
+    </div>
+  );
+}
+
+function InvoiceFileLink({ invoice }: { invoice: InvoiceDetails }) {
+  const [fileLink, setFileLink] = useState({
+    path: invoice.uploadedInvoiceStoragePath || "",
+    signedUrl: "",
+    linkError: "",
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    const storageBucket = invoice.uploadedInvoiceStorageBucket || INVOICE_STORAGE_BUCKET;
+    const storagePath = invoice.uploadedInvoiceStoragePath || "";
+
+    void Promise.resolve().then(async () => {
+      if (!storagePath) {
+        if (cancelled) return;
+        setFileLink({ path: "", signedUrl: "", linkError: "" });
+        return;
+      }
+
+      const supabaseClient = getSupabaseBrowserClient();
+      if (!supabaseClient) {
+        if (cancelled) return;
+        setFileLink({
+          path: storagePath,
+          signedUrl: "",
+          linkError: "Storage link is not configured in this environment.",
+        });
+        return;
+      }
+
+      const { data, error } = await supabaseClient.storage
+        .from(storageBucket)
+        .createSignedUrl(storagePath, 60 * 60);
+
+      if (cancelled) return;
+      if (error || !data?.signedUrl) {
+        setFileLink({
+          path: storagePath,
+          signedUrl: "",
+          linkError: error?.message || "Could not create invoice file link.",
+        });
+        return;
+      }
+
+      setFileLink({
+        path: storagePath,
+        signedUrl: data.signedUrl,
+        linkError: "",
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [invoice.uploadedInvoiceStorageBucket, invoice.uploadedInvoiceStoragePath]);
+
+  const { linkError, signedUrl } = fileLink;
+
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase text-slate-500">Uploaded file</p>
+      {signedUrl ? (
+        <a
+          className="mt-1 inline-flex max-w-full items-center gap-1 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-sm font-semibold text-blue-700 hover:border-blue-200 hover:bg-blue-100"
+          download={invoice.uploadedInvoiceFile}
+          href={signedUrl}
+          rel="noopener noreferrer"
+          target="_blank"
+          title={invoice.uploadedInvoiceFile}
+        >
+          <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">Open invoice file</span>
+        </a>
+      ) : (
+        <p className="mt-1 break-words text-sm text-slate-900">
+          {invoice.uploadedInvoiceFile}
+        </p>
+      )}
+      {linkError ? (
+        <p className="mt-1 text-xs font-medium text-amber-700">{linkError}</p>
+      ) : null}
     </div>
   );
 }
@@ -4017,7 +4255,23 @@ function EmployeeInvoicePanel({ request }: { request: ProcurementRequest }) {
           <Detail label="Invoice date" value={formatDate(request.invoice.invoiceDate)} />
           <Detail label="Vendor" value={request.invoice.vendor || "Not provided"} />
           <Detail label="Payment terms" value={request.invoice.paymentTerms} />
-          <Detail label="Uploaded file" value={request.invoice.uploadedInvoiceFile} />
+          <InvoiceFileLink invoice={request.invoice} />
+          <Detail
+            label="File size"
+            value={fileSizeLabel(request.invoice.uploadedInvoiceFileSize) || "Not recorded"}
+          />
+          <Detail
+            label="File type"
+            value={request.invoice.uploadedInvoiceFileType || "Not recorded"}
+          />
+          <Detail
+            label="Uploaded at"
+            value={
+              request.invoice.uploadedInvoiceUploadedAt
+                ? formatDateTime(request.invoice.uploadedInvoiceUploadedAt)
+                : "Not recorded"
+            }
+          />
           <div className="sm:col-span-2 lg:col-span-3">
             <Detail label="Finance notes" value={request.invoice.financeNotes || "No notes"} />
           </div>

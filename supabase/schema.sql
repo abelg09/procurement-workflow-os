@@ -234,6 +234,11 @@ create table if not exists invoices (
   created_at timestamptz not null default now()
 );
 
+alter table invoices
+  add column if not exists uploaded_invoice_file_size bigint,
+  add column if not exists uploaded_invoice_file_type text,
+  add column if not exists uploaded_invoice_uploaded_at timestamptz;
+
 create table if not exists attachments (
   id uuid primary key default gen_random_uuid(),
   request_id text references procurement_requests(id) on delete cascade,
@@ -292,6 +297,40 @@ create index if not exists audit_logs_request_idx on audit_logs(request_id, crea
 insert into storage.buckets (id, name, public)
 values ('procurement-files', 'procurement-files', false)
 on conflict (id) do nothing;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'storage'
+      and tablename = 'objects'
+      and policyname = 'Authenticated users can upload procurement files'
+  ) then
+    create policy "Authenticated users can upload procurement files"
+      on storage.objects
+      for insert
+      to authenticated
+      with check (bucket_id = 'procurement-files');
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'storage'
+      and tablename = 'objects'
+      and policyname = 'Authenticated users can read procurement files'
+  ) then
+    create policy "Authenticated users can read procurement files"
+      on storage.objects
+      for select
+      to authenticated
+      using (bucket_id = 'procurement-files');
+  end if;
+end $$;
 
 insert into procurement_projects (name)
 values ('Beta'), ('Alpha'), ('Sira')

@@ -210,6 +210,11 @@ export type InvoiceDetails = {
   invoiceDate: string;
   vendor: string;
   uploadedInvoiceFile: string;
+  uploadedInvoiceFileSize?: number;
+  uploadedInvoiceFileType?: string;
+  uploadedInvoiceUploadedAt?: string;
+  uploadedInvoiceStorageBucket?: string;
+  uploadedInvoiceStoragePath?: string;
   paymentTerms: PaymentTerm;
   financeNotes: string;
   clearedAt?: string;
