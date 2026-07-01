@@ -241,6 +241,14 @@ export type ProcurementLineItem = {
   exchangeRateSource: string;
 };
 
+export type LineItemClarification = {
+  lineItemId: string;
+  comment: string;
+  createdAt: string;
+  createdBy: string;
+  createdByName: string;
+};
+
 export type ProcurementRequest = {
   id: string;
   employeeName: string;
@@ -268,6 +276,7 @@ export type ProcurementRequest = {
   submittedById: string;
   previousResponsibleId?: string;
   edlynClarificationReturnStatus?: "Edlyn Confirmation" | "Purchase in Progress";
+  lineItemClarifications?: LineItemClarification[];
   logistics?: LogisticsDetails;
   orderConfirmedAt?: string;
   itemReceivedAt?: string;
@@ -373,8 +382,12 @@ export type WorkflowAction =
   | { type: "dr-review"; comment?: string }
   | { type: "department-review"; comment?: string }
   | { type: "edlyn-confirm"; comment?: string }
-  | { type: "edlyn-request-clarification"; comment: string }
-  | { type: "employee-submit-edlyn-clarification"; comment: string }
+  | {
+      type: "edlyn-request-clarification";
+      comment?: string;
+      lineItemClarifications?: Array<{ lineItemId: string; comment: string }>;
+    }
+  | { type: "employee-submit-edlyn-clarification"; comment: string; lineItems?: ProcurementLineItem[] }
   | { type: "edlyn-upload-invoice"; invoice: InvoiceDetails; comment?: string }
   | { type: "aileen-clear-invoice"; financeNotes?: string }
   | { type: "edlyn-confirm-order"; comment?: string }
@@ -485,6 +498,18 @@ export function normalizeRequestFinancials(
       : request.edlynClarificationReturnStatus === "Edlyn Confirmation"
         ? "Edlyn Confirmation"
         : undefined;
+  const lineItemIds = new Set(lineItems.map((item) => item.id));
+  const lineItemClarifications = Array.isArray(request.lineItemClarifications)
+    ? request.lineItemClarifications
+        .map((item) => ({
+          lineItemId: String(item.lineItemId ?? ""),
+          comment: String(item.comment ?? "").trim(),
+          createdAt: item.createdAt || request.updatedAt || nowIso(),
+          createdBy: item.createdBy || request.previousResponsibleId || "",
+          createdByName: item.createdByName || "Procure",
+        }))
+        .filter((item) => lineItemIds.has(item.lineItemId) && Boolean(item.comment))
+    : undefined;
 
   return {
     ...request,
@@ -493,6 +518,10 @@ export function normalizeRequestFinancials(
     estimatedAmountAed,
     logistics,
     edlynClarificationReturnStatus,
+    lineItemClarifications:
+      lineItemClarifications && lineItemClarifications.length > 0
+        ? lineItemClarifications
+        : undefined,
     exchangeRateSource:
       request.exchangeRateSource ||
       lineItems[0]?.exchangeRateSource ||
@@ -1485,9 +1514,16 @@ export function transitionRequest(
       break;
     }
     case "edlyn-request-clarification": {
+      const lineItemIds = new Set(getRequestLineItems(editable).map((item) => item.id));
+      const itemClarifications = (workflowAction.lineItemClarifications ?? [])
+        .map((item) => ({
+          lineItemId: item.lineItemId,
+          comment: item.comment.trim(),
+        }))
+        .filter((item) => lineItemIds.has(item.lineItemId) && hasText(item.comment));
       if (
-        !canAct(["Edlyn Confirmation", "Purchase in Progress"], "Edlyn") ||
-        !hasText(workflowAction.comment)
+        !canAct(["Edlyn Confirmation", "Purchase in Progress", "Rashid Auto Approved"], "Edlyn") ||
+        (!hasText(workflowAction.comment) && itemClarifications.length === 0)
       ) {
         return state;
       }
@@ -1499,15 +1535,27 @@ export function transitionRequest(
       editable.stage = "edlyn";
       editable.assigneeId = editable.submittedById;
       editable.previousResponsibleId = actor.id;
+      editable.lineItemClarifications = itemClarifications.map((item) => ({
+        ...item,
+        createdAt: dateTime,
+        createdBy: actor.id,
+        createdByName: actor.name,
+      }));
       actionLabel = "Procure requested clarification";
-      comment = workflowAction.comment;
+      comment = hasText(workflowAction.comment)
+        ? workflowAction.comment
+        : itemClarifications
+            .map((item, index) => `Item ${index + 1}: ${item.comment}`)
+            .join("\n");
       addNotification(
         nextState.notifications,
         {
           userId: editable.submittedById,
           requestId,
           title: "Procure needs clarification",
-          body: `${editable.id} needs item or price clarification from you: ${comment}`,
+          body: `${editable.id} needs item or price clarification from you${
+            comment ? `: ${comment}` : "."
+          }`,
           type: "system",
         },
         dateTime,
@@ -1523,10 +1571,51 @@ export function transitionRequest(
         return state;
       }
       const assignee = assignTo("Edlyn", { notify: false });
+      if (workflowAction.lineItems && workflowAction.lineItems.length > 0) {
+        const lineItems = workflowAction.lineItems.map((item) => ({
+          ...item,
+          productUrl: item.productUrl ?? "",
+        }));
+        const totalAed = roundMoney(
+          lineItems.reduce((total, item) => total + item.aedTotal, 0),
+        );
+        const totalQuantity = lineItems.reduce((total, item) => total + item.quantity, 0);
+        const vendorName =
+          Array.from(new Set(lineItems.map((item) => item.vendorName).filter(Boolean))).join(
+            ", ",
+          ) || editable.vendorName;
+
+        editable.lineItems = lineItems;
+        editable.estimatedAmountAed = totalAed;
+        editable.quantity = totalQuantity;
+        editable.exchangeRateDate = lineItems[0]?.exchangeRateDate ?? DEFAULT_EXCHANGE_RATE_DATE;
+        editable.exchangeRateSource =
+          Array.from(new Set(lineItems.map((item) => item.exchangeRateSource))).join(", ") ||
+          editable.exchangeRateSource;
+        editable.vendorName = vendorName;
+        editable.vendor = {
+          ...editable.vendor,
+          companyName: vendorName || editable.vendor.companyName,
+        };
+
+        if (lineItems.length === 1) {
+          const [item] = lineItems;
+          editable.itemName = item.itemName;
+          editable.itemDescription = item.itemDescription;
+          editable.estimatedAmount = item.originalTotal;
+          editable.currency = item.currency;
+        } else {
+          editable.itemName = `Bulk upload (${lineItems.length} items)`;
+          editable.itemDescription = `Bulk procurement upload containing ${lineItems.length} item(s).`;
+          editable.estimatedAmount = totalAed;
+          editable.currency = "AED";
+        }
+      }
       editable.status = editable.edlynClarificationReturnStatus ?? "Edlyn Confirmation";
       editable.stage = "edlyn";
       editable.previousResponsibleId = actor.id;
       delete editable.edlynClarificationReturnStatus;
+      delete editable.lineItemClarifications;
       actionLabel = "Employee answered Procure clarification";
       comment = workflowAction.comment;
       addNotification(
@@ -2342,6 +2431,14 @@ export function parseState(serialized: string | null) {
             productUrl: item.productUrl ?? "",
             vendorName: migrateText(item.vendorName),
           })),
+          lineItemClarifications: Array.isArray(request.lineItemClarifications)
+            ? request.lineItemClarifications.map((item) => ({
+                ...item,
+                comment: migrateApprovalDisplayText(item.comment),
+                createdBy: migrateUserId(item.createdBy),
+                createdByName: migrateApprovalDisplayText(item.createdByName),
+              }))
+            : undefined,
         });
       }),
       auditLogs: state.auditLogs.map((log) => ({

@@ -2123,6 +2123,7 @@ function ActionPanel({
   );
   const [lastCheckpoint, setLastCheckpoint] = useState(request.logistics?.lastCheckpoint ?? "");
   const [deliveryNotes, setDeliveryNotes] = useState(request.logistics?.notes ?? "");
+  const [lineItemComments, setLineItemComments] = useState<Record<string, string>>({});
   const actionNoteId = `${fieldPrefix}-action-note`;
   const declineReasonId = `${fieldPrefix}-decline-reason`;
   const invoiceNumberId = `${fieldPrefix}-invoice-number`;
@@ -2140,11 +2141,29 @@ function ActionPanel({
 
   const role = currentUser.role;
   const departmentReviewRole = getDepartmentReviewRole(request.department);
+  const lineItems = getRequestLineItems(request);
+  const lineItemClarificationPayload = () =>
+    lineItems
+      .map((item) => ({
+        lineItemId: item.id,
+        comment: (lineItemComments[item.id] ?? "").trim(),
+      }))
+      .filter((item) => item.comment);
+  const hasProcureClarification =
+    Boolean(comment.trim()) || lineItemClarificationPayload().length > 0;
   const clearText = () => {
     setComment("");
     setDeclineReason("");
   };
+  const clearProcureClarification = () => {
+    clearText();
+    setLineItemComments({});
+  };
   const canUse = (neededRole: Role) => role === neededRole;
+  const canProcureClarify =
+    canUse("Edlyn") &&
+    (["Edlyn Confirmation", "Purchase in Progress"].includes(request.status) ||
+      (request.status === "Rashid Auto Approved" && request.stage === "edlyn"));
 
   const invoicePayload = (): InvoiceDetails => ({
     invoiceNumber: invoiceNumber || `${request.id}-INV`,
@@ -2239,6 +2258,52 @@ function ActionPanel({
             onChange={(event) => setComment(event.target.value)}
           />
         </Field>
+
+        {canProcureClarify ? (
+          <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
+            <div>
+              <p className="text-sm font-semibold text-slate-950">
+                Line item clarification notes
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Add notes only beside the items that need clarification.
+              </p>
+            </div>
+            <div className="grid gap-3">
+              {lineItems.map((item, index) => (
+                <div
+                  className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3"
+                  key={item.id}
+                >
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold uppercase text-slate-500">
+                        Item {index + 1}
+                      </p>
+                      <p className="break-words text-sm font-semibold text-slate-950">
+                        {item.itemName}
+                      </p>
+                    </div>
+                    <p className="text-sm font-semibold text-slate-700">
+                      Qty {item.quantity} - {money(item.unitPrice, item.currency)}
+                    </p>
+                  </div>
+                  <TextArea
+                    className="min-h-24"
+                    placeholder={`Clarification note for item ${index + 1}`}
+                    value={lineItemComments[item.id] ?? ""}
+                    onChange={(event) =>
+                      setLineItemComments((current) => ({
+                        ...current,
+                        [item.id]: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {request.status === "Mona Review" && canUse("Mona") ? (
           <div className="grid gap-2 sm:flex sm:flex-wrap">
@@ -2341,14 +2406,15 @@ function ActionPanel({
               Confirm item details
             </IconButton>
             <IconButton
-              disabled={!comment.trim()}
+              disabled={!hasProcureClarification}
               icon={<AlertCircle className="h-4 w-4" />}
               onClick={() => {
                 onTransition(request.id, {
                   type: "edlyn-request-clarification",
                   comment,
+                  lineItemClarifications: lineItemClarificationPayload(),
                 });
-                clearText();
+                clearProcureClarification();
               }}
               variant="secondary"
             >
@@ -2406,14 +2472,15 @@ function ActionPanel({
                 Upload invoice
               </IconButton>
               <IconButton
-                disabled={!comment.trim()}
+                disabled={!hasProcureClarification}
                 icon={<AlertCircle className="h-4 w-4" />}
                 onClick={() => {
                   onTransition(request.id, {
                     type: "edlyn-request-clarification",
                     comment,
+                    lineItemClarifications: lineItemClarificationPayload(),
                   });
-                  clearText();
+                  clearProcureClarification();
                 }}
                 variant="secondary"
               >
@@ -2581,6 +2648,9 @@ function RequestDetails({
   const logs = state.auditLogs.filter((log) => log.requestId === request.id);
   const latestDecline = logs.find((log) => log.declineReason);
   const lineItems = getRequestLineItems(request);
+  const lineItemClarificationMap = new Map(
+    (request.lineItemClarifications ?? []).map((item) => [item.lineItemId, item.comment]),
+  );
 
   return (
     <section className="grid min-w-0 gap-5">
@@ -2654,6 +2724,14 @@ function RequestDetails({
                     <Detail label="Unit price" value={money(item.unitPrice, item.currency)} />
                     <Detail label="Original total" value={money(item.originalTotal, item.currency)} />
                     <Detail label="FX to AED" value={item.fxRateToAed.toFixed(4)} />
+                    {lineItemClarificationMap.get(item.id) ? (
+                      <div className="col-span-2 rounded-lg border border-red-200 bg-red-50 p-2">
+                        <Detail
+                          label="Clarification note"
+                          value={lineItemClarificationMap.get(item.id) ?? ""}
+                        />
+                      </div>
+                    ) : null}
                     <div className="col-span-2">
                       <Detail label="Vendor" value={item.vendorName || "Not provided"} />
                     </div>
@@ -2665,7 +2743,7 @@ function RequestDetails({
               ))}
             </div>
             <div className="mt-4 hidden overflow-x-auto rounded-xl border border-slate-200 md:block">
-              <table className="w-full min-w-[1040px] text-left text-sm">
+              <table className="w-full min-w-[1220px] text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
                     <th className="px-3 py-2">No.</th>
@@ -2677,6 +2755,7 @@ function RequestDetails({
                     <th className="px-3 py-2">FX to AED</th>
                     <th className="px-3 py-2">AED total</th>
                     <th className="px-3 py-2">Vendor</th>
+                    <th className="px-3 py-2">Clarification note</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -2705,6 +2784,15 @@ function RequestDetails({
                         {money(item.aedTotal, "AED")}
                       </td>
                       <td className="px-3 py-2">{item.vendorName || "Not provided"}</td>
+                      <td className="px-3 py-2">
+                        {lineItemClarificationMap.get(item.id) ? (
+                          <span className="block max-w-64 whitespace-pre-line rounded-lg border border-red-200 bg-red-50 p-2 text-xs font-semibold text-red-900">
+                            {lineItemClarificationMap.get(item.id)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">None</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -3813,6 +3901,441 @@ function EmployeeMonaClarificationPanel({
   );
 }
 
+function EmployeeLineItemsPanel({ request }: { request: ProcurementRequest }) {
+  const lineItems = getRequestLineItems(request);
+  const lineItemClarificationMap = new Map(
+    (request.lineItemClarifications ?? []).map((item) => [item.lineItemId, item.comment]),
+  );
+
+  return (
+    <div className={classNames(insetPanelClass, "mt-5 overflow-hidden bg-white")}>
+      <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+        <h3 className="text-base font-bold text-slate-950">Line items</h3>
+        <p className="mt-1 text-sm text-slate-500">
+          Item details, quantities, pricing, vendors, and product links for this request.
+        </p>
+      </div>
+      <div className="grid gap-3 p-3 md:hidden">
+        {lineItems.map((item, index) => (
+          <div className="rounded-xl border border-slate-200 bg-white p-3" key={item.id}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase text-slate-500">
+                  Item {index + 1}
+                </p>
+                <p className="mt-1 break-words font-semibold text-slate-950">
+                  {item.itemName}
+                </p>
+                <p className="mt-1 text-sm text-slate-600">{item.itemDescription}</p>
+              </div>
+              <p className="shrink-0 text-sm font-bold text-slate-950">
+                {money(item.aedTotal, "AED")}
+              </p>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <Detail label="Qty" value={String(item.quantity)} />
+              <Detail label="Unit price" value={money(item.unitPrice, item.currency)} />
+              <Detail label="Original total" value={money(item.originalTotal, item.currency)} />
+              <Detail label="AED total" value={money(item.aedTotal, "AED")} />
+              <div className="col-span-2">
+                <Detail label="Vendor" value={item.vendorName || "Not provided"} />
+              </div>
+              <div className="col-span-2">
+                <LineItemLink productUrl={item.productUrl} />
+              </div>
+              {lineItemClarificationMap.get(item.id) ? (
+                <div className="col-span-2 rounded-lg border border-red-200 bg-red-50 p-3">
+                  <Detail
+                    label="Clarification note"
+                    value={lineItemClarificationMap.get(item.id) ?? ""}
+                  />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[1040px] text-left text-sm">
+          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-4 py-3">Item</th>
+              <th className="px-4 py-3">Qty</th>
+              <th className="px-4 py-3">Unit price</th>
+              <th className="px-4 py-3">Original total</th>
+              <th className="px-4 py-3">AED total</th>
+              <th className="px-4 py-3">Vendor</th>
+              <th className="px-4 py-3">Product link</th>
+              <th className="px-4 py-3">Clarification note</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {lineItems.map((item, index) => (
+              <tr key={item.id}>
+                <td className="px-4 py-3">
+                  <p className="font-semibold text-slate-950">
+                    Item {index + 1}: {item.itemName}
+                  </p>
+                  <p className="mt-1 line-clamp-2 text-xs text-slate-500">
+                    {item.itemDescription}
+                  </p>
+                </td>
+                <td className="px-4 py-3">{item.quantity}</td>
+                <td className="px-4 py-3">{money(item.unitPrice, item.currency)}</td>
+                <td className="px-4 py-3">{money(item.originalTotal, item.currency)}</td>
+                <td className="px-4 py-3 font-semibold">{money(item.aedTotal, "AED")}</td>
+                <td className="px-4 py-3">{item.vendorName || "Not provided"}</td>
+                <td className="px-4 py-3">
+                  <LineItemLink productUrl={item.productUrl} compact />
+                </td>
+                <td className="px-4 py-3">
+                  {lineItemClarificationMap.get(item.id) ? (
+                    <span className="block max-w-72 whitespace-pre-line rounded-lg border border-red-200 bg-red-50 p-2 text-xs font-semibold text-red-900">
+                      {lineItemClarificationMap.get(item.id)}
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">None</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function EmployeeInvoicePanel({ request }: { request: ProcurementRequest }) {
+  return (
+    <div className={classNames(insetPanelClass, "mt-5 bg-white p-4")}>
+      <h3 className="text-base font-bold text-slate-950">Invoice documentation</h3>
+      {request.invoice ? (
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Detail label="Invoice number" value={request.invoice.invoiceNumber} />
+          <Detail label="Amount" value={money(request.invoice.invoiceAmount, "AED")} />
+          <Detail label="Invoice date" value={formatDate(request.invoice.invoiceDate)} />
+          <Detail label="Vendor" value={request.invoice.vendor || "Not provided"} />
+          <Detail label="Payment terms" value={request.invoice.paymentTerms} />
+          <Detail label="Uploaded file" value={request.invoice.uploadedInvoiceFile} />
+          <div className="sm:col-span-2 lg:col-span-3">
+            <Detail label="Finance notes" value={request.invoice.financeNotes || "No notes"} />
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
+          Invoice has not been uploaded by Procure yet.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LineItemClarificationNotes({ request }: { request: ProcurementRequest }) {
+  const lineItems = getRequestLineItems(request);
+  const notes = (request.lineItemClarifications ?? [])
+    .map((note) => ({
+      ...note,
+      item: lineItems.find((item) => item.id === note.lineItemId),
+    }))
+    .filter((note) => note.item && note.comment.trim());
+
+  if (notes.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-xl border border-red-200 bg-white p-3">
+      <p className="text-sm font-semibold text-red-950">Line item questions from Procure</p>
+      <div className="mt-3 grid gap-2">
+        {notes.map((note, index) => {
+          const itemIndex = lineItems.findIndex((item) => item.id === note.lineItemId);
+          return (
+            <div className="rounded-lg border border-red-100 bg-red-50 p-3" key={note.lineItemId}>
+              <p className="text-xs font-semibold uppercase text-red-700">
+                Item {itemIndex >= 0 ? itemIndex + 1 : index + 1}
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-950">
+                {note.item?.itemName}
+              </p>
+              <p className="mt-2 whitespace-pre-line text-sm text-red-900">
+                {note.comment}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function EmployeeProcureClarificationPanel({
+  request,
+  clarificationLog,
+  onTransition,
+}: {
+  request: ProcurementRequest;
+  clarificationLog?: AuditLog;
+  onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
+}) {
+  const [response, setResponse] = useState("");
+  const [lineItems, setLineItems] = useState<ProcurementLineItem[]>(() =>
+    getRequestLineItems(request).map((item) => ({
+      ...item,
+      productUrl: item.productUrl ?? "",
+    })),
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const updateLineItem = (
+    itemId: string,
+    updater: (item: ProcurementLineItem) => ProcurementLineItem,
+  ) => {
+    setLineItems((current) =>
+      current.map((item) => (item.id === itemId ? updater(item) : item)),
+    );
+  };
+
+  const buildUpdatedLineItems = async () => {
+    const updatedItems: ProcurementLineItem[] = [];
+
+    for (const [index, item] of lineItems.entries()) {
+      const itemName = item.itemName.trim();
+      const itemDescription = item.itemDescription.trim();
+      const vendorName = item.vendorName.trim();
+      const currency = item.currency.trim().toUpperCase();
+      const quantity = Number(item.quantity);
+      const unitPrice = Number(item.unitPrice);
+      const rawLink = item.productUrl ?? "";
+      const productUrl = normaliseOptionalUrl(rawLink);
+
+      if (!itemName) {
+        throw new Error(`Item ${index + 1}: item name is required.`);
+      }
+      if (!itemDescription) {
+        throw new Error(`Item ${index + 1}: item description is required.`);
+      }
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new Error(`Item ${index + 1}: quantity must be greater than 0.`);
+      }
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+        throw new Error(`Item ${index + 1}: unit price must be greater than 0.`);
+      }
+      if (!BULK_SUPPORTED_CURRENCIES.includes(currency as (typeof BULK_SUPPORTED_CURRENCIES)[number])) {
+        throw new Error(
+          `Item ${index + 1}: currency must be one of ${BULK_SUPPORTED_CURRENCIES.join(", ")}.`,
+        );
+      }
+      if (rawLink.trim() && !productUrl) {
+        throw new Error(`Item ${index + 1}: product link must be a valid website URL.`);
+      }
+
+      const fx = await getFxRateToAed(currency);
+      const originalTotal = roundMoney(quantity * unitPrice);
+      updatedItems.push({
+        ...item,
+        itemName,
+        itemDescription,
+        productUrl,
+        quantity,
+        unitPrice: roundMoney(unitPrice),
+        currency,
+        originalTotal,
+        fxRateToAed: fx.rate,
+        aedTotal: roundMoney(originalTotal * fx.rate),
+        vendorName,
+        exchangeRateDate: fx.date,
+        exchangeRateSource: fx.cached ? `${fx.source} cached` : fx.source,
+      });
+    }
+
+    return updatedItems;
+  };
+
+  return (
+    <div className="mt-5 grid gap-4 rounded-xl border border-red-200 bg-red-50 p-4">
+      <div>
+        <p className="font-semibold text-red-950">Clarification needed by Procure</p>
+        <p className="mt-1 text-sm text-red-800">
+          Answer the item or price question here. Update the affected line items below, then
+          send the request back to Procure.
+        </p>
+      </div>
+      {clarificationLog?.comment ? (
+        <div className="rounded-xl border border-red-200 bg-white p-3">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm font-semibold text-red-950">Message from Procure</p>
+            <p className="text-xs text-red-700">
+              {formatDateTime(clarificationLog.dateTime)}
+            </p>
+          </div>
+          <p className="mt-2 whitespace-pre-line text-sm text-slate-800">
+            {clarificationLog.comment}
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-red-200 bg-white p-3 text-sm text-red-800">
+          No written clarification note was found for this request.
+        </div>
+      )}
+      <LineItemClarificationNotes request={request} />
+      {error ? (
+        <div className="rounded-lg border border-red-300 bg-white p-3 text-sm font-semibold text-red-800">
+          {error}
+        </div>
+      ) : null}
+      <div className={classNames(insetPanelClass, "grid gap-3 bg-white p-3")}>
+        <div>
+          <p className="text-sm font-bold text-slate-950">Update requested line items</p>
+          <p className="mt-1 text-xs text-slate-500">
+            You can update quantity, price, currency, item details, vendor, and product links.
+          </p>
+        </div>
+        {lineItems.map((item, index) => (
+          <div className="grid gap-3 rounded-xl border border-slate-200 p-3" key={item.id}>
+            <p className="text-xs font-semibold uppercase text-slate-500">
+              Item {index + 1}
+            </p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Item name" required>
+                <TextInput
+                  value={item.itemName}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      itemName: event.target.value,
+                    }))
+                  }
+                  required
+                />
+              </Field>
+              <Field label="Vendor">
+                <TextInput
+                  value={item.vendorName}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      vendorName: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+              <Field label="Quantity" required>
+                <TextInput
+                  inputMode="decimal"
+                  min={0}
+                  step="any"
+                  type="number"
+                  value={item.quantity}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      quantity: Number(event.target.value),
+                    }))
+                  }
+                  required
+                />
+              </Field>
+              <Field label="Unit price" required>
+                <TextInput
+                  inputMode="decimal"
+                  min={0}
+                  step="any"
+                  type="number"
+                  value={item.unitPrice}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      unitPrice: Number(event.target.value),
+                    }))
+                  }
+                  required
+                />
+              </Field>
+              <Field label="Currency" required>
+                <SelectInput
+                  value={item.currency}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      currency: event.target.value,
+                    }))
+                  }
+                  required
+                >
+                  {BULK_SUPPORTED_CURRENCIES.map((currency) => (
+                    <option key={currency}>{currency}</option>
+                  ))}
+                </SelectInput>
+              </Field>
+              <Field label="Product link">
+                <TextInput
+                  inputMode="url"
+                  placeholder="Paste product URL"
+                  value={item.productUrl ?? ""}
+                  onChange={(event) =>
+                    updateLineItem(item.id, (current) => ({
+                      ...current,
+                      productUrl: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+            </div>
+            <Field label="Item description" required>
+              <TextArea
+                value={item.itemDescription}
+                onChange={(event) =>
+                  updateLineItem(item.id, (current) => ({
+                    ...current,
+                    itemDescription: event.target.value,
+                  }))
+                }
+                required
+              />
+            </Field>
+          </div>
+        ))}
+      </div>
+      <Field label="Reply to Procure" required>
+        <TextArea
+          placeholder="Explain what you updated or answered"
+          value={response}
+          onChange={(event) => setResponse(event.target.value)}
+        />
+      </Field>
+      <IconButton
+        disabled={saving || !response.trim()}
+        icon={<Send className="h-4 w-4" />}
+        onClick={async () => {
+          try {
+            setSaving(true);
+            setError("");
+            const updatedLineItems = await buildUpdatedLineItems();
+            onTransition(request.id, {
+              type: "employee-submit-edlyn-clarification",
+              comment: response,
+              lineItems: updatedLineItems,
+            });
+            setResponse("");
+          } catch (submitError) {
+            setError(
+              submitError instanceof Error
+                ? submitError.message
+                : "Could not submit the clarification.",
+            );
+          } finally {
+            setSaving(false);
+          }
+        }}
+      >
+        {saving ? "Saving updates..." : "Submit clarification to Procure"}
+      </IconButton>
+    </div>
+  );
+}
+
 function EmployeeRequestStatus({
   request,
   state,
@@ -3824,8 +4347,6 @@ function EmployeeRequestStatus({
   currentUser: UserProfile;
   onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
 }) {
-  const [clarification, setClarification] = useState("");
-
   if (!request) {
     return (
       <section className={classNames(panelClass, "min-w-0 p-6 text-sm text-slate-500")}>
@@ -3891,6 +4412,9 @@ function EmployeeRequestStatus({
         <Detail label="Pending action" value={getPendingAction(request)} />
       </div>
 
+      <EmployeeLineItemsPanel request={request} />
+      <EmployeeInvoicePanel request={request} />
+
       {request.status === "Rashid Declined" ? (
         <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
@@ -3917,49 +4441,12 @@ function EmployeeRequestStatus({
 
       {request.status === "Edlyn Clarification Requested" &&
       request.assigneeId === currentUser.id ? (
-        <div className="mt-5 grid gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
-          <div>
-            <p className="font-semibold text-red-950">Clarification needed by Procure</p>
-            <p className="mt-1 text-sm text-red-800">
-              Answer the item or price question here. The request will return directly to Procure.
-            </p>
-          </div>
-          {edlynClarification?.comment ? (
-            <div className="rounded-xl border border-red-200 bg-white p-3">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm font-semibold text-red-950">Message from Procure</p>
-                <p className="text-xs text-red-700">
-                  {formatDateTime(edlynClarification.dateTime)}
-                </p>
-              </div>
-              <p className="mt-2 whitespace-pre-line text-sm text-slate-800">
-                {edlynClarification.comment}
-              </p>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-red-200 bg-white p-3 text-sm text-red-800">
-              No written clarification note was found for this request.
-            </div>
-          )}
-          <TextArea
-            placeholder="Write your clarification for Procure"
-            value={clarification}
-            onChange={(event) => setClarification(event.target.value)}
-          />
-          <IconButton
-            disabled={!clarification.trim()}
-            icon={<Send className="h-4 w-4" />}
-            onClick={() => {
-              onTransition(request.id, {
-                type: "employee-submit-edlyn-clarification",
-                comment: clarification,
-              });
-              setClarification("");
-            }}
-          >
-            Submit clarification
-          </IconButton>
-        </div>
+        <EmployeeProcureClarificationPanel
+          clarificationLog={edlynClarification}
+          key={`${request.id}-${request.updatedAt}`}
+          onTransition={onTransition}
+          request={request}
+        />
       ) : null}
     </section>
   );
