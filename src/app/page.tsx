@@ -735,6 +735,83 @@ async function convertRowsToLineItems(rows: BulkImportRow[]) {
   return lineItems;
 }
 
+function recalculateLineItemTotals(item: ProcurementLineItem) {
+  const quantity = Number(item.quantity);
+  const unitPrice = Number(item.unitPrice);
+  const safeQuantity = Number.isFinite(quantity) ? quantity : 0;
+  const safeUnitPrice = Number.isFinite(unitPrice) ? unitPrice : 0;
+  const originalTotal = roundMoney(safeQuantity * safeUnitPrice);
+  const fxRateToAed = Number.isFinite(item.fxRateToAed)
+    ? item.fxRateToAed
+    : item.currency === "AED"
+      ? 1
+      : 0;
+
+  return {
+    ...item,
+    quantity: safeQuantity,
+    unitPrice: safeUnitPrice,
+    originalTotal,
+    aedTotal: roundMoney(originalTotal * fxRateToAed),
+  };
+}
+
+async function validateAndConvertLineItems(lineItems: ProcurementLineItem[]) {
+  const updatedItems: ProcurementLineItem[] = [];
+
+  for (const [index, item] of lineItems.entries()) {
+    const itemName = item.itemName.trim();
+    const itemDescription = item.itemDescription.trim();
+    const vendorName = item.vendorName.trim();
+    const currency = item.currency.trim().toUpperCase();
+    const quantity = Number(item.quantity);
+    const unitPrice = Number(item.unitPrice);
+    const rawLink = item.productUrl ?? "";
+    const productUrl = normaliseOptionalUrl(rawLink);
+
+    if (!itemName) {
+      throw new Error(`Item ${index + 1}: item name is required.`);
+    }
+    if (!itemDescription) {
+      throw new Error(`Item ${index + 1}: item description is required.`);
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error(`Item ${index + 1}: quantity must be greater than 0.`);
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+      throw new Error(`Item ${index + 1}: unit price must be greater than 0.`);
+    }
+    if (!BULK_SUPPORTED_CURRENCIES.includes(currency as (typeof BULK_SUPPORTED_CURRENCIES)[number])) {
+      throw new Error(
+        `Item ${index + 1}: currency must be one of ${BULK_SUPPORTED_CURRENCIES.join(", ")}.`,
+      );
+    }
+    if (rawLink.trim() && !productUrl) {
+      throw new Error(`Item ${index + 1}: product link must be a valid website URL.`);
+    }
+
+    const fx = await getFxRateToAed(currency);
+    const originalTotal = roundMoney(quantity * unitPrice);
+    updatedItems.push({
+      ...item,
+      itemName,
+      itemDescription,
+      productUrl,
+      quantity,
+      unitPrice: roundMoney(unitPrice),
+      currency,
+      originalTotal,
+      fxRateToAed: fx.rate,
+      aedTotal: roundMoney(originalTotal * fx.rate),
+      vendorName,
+      exchangeRateDate: fx.date,
+      exchangeRateSource: fx.cached ? `${fx.source} cached` : fx.source,
+    });
+  }
+
+  return updatedItems;
+}
+
 function IconButton({
   children,
   icon,
@@ -1165,6 +1242,43 @@ function RequestForm({
     }
   };
 
+  const updateBulkLineItem = (
+    itemId: string,
+    updater: (item: ProcurementLineItem) => ProcurementLineItem,
+  ) => {
+    setBulkLineItems((current) =>
+      current.map((item) =>
+        item.id === itemId ? recalculateLineItemTotals(updater(item)) : item,
+      ),
+    );
+  };
+
+  const updateBulkLineItemCurrency = async (itemId: string, nextCurrency: string) => {
+    setFormError("");
+    try {
+      const fx = await getFxRateToAed(nextCurrency);
+      setBulkLineItems((current) =>
+        current.map((item) =>
+          item.id === itemId
+            ? recalculateLineItemTotals({
+                ...item,
+                currency: nextCurrency,
+                fxRateToAed: fx.rate,
+                exchangeRateDate: fx.date,
+                exchangeRateSource: fx.cached ? `${fx.source} cached` : fx.source,
+              })
+            : item,
+        ),
+      );
+    } catch (error) {
+      setFormError(
+        error instanceof Error
+          ? error.message
+          : `Could not convert ${nextCurrency} to AED.`,
+      );
+    }
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const amountValue = Number(estimatedAmount);
@@ -1216,7 +1330,7 @@ function RequestForm({
       const selectedCurrency =
         currency === "Other" ? customCurrency.trim().toUpperCase() : currency;
       const lineItems = hasBulkLineItems
-        ? bulkLineItems
+        ? await validateAndConvertLineItems(bulkLineItems)
         : await convertRowsToLineItems([
             {
               itemName,
@@ -1228,6 +1342,9 @@ function RequestForm({
               vendorName,
             },
           ]);
+      if (hasBulkLineItems) {
+        setBulkLineItems(lineItems);
+      }
       const totalAed = roundMoney(
         lineItems.reduce((total, item) => total + item.aedTotal, 0),
       );
@@ -1574,7 +1691,7 @@ function RequestForm({
                     <div className="mt-4 grid gap-3 md:hidden">
                       {bulkLineItems.map((item, index) => (
                         <div
-                          className="rounded-xl border border-slate-200 bg-white p-3"
+                          className="grid gap-3 rounded-xl border border-slate-200 bg-white p-3"
                           key={item.id}
                         >
                           <div className="flex items-start justify-between gap-3">
@@ -1582,34 +1699,115 @@ function RequestForm({
                               <p className="text-xs font-semibold uppercase text-slate-500">
                                 Item {index + 1}
                               </p>
-                              <p className="mt-1 font-semibold text-slate-950">
-                                {item.itemName}
-                              </p>
                             </div>
                             <span className="shrink-0 text-sm font-bold text-slate-950">
                               {money(item.aedTotal, "AED")}
                             </span>
                           </div>
-                          <p className="mt-2 text-sm text-slate-600">
-                            {item.itemDescription}
-                          </p>
-                          <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                            <Detail label="Qty" value={String(item.quantity)} />
-                            <Detail
-                              label="Unit price"
-                              value={money(item.unitPrice, item.currency)}
+                          <Field label="Item name" required>
+                            <TextInput
+                              value={item.itemName}
+                              onChange={(event) =>
+                                updateBulkLineItem(item.id, (current) => ({
+                                  ...current,
+                                  itemName: event.target.value,
+                                }))
+                              }
+                              required
                             />
+                          </Field>
+                          <Field label="Item description" required>
+                            <TextArea
+                              className="min-h-20"
+                              value={item.itemDescription}
+                              onChange={(event) =>
+                                updateBulkLineItem(item.id, (current) => ({
+                                  ...current,
+                                  itemDescription: event.target.value,
+                                }))
+                              }
+                              required
+                            />
+                          </Field>
+                          <div className="grid grid-cols-2 gap-3">
+                            <Field label="Qty" required>
+                              <TextInput
+                                inputMode="decimal"
+                                min={0}
+                                step="any"
+                                type="number"
+                                value={item.quantity}
+                                onChange={(event) =>
+                                  updateBulkLineItem(item.id, (current) => ({
+                                    ...current,
+                                    quantity: Number(event.target.value),
+                                  }))
+                                }
+                                required
+                              />
+                            </Field>
+                            <Field label="Unit price" required>
+                              <TextInput
+                                inputMode="decimal"
+                                min={0}
+                                step="any"
+                                type="number"
+                                value={item.unitPrice}
+                                onChange={(event) =>
+                                  updateBulkLineItem(item.id, (current) => ({
+                                    ...current,
+                                    unitPrice: Number(event.target.value),
+                                  }))
+                                }
+                                required
+                              />
+                            </Field>
+                            <Field label="Currency" required>
+                              <SelectInput
+                                value={item.currency}
+                                onChange={(event) =>
+                                  void updateBulkLineItemCurrency(item.id, event.target.value)
+                                }
+                                required
+                              >
+                                {BULK_SUPPORTED_CURRENCIES.map((currency) => (
+                                  <option key={currency}>{currency}</option>
+                                ))}
+                              </SelectInput>
+                            </Field>
+                            <Field label="Vendor">
+                              <TextInput
+                                value={item.vendorName}
+                                onChange={(event) =>
+                                  updateBulkLineItem(item.id, (current) => ({
+                                    ...current,
+                                    vendorName: event.target.value,
+                                  }))
+                                }
+                              />
+                            </Field>
+                          </div>
+                          <Field label="Product link">
+                            <TextInput
+                              inputMode="url"
+                              placeholder="https://supplier.com/product"
+                              value={item.productUrl ?? ""}
+                              onChange={(event) =>
+                                updateBulkLineItem(item.id, (current) => ({
+                                  ...current,
+                                  productUrl: event.target.value,
+                                }))
+                              }
+                            />
+                          </Field>
+                          <div className="grid grid-cols-2 gap-2 text-sm">
                             <Detail
                               label="Original total"
                               value={money(item.originalTotal, item.currency)}
                             />
+                            <Detail label="AED total" value={money(item.aedTotal, "AED")} />
                             <Detail label="FX to AED" value={item.fxRateToAed.toFixed(4)} />
-                            <div className="col-span-2">
-                              <Detail label="Vendor" value={item.vendorName || "Not provided"} />
-                            </div>
-                            <div className="col-span-2">
-                              <LineItemLink productUrl={item.productUrl} />
-                            </div>
+                            <Detail label="FX date" value={item.exchangeRateDate} />
                           </div>
                         </div>
                       ))}
@@ -1618,13 +1816,14 @@ function RequestForm({
                       </div>
                     </div>
                     <div className="mt-4 hidden overflow-x-auto rounded-xl border border-slate-200 bg-white md:block">
-                      <table className="w-full min-w-[980px] text-left text-sm">
+                      <table className="w-full min-w-[1280px] text-left text-sm">
                     <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                       <tr>
                         <th className="px-3 py-2">No.</th>
                         <th className="px-3 py-2">Item</th>
                         <th className="px-3 py-2">Qty</th>
                         <th className="px-3 py-2">Unit price</th>
+                        <th className="px-3 py-2">Currency</th>
                         <th className="px-3 py-2">Original total</th>
                         <th className="px-3 py-2">Product link</th>
                         <th className="px-3 py-2">FX to AED</th>
@@ -1638,17 +1837,91 @@ function RequestForm({
                           <td className="px-3 py-2 font-semibold text-slate-600">
                             Item {index + 1}
                           </td>
-                          <td className="px-3 py-2">
-                            <p className="font-semibold text-slate-950">{item.itemName}</p>
-                            <p className="mt-1 line-clamp-1 text-xs text-slate-500">
-                              {item.itemDescription}
-                            </p>
+                          <td className="min-w-[280px] px-3 py-2">
+                            <TextInput
+                              aria-label={`Item ${index + 1} name`}
+                              value={item.itemName}
+                              onChange={(event) =>
+                                updateBulkLineItem(item.id, (current) => ({
+                                  ...current,
+                                  itemName: event.target.value,
+                                }))
+                              }
+                            />
+                            <TextInput
+                              aria-label={`Item ${index + 1} description`}
+                              className="mt-2"
+                              value={item.itemDescription}
+                              onChange={(event) =>
+                                updateBulkLineItem(item.id, (current) => ({
+                                  ...current,
+                                  itemDescription: event.target.value,
+                                }))
+                              }
+                            />
                           </td>
-                          <td className="px-3 py-2">{item.quantity}</td>
-                          <td className="px-3 py-2">{money(item.unitPrice, item.currency)}</td>
+                          <td className="min-w-[90px] px-3 py-2">
+                            <TextInput
+                              aria-label={`Item ${index + 1} quantity`}
+                              inputMode="decimal"
+                              min={0}
+                              step="any"
+                              type="number"
+                              value={item.quantity}
+                              onChange={(event) =>
+                                updateBulkLineItem(item.id, (current) => ({
+                                  ...current,
+                                  quantity: Number(event.target.value),
+                                }))
+                              }
+                            />
+                          </td>
+                          <td className="min-w-[120px] px-3 py-2">
+                            <TextInput
+                              aria-label={`Item ${index + 1} unit price`}
+                              inputMode="decimal"
+                              min={0}
+                              step="any"
+                              type="number"
+                              value={item.unitPrice}
+                              onChange={(event) =>
+                                updateBulkLineItem(item.id, (current) => ({
+                                  ...current,
+                                  unitPrice: Number(event.target.value),
+                                }))
+                              }
+                            />
+                          </td>
+                          <td className="min-w-[120px] px-3 py-2">
+                            <SelectInput
+                              aria-label={`Item ${index + 1} currency`}
+                              value={item.currency}
+                              onChange={(event) =>
+                                void updateBulkLineItemCurrency(item.id, event.target.value)
+                              }
+                            >
+                              {BULK_SUPPORTED_CURRENCIES.map((currency) => (
+                                <option key={currency}>{currency}</option>
+                              ))}
+                            </SelectInput>
+                          </td>
                           <td className="px-3 py-2">{money(item.originalTotal, item.currency)}</td>
-                          <td className="px-3 py-2">
-                            <LineItemLink productUrl={item.productUrl} compact />
+                          <td className="min-w-[260px] px-3 py-2">
+                            <TextInput
+                              aria-label={`Item ${index + 1} product link`}
+                              inputMode="url"
+                              placeholder="https://supplier.com/product"
+                              value={item.productUrl ?? ""}
+                              onChange={(event) =>
+                                updateBulkLineItem(item.id, (current) => ({
+                                  ...current,
+                                  productUrl: event.target.value,
+                                }))
+                              }
+                            />
+                            <div className="mt-2">
+                              <LineItemLink productUrl={item.productUrl} compact />
+                            </div>
                           </td>
                           <td className="px-3 py-2">
                             {item.fxRateToAed.toFixed(4)}
@@ -1657,13 +1930,24 @@ function RequestForm({
                           <td className="px-3 py-2 font-semibold">
                             {money(item.aedTotal, "AED")}
                           </td>
-                          <td className="px-3 py-2">{item.vendorName || "Not provided"}</td>
+                          <td className="min-w-[180px] px-3 py-2">
+                            <TextInput
+                              aria-label={`Item ${index + 1} vendor`}
+                              value={item.vendorName}
+                              onChange={(event) =>
+                                updateBulkLineItem(item.id, (current) => ({
+                                  ...current,
+                                  vendorName: event.target.value,
+                                }))
+                              }
+                            />
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                     <tfoot className="bg-slate-50">
                       <tr>
-                        <td className="px-3 py-2 font-bold text-slate-950" colSpan={7}>
+                        <td className="px-3 py-2 font-bold text-slate-950" colSpan={8}>
                           Total converted value
                         </td>
                         <td className="px-3 py-2 font-bold text-slate-950">
