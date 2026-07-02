@@ -21,6 +21,7 @@ import {
   LayoutDashboard,
   LogOut,
   PackageCheck,
+  Pencil,
   Plus,
   RefreshCcw,
   Search,
@@ -33,7 +34,7 @@ import {
   UserCog,
   XCircle,
 } from "lucide-react";
-import { FormEvent, MouseEventHandler, ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, FormEvent, MouseEventHandler, ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
 import {
   AuditLog,
@@ -1179,6 +1180,7 @@ function RequestForm({
   const [successMessage, setSuccessMessage] = useState("");
   const [entryMode, setEntryMode] = useState<"single" | "bulk">("single");
   const [bulkLineItems, setBulkLineItems] = useState<ProcurementLineItem[]>([]);
+  const [editingBulkItemId, setEditingBulkItemId] = useState<string | null>(null);
   const [bulkFileName, setBulkFileName] = useState("");
   const [bulkImportMessage, setBulkImportMessage] = useState("");
   const [bulkImporting, setBulkImporting] = useState(false);
@@ -1228,6 +1230,7 @@ function RequestForm({
       }
       const converted = await convertRowsToLineItems(mappedRows);
       setBulkLineItems(converted);
+      setEditingBulkItemId(null);
       setBulkImportMessage(
         `${converted.length} line item(s) loaded from ${file.name}. Total converted value is ${money(
           converted.reduce((total, item) => total + item.aedTotal, 0),
@@ -1278,6 +1281,105 @@ function RequestForm({
       );
     }
   };
+
+  const renderBulkItemEditor = (item: ProcurementLineItem, index: number) => (
+    <div className="grid gap-3">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <Field label="Item name" required>
+          <TextInput
+            value={item.itemName}
+            onChange={(event) =>
+              updateBulkLineItem(item.id, (current) => ({
+                ...current,
+                itemName: event.target.value,
+              }))
+            }
+            required
+          />
+        </Field>
+        <Field label="Quantity" required>
+          <TextInput
+            inputMode="decimal"
+            min={0}
+            step="any"
+            type="number"
+            value={item.quantity}
+            onChange={(event) =>
+              updateBulkLineItem(item.id, (current) => ({
+                ...current,
+                quantity: Number(event.target.value),
+              }))
+            }
+            required
+          />
+        </Field>
+        <Field label="Unit price" required>
+          <TextInput
+            inputMode="decimal"
+            min={0}
+            step="any"
+            type="number"
+            value={item.unitPrice}
+            onChange={(event) =>
+              updateBulkLineItem(item.id, (current) => ({
+                ...current,
+                unitPrice: Number(event.target.value),
+              }))
+            }
+            required
+          />
+        </Field>
+        <Field label="Currency" required>
+          <SelectInput
+            value={item.currency}
+            onChange={(event) => void updateBulkLineItemCurrency(item.id, event.target.value)}
+            required
+          >
+            {BULK_SUPPORTED_CURRENCIES.map((currency) => (
+              <option key={currency}>{currency}</option>
+            ))}
+          </SelectInput>
+        </Field>
+        <Field label="Vendor">
+          <TextInput
+            value={item.vendorName}
+            onChange={(event) =>
+              updateBulkLineItem(item.id, (current) => ({
+                ...current,
+                vendorName: event.target.value,
+              }))
+            }
+          />
+        </Field>
+        <Field label="Product link">
+          <TextInput
+            inputMode="url"
+            placeholder="https://supplier.com/product"
+            value={item.productUrl ?? ""}
+            onChange={(event) =>
+              updateBulkLineItem(item.id, (current) => ({
+                ...current,
+                productUrl: event.target.value,
+              }))
+            }
+          />
+        </Field>
+      </div>
+      <Field label={`Item ${index + 1} description`} required>
+        <TextArea
+          className="min-h-20"
+          value={item.itemDescription}
+          onChange={(event) =>
+            updateBulkLineItem(item.id, (current) => ({
+              ...current,
+              itemDescription: event.target.value,
+            }))
+          }
+          required
+        />
+      </Field>
+    </div>
+  );
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1409,6 +1511,7 @@ function RequestForm({
       setAttachments([]);
       setEntryMode("single");
       setBulkLineItems([]);
+      setEditingBulkItemId(null);
       setBulkFileName("");
       setBulkImportMessage("");
       setVendorContact("");
@@ -1478,12 +1581,13 @@ function RequestForm({
                       ? "bg-blue-600 text-white shadow-sm"
                       : "text-slate-600 hover:bg-slate-100",
                   )}
-                  onClick={() => {
-                    setEntryMode("single");
-                    setBulkLineItems([]);
-                    setBulkFileName("");
-                    setBulkImportMessage("");
-                  }}
+                      onClick={() => {
+                        setEntryMode("single");
+                        setBulkLineItems([]);
+                        setEditingBulkItemId(null);
+                        setBulkFileName("");
+                        setBulkImportMessage("");
+                      }}
                   type="button"
                 >
                   <PackageCheck className="h-4 w-4" />
@@ -1644,6 +1748,7 @@ function RequestForm({
                         icon={<XCircle className="h-4 w-4" />}
                         onClick={() => {
                           setBulkLineItems([]);
+                          setEditingBulkItemId(null);
                           setBulkFileName("");
                           setBulkImportMessage("");
                         }}
@@ -1699,116 +1804,49 @@ function RequestForm({
                               <p className="text-xs font-semibold uppercase text-slate-500">
                                 Item {index + 1}
                               </p>
+                              <p className="mt-1 font-semibold text-slate-950">
+                                {item.itemName}
+                              </p>
+                              <p className="mt-1 text-sm text-slate-500">
+                                {item.itemDescription}
+                              </p>
                             </div>
                             <span className="shrink-0 text-sm font-bold text-slate-950">
                               {money(item.aedTotal, "AED")}
                             </span>
                           </div>
-                          <Field label="Item name" required>
-                            <TextInput
-                              value={item.itemName}
-                              onChange={(event) =>
-                                updateBulkLineItem(item.id, (current) => ({
-                                  ...current,
-                                  itemName: event.target.value,
-                                }))
-                              }
-                              required
-                            />
-                          </Field>
-                          <Field label="Item description" required>
-                            <TextArea
-                              className="min-h-20"
-                              value={item.itemDescription}
-                              onChange={(event) =>
-                                updateBulkLineItem(item.id, (current) => ({
-                                  ...current,
-                                  itemDescription: event.target.value,
-                                }))
-                              }
-                              required
-                            />
-                          </Field>
-                          <div className="grid grid-cols-2 gap-3">
-                            <Field label="Qty" required>
-                              <TextInput
-                                inputMode="decimal"
-                                min={0}
-                                step="any"
-                                type="number"
-                                value={item.quantity}
-                                onChange={(event) =>
-                                  updateBulkLineItem(item.id, (current) => ({
-                                    ...current,
-                                    quantity: Number(event.target.value),
-                                  }))
-                                }
-                                required
-                              />
-                            </Field>
-                            <Field label="Unit price" required>
-                              <TextInput
-                                inputMode="decimal"
-                                min={0}
-                                step="any"
-                                type="number"
-                                value={item.unitPrice}
-                                onChange={(event) =>
-                                  updateBulkLineItem(item.id, (current) => ({
-                                    ...current,
-                                    unitPrice: Number(event.target.value),
-                                  }))
-                                }
-                                required
-                              />
-                            </Field>
-                            <Field label="Currency" required>
-                              <SelectInput
-                                value={item.currency}
-                                onChange={(event) =>
-                                  void updateBulkLineItemCurrency(item.id, event.target.value)
-                                }
-                                required
-                              >
-                                {BULK_SUPPORTED_CURRENCIES.map((currency) => (
-                                  <option key={currency}>{currency}</option>
-                                ))}
-                              </SelectInput>
-                            </Field>
-                            <Field label="Vendor">
-                              <TextInput
-                                value={item.vendorName}
-                                onChange={(event) =>
-                                  updateBulkLineItem(item.id, (current) => ({
-                                    ...current,
-                                    vendorName: event.target.value,
-                                  }))
-                                }
-                              />
-                            </Field>
-                          </div>
-                          <Field label="Product link">
-                            <TextInput
-                              inputMode="url"
-                              placeholder="https://supplier.com/product"
-                              value={item.productUrl ?? ""}
-                              onChange={(event) =>
-                                updateBulkLineItem(item.id, (current) => ({
-                                  ...current,
-                                  productUrl: event.target.value,
-                                }))
-                              }
-                            />
-                          </Field>
                           <div className="grid grid-cols-2 gap-2 text-sm">
+                            <Detail label="Qty" value={String(item.quantity)} />
+                            <Detail label="Unit price" value={money(item.unitPrice, item.currency)} />
                             <Detail
                               label="Original total"
                               value={money(item.originalTotal, item.currency)}
                             />
                             <Detail label="AED total" value={money(item.aedTotal, "AED")} />
-                            <Detail label="FX to AED" value={item.fxRateToAed.toFixed(4)} />
-                            <Detail label="FX date" value={item.exchangeRateDate} />
+                            <Detail label="Vendor" value={item.vendorName || "Not provided"} />
+                            <div>
+                              <p className="text-xs font-semibold uppercase text-slate-500">
+                                Product link
+                              </p>
+                              <LineItemLink productUrl={item.productUrl} compact />
+                            </div>
                           </div>
+                          <IconButton
+                            icon={<Pencil className="h-4 w-4" />}
+                            onClick={() =>
+                              setEditingBulkItemId(
+                                editingBulkItemId === item.id ? null : item.id,
+                              )
+                            }
+                            variant="secondary"
+                          >
+                            {editingBulkItemId === item.id ? "Done editing" : "Edit item"}
+                          </IconButton>
+                          {editingBulkItemId === item.id ? (
+                            <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+                              {renderBulkItemEditor(item, index)}
+                            </div>
+                          ) : null}
                         </div>
                       ))}
                       <div className={classNames(insetPanelClass, "p-3 text-sm font-bold text-slate-950")}>
@@ -1816,143 +1854,82 @@ function RequestForm({
                       </div>
                     </div>
                     <div className="mt-4 hidden overflow-x-auto rounded-xl border border-slate-200 bg-white md:block">
-                      <table className="w-full min-w-[1280px] text-left text-sm">
+                      <table className="w-full min-w-[1080px] text-left text-sm">
                     <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                       <tr>
                         <th className="px-3 py-2">No.</th>
                         <th className="px-3 py-2">Item</th>
                         <th className="px-3 py-2">Qty</th>
                         <th className="px-3 py-2">Unit price</th>
-                        <th className="px-3 py-2">Currency</th>
                         <th className="px-3 py-2">Original total</th>
                         <th className="px-3 py-2">Product link</th>
                         <th className="px-3 py-2">FX to AED</th>
                         <th className="px-3 py-2">AED total</th>
                         <th className="px-3 py-2">Vendor</th>
+                        <th className="px-3 py-2">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {bulkLineItems.map((item, index) => (
-                        <tr key={item.id}>
-                          <td className="px-3 py-2 font-semibold text-slate-600">
-                            Item {index + 1}
-                          </td>
-                          <td className="min-w-[280px] px-3 py-2">
-                            <TextInput
-                              aria-label={`Item ${index + 1} name`}
-                              value={item.itemName}
-                              onChange={(event) =>
-                                updateBulkLineItem(item.id, (current) => ({
-                                  ...current,
-                                  itemName: event.target.value,
-                                }))
-                              }
-                            />
-                            <TextInput
-                              aria-label={`Item ${index + 1} description`}
-                              className="mt-2"
-                              value={item.itemDescription}
-                              onChange={(event) =>
-                                updateBulkLineItem(item.id, (current) => ({
-                                  ...current,
-                                  itemDescription: event.target.value,
-                                }))
-                              }
-                            />
-                          </td>
-                          <td className="min-w-[90px] px-3 py-2">
-                            <TextInput
-                              aria-label={`Item ${index + 1} quantity`}
-                              inputMode="decimal"
-                              min={0}
-                              step="any"
-                              type="number"
-                              value={item.quantity}
-                              onChange={(event) =>
-                                updateBulkLineItem(item.id, (current) => ({
-                                  ...current,
-                                  quantity: Number(event.target.value),
-                                }))
-                              }
-                            />
-                          </td>
-                          <td className="min-w-[120px] px-3 py-2">
-                            <TextInput
-                              aria-label={`Item ${index + 1} unit price`}
-                              inputMode="decimal"
-                              min={0}
-                              step="any"
-                              type="number"
-                              value={item.unitPrice}
-                              onChange={(event) =>
-                                updateBulkLineItem(item.id, (current) => ({
-                                  ...current,
-                                  unitPrice: Number(event.target.value),
-                                }))
-                              }
-                            />
-                          </td>
-                          <td className="min-w-[120px] px-3 py-2">
-                            <SelectInput
-                              aria-label={`Item ${index + 1} currency`}
-                              value={item.currency}
-                              onChange={(event) =>
-                                void updateBulkLineItemCurrency(item.id, event.target.value)
-                              }
-                            >
-                              {BULK_SUPPORTED_CURRENCIES.map((currency) => (
-                                <option key={currency}>{currency}</option>
-                              ))}
-                            </SelectInput>
-                          </td>
-                          <td className="px-3 py-2">{money(item.originalTotal, item.currency)}</td>
-                          <td className="min-w-[260px] px-3 py-2">
-                            <TextInput
-                              aria-label={`Item ${index + 1} product link`}
-                              inputMode="url"
-                              placeholder="https://supplier.com/product"
-                              value={item.productUrl ?? ""}
-                              onChange={(event) =>
-                                updateBulkLineItem(item.id, (current) => ({
-                                  ...current,
-                                  productUrl: event.target.value,
-                                }))
-                              }
-                            />
-                            <div className="mt-2">
+                        <Fragment key={item.id}>
+                          <tr>
+                            <td className="px-3 py-3 font-semibold text-slate-600">
+                              Item {index + 1}
+                            </td>
+                            <td className="min-w-[260px] px-3 py-3">
+                              <p className="font-semibold text-slate-950">{item.itemName}</p>
+                              <p className="mt-1 line-clamp-1 text-xs text-slate-500">
+                                {item.itemDescription}
+                              </p>
+                            </td>
+                            <td className="px-3 py-3">{item.quantity}</td>
+                            <td className="px-3 py-3">{money(item.unitPrice, item.currency)}</td>
+                            <td className="px-3 py-3">{money(item.originalTotal, item.currency)}</td>
+                            <td className="min-w-[190px] px-3 py-3">
                               <LineItemLink productUrl={item.productUrl} compact />
-                            </div>
-                          </td>
-                          <td className="px-3 py-2">
-                            {item.fxRateToAed.toFixed(4)}
-                            <p className="text-xs text-slate-500">{item.exchangeRateDate}</p>
-                          </td>
-                          <td className="px-3 py-2 font-semibold">
-                            {money(item.aedTotal, "AED")}
-                          </td>
-                          <td className="min-w-[180px] px-3 py-2">
-                            <TextInput
-                              aria-label={`Item ${index + 1} vendor`}
-                              value={item.vendorName}
-                              onChange={(event) =>
-                                updateBulkLineItem(item.id, (current) => ({
-                                  ...current,
-                                  vendorName: event.target.value,
-                                }))
-                              }
-                            />
-                          </td>
-                        </tr>
+                            </td>
+                            <td className="px-3 py-3">
+                              {item.fxRateToAed.toFixed(4)}
+                              <p className="text-xs text-slate-500">{item.exchangeRateDate}</p>
+                            </td>
+                            <td className="px-3 py-3 font-semibold">
+                              {money(item.aedTotal, "AED")}
+                            </td>
+                            <td className="px-3 py-3">{item.vendorName || "Not provided"}</td>
+                            <td className="px-3 py-3">
+                              <button
+                                className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+                                onClick={() =>
+                                  setEditingBulkItemId(
+                                    editingBulkItemId === item.id ? null : item.id,
+                                  )
+                                }
+                                type="button"
+                              >
+                                <Pencil className="h-4 w-4" />
+                                {editingBulkItemId === item.id ? "Done" : "Edit"}
+                              </button>
+                            </td>
+                          </tr>
+                          {editingBulkItemId === item.id ? (
+                            <tr>
+                              <td className="bg-blue-50/50 px-3 py-4" colSpan={10}>
+                                {renderBulkItemEditor(item, index)}
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
                       ))}
                     </tbody>
                     <tfoot className="bg-slate-50">
                       <tr>
-                        <td className="px-3 py-2 font-bold text-slate-950" colSpan={8}>
+                        <td className="px-3 py-2 font-bold text-slate-950" colSpan={7}>
                           Total converted value
                         </td>
                         <td className="px-3 py-2 font-bold text-slate-950">
                           {money(bulkTotalAed, "AED")}
                         </td>
+                        <td />
                         <td />
                       </tr>
                     </tfoot>
