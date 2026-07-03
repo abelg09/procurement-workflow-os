@@ -86,7 +86,7 @@ export const WORKFLOW_STAGES: Array<{
     key: "dr-majed",
     label: "Department Review",
     ownerRole: "Dr. Majed",
-    ownerLabel: "Dr. Majed / Amro",
+    ownerLabel: "Dr. Majed / Mona / Amro",
   },
   {
     id: 4,
@@ -146,14 +146,19 @@ export const DELIVERY_STATUSES = [
 
 export type DeliveryStatus = (typeof DELIVERY_STATUSES)[number];
 
-type DepartmentReviewRole = "Dr. Majed" | "Amro";
+type DepartmentReviewRole = "Dr. Majed" | "Mona" | "Amro";
 
 const DR_MAJED_REVIEW_DEPARTMENTS = ["Operations", "Engineering"];
-const AMRO_REVIEW_DEPARTMENTS = ["Marketing", "Sales"];
+const MONA_REVIEW_DEPARTMENTS = ["Marketing"];
+const AMRO_REVIEW_DEPARTMENTS = ["Sales"];
 
 export function getDepartmentReviewRole(department: string): DepartmentReviewRole | null {
   if (DR_MAJED_REVIEW_DEPARTMENTS.includes(department)) {
     return "Dr. Majed";
+  }
+
+  if (MONA_REVIEW_DEPARTMENTS.includes(department)) {
+    return "Mona";
   }
 
   if (AMRO_REVIEW_DEPARTMENTS.includes(department)) {
@@ -165,10 +170,11 @@ export function getDepartmentReviewRole(department: string): DepartmentReviewRol
 
 export function getDepartmentReviewStatus(
   department: string,
-): "Dr. Majed Review" | "Amro Review" | null {
+): "Dr. Majed Review" | "Mona Review" | "Amro Review" | null {
   const reviewRole = getDepartmentReviewRole(department);
 
   if (reviewRole === "Dr. Majed") return "Dr. Majed Review";
+  if (reviewRole === "Mona") return "Mona Review";
   if (reviewRole === "Amro") return "Amro Review";
 
   return null;
@@ -1034,6 +1040,9 @@ export function isApprovedStatus(status: RequestStatus) {
 export function getPendingAction(request: ProcurementRequest) {
   switch (request.status) {
     case "Mona Review":
+      if (request.stage === "dr-majed") {
+        return "Mona to review and forward to Procure";
+      }
       return "Mona to approve or request clarification";
     case "Rashid Review":
       return "Rashid to approve or decline";
@@ -1267,10 +1276,15 @@ export function transitionRequest(
   let declineReason: string | undefined;
   let uploadedInvoiceReference: string | undefined;
 
-  const canAct = (statuses: RequestStatus[], role: Role) =>
-    statuses.includes(editable.status) &&
-    actor.role === role &&
-    editable.assigneeId === actor.id;
+  const canAct = (statuses: RequestStatus[], role: Role) => {
+    const assignee = getUserById(nextState.users, editable.assigneeId);
+
+    return (
+      statuses.includes(editable.status) &&
+      actor.role === role &&
+      (editable.assigneeId === actor.id || assignee?.role === role)
+    );
+  };
   const hasText = (value?: string) => Boolean(value?.trim());
 
   const assignTo = (role: Role, options: { notify?: boolean } = {}) => {
@@ -1296,6 +1310,29 @@ export function transitionRequest(
     case "mona-approve": {
       if (!canAct(["Mona Review"], "Mona")) {
         return state;
+      }
+      if (
+        editable.stage === "dr-majed" &&
+        getDepartmentReviewRole(editable.department) === "Mona"
+      ) {
+        const assignee = assignTo("Edlyn", { notify: false });
+        editable.status = "Edlyn Confirmation";
+        editable.stage = "edlyn";
+        editable.previousResponsibleId = actor.id;
+        actionLabel = "Mona completed department review";
+        comment = workflowAction.comment;
+        addNotification(
+          nextState.notifications,
+          {
+            userId: assignee.id,
+            requestId,
+            title: "Purchase task assigned",
+            body: `${editable.id} has been reviewed by ${actor.name} and is ready for item confirmation.`,
+            type: "assigned",
+          },
+          dateTime,
+        );
+        break;
       }
       comment = workflowAction.comment;
       const totalAed = getRequestTotalAed(editable);
@@ -1480,10 +1517,10 @@ export function transitionRequest(
     case "dr-review":
     case "department-review": {
       const reviewRole = getDepartmentReviewRole(editable.department);
-      const reviewStatuses: RequestStatus[] =
-        reviewRole === "Amro"
-          ? ["Amro Review", "Rashid Auto Approved"]
-          : ["Dr. Majed Review", "Rashid Auto Approved"];
+      const reviewStatus = getDepartmentReviewStatus(editable.department);
+      const reviewStatuses: RequestStatus[] = reviewStatus
+        ? [reviewStatus, "Rashid Auto Approved"]
+        : ["Rashid Auto Approved"];
 
       if (!reviewRole || !canAct(reviewStatuses, reviewRole)) {
         return state;
@@ -2128,6 +2165,18 @@ export function answerProcurementQuestion(
       : "No requests are currently pending with Rashid.";
   }
 
+  if (normalized.includes("pending with mona")) {
+    const rows = state.requests.filter(
+      (request) =>
+        request.status === "Mona Review" ||
+        (request.status === "Rashid Auto Approved" &&
+          getDepartmentReviewRole(request.department) === "Mona"),
+    );
+    return rows.length
+      ? rows.map(describe).join("\n")
+      : "No requests are currently pending with Mona.";
+  }
+
   if (
     normalized.includes("pending with dr") ||
     normalized.includes("pending with dr. masjid") ||
@@ -2215,7 +2264,7 @@ export function answerProcurementQuestion(
       : "I cannot see any procurement requests for your current role.";
   }
 
-  return `I can answer questions such as: status of my request, pending with Rashid, pending with Dr. Majed, pending with Amro, invoices pending with Finance, over ${OVERDUE_REQUEST_HOURS} hours, order placed, request PR-102 stage, or completed requests this month.`;
+  return `I can answer questions such as: status of my request, pending with Mona, pending with Rashid, pending with Dr. Majed, pending with Amro, invoices pending with Finance, over ${OVERDUE_REQUEST_HOURS} hours, order placed, request PR-102 stage, or completed requests this month.`;
 }
 
 export function serializeState(state: ProcurementState) {
@@ -2333,11 +2382,12 @@ export function parseState(serialized: string | null) {
     state: ProcurementState & { projectOptions?: string[] },
   ): ProcurementState => {
     const migratedUsers = state.users.map(normalizeApprovalUser);
-    for (const role of ["Amro", "Edlyn", "Aileen"] as const) {
+    for (const role of ["Mona", "Amro", "Edlyn", "Aileen"] as const) {
       if (!migratedUsers.some((user) => user.role === role)) {
         migratedUsers.push(requireRoleUser(seedUsers, role));
       }
     }
+    const monaUser = migratedUsers.find((user) => user.role === "Mona");
     const drMajedUser = migratedUsers.find((user) => user.role === "Dr. Majed");
     const amroUser = migratedUsers.find((user) => user.role === "Amro");
     const edlynUser = migratedUsers.find((user) => user.role === "Edlyn");
@@ -2401,6 +2451,10 @@ export function parseState(serialized: string | null) {
             nextStatus =
               currentStatus === "Rashid Auto Approved" ? currentStatus : "Dr. Majed Review";
             nextAssigneeId = drMajedUser.id;
+          } else if (reviewRole === "Mona" && monaUser) {
+            nextStatus =
+              currentStatus === "Rashid Auto Approved" ? currentStatus : "Mona Review";
+            nextAssigneeId = monaUser.id;
           } else if (reviewRole === "Amro" && amroUser) {
             nextStatus = currentStatus === "Rashid Auto Approved" ? currentStatus : "Amro Review";
             nextAssigneeId = amroUser.id;
