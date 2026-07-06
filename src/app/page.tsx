@@ -82,7 +82,9 @@ import {
   isApprovalStatus,
   isClosed,
   isDeclined,
+  isInvoiceFinancePending,
   isRequestOverdue,
+  isRequesterCancellable,
   isUserBlockedTask,
   makeId,
   markNotificationRead,
@@ -227,6 +229,7 @@ const statusClass: Record<string, string> = {
 const statusTone = (status: RequestStatus) => {
   if (status === "Completed") return "Completed";
   if (status === "Rashid Auto Approved") return "Auto approved";
+  if (["Cancellation Requested", "Cancelled"].includes(status)) return "Declined";
   if (isDeclined(status)) return "Declined";
   if (isApprovalStatus(status)) return "Pending";
   if (
@@ -241,6 +244,7 @@ const statusTone = (status: RequestStatus) => {
       "Delivery Tracking",
       "Order Confirmed",
       "Item Received",
+      "Cancellation Requested",
     ].includes(status)
   ) {
     return "In progress";
@@ -255,6 +259,8 @@ const displayStatus = (status: RequestStatus) => {
     "Aileen Finance Review": "Finance Review",
     "Edlyn Order Confirmation": "Procure Order Confirmation",
     "Rashid Declined": "Rejected",
+    "Cancellation Requested": "Cancellation Requested",
+    Cancelled: "Cancelled",
   };
 
   return labels[status] ?? status;
@@ -2459,6 +2465,11 @@ function ActionPanel({
     canUse("Edlyn") &&
     (["Edlyn Confirmation", "Purchase in Progress"].includes(request.status) ||
       (request.status === "Rashid Auto Approved" && request.stage === "edlyn"));
+  const financeCanClearInvoice = canUse("Aileen") && isInvoiceFinancePending(request);
+  const procureCanStartDelivery =
+    canUse("Edlyn") &&
+    (["Invoice Cleared", "Edlyn Order Confirmation"].includes(request.status) ||
+      (request.status === "Purchase in Progress" && Boolean(request.invoice)));
 
   const invoicePayload = (storage?: { bucket: string; path: string }): InvoiceDetails => ({
     invoiceNumber: invoiceNumber || `${request.id}-INV`,
@@ -2673,6 +2684,30 @@ function ActionPanel({
           </div>
         ) : null}
 
+        {request.status === "Cancellation Requested" && canUse("Edlyn") ? (
+          <div className="grid gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+            <div>
+              <p className="font-semibold">Urgent cancellation requested</p>
+              <p className="mt-1">
+                The requester has cancelled this request. Confirm once the order is stopped or cancelled with the vendor.
+              </p>
+            </div>
+            <IconButton
+              icon={<XCircle className="h-4 w-4" />}
+              onClick={() => {
+                onTransition(request.id, {
+                  type: "edlyn-confirm-cancellation",
+                  comment,
+                });
+                clearText();
+              }}
+              variant="danger"
+            >
+              Confirm cancellation
+            </IconButton>
+          </div>
+        ) : null}
+
         {request.status === "Rashid Review" && canUse("Rashid") ? (
           <div className="grid gap-3">
             <Field label="Decline reason" htmlFor={declineReasonId} required>
@@ -2767,6 +2802,14 @@ function ActionPanel({
 
         {request.status === "Purchase in Progress" && canUse("Edlyn") ? (
           <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
+            {request.invoice ? (
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+                <p className="font-semibold">Invoice sent to Finance</p>
+                <p className="mt-1">
+                  Finance can clear the invoice separately. Procure can confirm the order and update delivery now.
+                </p>
+              </div>
+            ) : null}
             <div className="grid gap-3">
               <Field label="Invoice number" htmlFor={invoiceNumberId}>
                 <TextInput id={invoiceNumberId} placeholder="INV-001" value={invoiceNumber} onChange={(event) => setInvoiceNumber(event.target.value)} />
@@ -2885,10 +2928,28 @@ function ActionPanel({
                 Request clarification
               </IconButton>
             </div>
+            {request.invoice ? (
+              <div className="grid gap-3 border-t border-slate-200 pt-3">
+                {logisticsFields}
+                <IconButton
+                  icon={<Send className="h-4 w-4" />}
+                  onClick={() => {
+                    onTransition(request.id, {
+                      type: "edlyn-start-delivery-tracking",
+                      logistics: logisticsPayload(),
+                      comment,
+                    });
+                    clearText();
+                  }}
+                >
+                  Confirm order and track delivery
+                </IconButton>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
-        {request.status === "Aileen Finance Review" && canUse("Aileen") ? (
+        {financeCanClearInvoice ? (
           <div className="grid gap-3">
             <Field label="Finance notes" htmlFor={financeNotesId}>
               <TextArea
@@ -2914,8 +2975,7 @@ function ActionPanel({
           </div>
         ) : null}
 
-        {["Invoice Cleared", "Edlyn Order Confirmation"].includes(request.status) &&
-        canUse("Edlyn") ? (
+        {procureCanStartDelivery && request.status !== "Purchase in Progress" ? (
           <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
             {request.invoice?.financeNotes ? (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
@@ -2978,7 +3038,7 @@ function ActionPanel({
           </IconButton>
         ) : null}
 
-        {request.status === "Item Received" && canUse("Aileen") ? (
+        {request.status === "Item Received" && canUse("Aileen") && !isInvoiceFinancePending(request) ? (
           <IconButton
             icon={<CheckCircle2 className="h-4 w-4" />}
             onClick={() => onTransition(request.id, { type: "aileen-close", comment })}
@@ -3008,11 +3068,14 @@ function ActionPanel({
             request.status,
           ) &&
             canUse("Edlyn")) ||
+          (request.status === "Cancellation Requested" && canUse("Edlyn")) ||
           (request.status === "Rashid Auto Approved" &&
             request.stage === "edlyn" &&
             canUse("Edlyn")) ||
-          (["Aileen Finance Review", "Item Received"].includes(request.status) &&
-            canUse("Aileen"))
+          financeCanClearInvoice ||
+          (request.status === "Item Received" &&
+            canUse("Aileen") &&
+            !isInvoiceFinancePending(request))
         ) ? (
           <div className={classNames(insetPanelClass, "p-3 text-sm text-slate-600")}>
             Switch to the assigned role to complete this pending action. Current assignee:{" "}
@@ -3259,7 +3322,7 @@ function RequestDetails({
                 </div>
               ) : (
                 <div className={classNames(insetPanelClass, "mt-4 p-3 text-sm text-slate-600")}>
-                  Delivery tracking starts after finance clears the invoice.
+                  Delivery tracking starts once Procure confirms the order.
                 </div>
               )}
             </div>
@@ -4862,6 +4925,8 @@ function EmployeeRequestStatus({
   currentUser: UserProfile;
   onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
 }) {
+  const [cancellationReason, setCancellationReason] = useState("");
+
   if (!request) {
     return (
       <section className={classNames(panelClass, "min-w-0 p-6 text-sm text-slate-500")}>
@@ -4878,6 +4943,16 @@ function EmployeeRequestStatus({
         Boolean(log.comment?.trim()),
     )
     .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
+  const latestCancellation = state.auditLogs
+    .filter(
+      (log) =>
+        log.requestId === request.id &&
+        ["Requester requested cancellation", "Requester cancelled request"].includes(log.action) &&
+        Boolean(log.comment?.trim()),
+    )
+    .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
+  const canCancelRequest =
+    request.submittedById === currentUser.id && isRequesterCancellable(request.status);
   const monaClarification = state.auditLogs
     .filter(
       (log) =>
@@ -4929,6 +5004,63 @@ function EmployeeRequestStatus({
 
       <EmployeeLineItemsPanel request={request} />
       <EmployeeInvoicePanel request={request} />
+
+      {request.status === "Cancellation Requested" ? (
+        <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+          <p className="font-semibold">Cancellation sent to Procure</p>
+          <p className="mt-2">
+            Procure has been notified to stop or cancel the order immediately.
+          </p>
+          {latestCancellation?.comment ? (
+            <p className="mt-2 whitespace-pre-line">
+              <strong>Reason:</strong> {latestCancellation.comment}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {request.status === "Cancelled" ? (
+        <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+          <p className="font-semibold">Request cancelled</p>
+          {latestCancellation?.comment ? (
+            <p className="mt-2 whitespace-pre-line">
+              <strong>Reason:</strong> {latestCancellation.comment}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {canCancelRequest ? (
+        <div className="mt-5 grid gap-3 rounded-xl border border-red-200 bg-white p-4 text-sm">
+          <div>
+            <p className="font-semibold text-red-950">Cancel this request</p>
+            <p className="mt-1 text-red-800">
+              If Procure has already started processing it, Procure will receive an urgent cancellation task.
+            </p>
+          </div>
+          <Field label="Cancellation reason" required>
+            <TextArea
+              placeholder="Explain why this request should be cancelled"
+              value={cancellationReason}
+              onChange={(event) => setCancellationReason(event.target.value)}
+            />
+          </Field>
+          <IconButton
+            disabled={!cancellationReason.trim()}
+            icon={<XCircle className="h-4 w-4" />}
+            onClick={() => {
+              onTransition(request.id, {
+                type: "employee-cancel-request",
+                cancellationReason,
+              });
+              setCancellationReason("");
+            }}
+            variant="danger"
+          >
+            Cancel request
+          </IconButton>
+        </div>
+      ) : null}
 
       {request.status === "Rashid Declined" ? (
         <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
