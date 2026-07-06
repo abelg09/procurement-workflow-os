@@ -59,6 +59,8 @@ export const STATUSES = [
   "Delivery Tracking",
   "Order Confirmed",
   "Item Received",
+  "Cancellation Requested",
+  "Cancelled",
   "Completed",
   "Sent Back for Clarification",
 ] as const;
@@ -405,6 +407,8 @@ export type WorkflowAction =
   | { type: "edlyn-start-delivery-tracking"; logistics?: LogisticsDetails; comment?: string }
   | { type: "edlyn-update-logistics"; logistics: LogisticsDetails; comment?: string }
   | { type: "edlyn-receive-item"; comment?: string }
+  | { type: "employee-cancel-request"; cancellationReason: string }
+  | { type: "edlyn-confirm-cancellation"; comment?: string }
   | { type: "aileen-close"; comment?: string }
   | { type: "admin-reassign"; assigneeId: string; comment?: string };
 
@@ -994,7 +998,20 @@ export function isDeclined(status: RequestStatus) {
 }
 
 export function isClosed(status: RequestStatus) {
-  return status === "Completed" || isDeclined(status);
+  return status === "Completed" || status === "Cancelled" || isDeclined(status);
+}
+
+export function isRequesterCancellable(status: RequestStatus) {
+  return ![
+    "Cancellation Requested",
+    "Cancelled",
+    "Completed",
+    "Item Received",
+  ].includes(status);
+}
+
+export function isInvoiceFinancePending(request: ProcurementRequest) {
+  return Boolean(request.invoice && !request.invoice.clearedAt && !isClosed(request.status));
 }
 
 export function isRequestOverdue(
@@ -1060,6 +1077,11 @@ export function getPendingAction(request: ProcurementRequest) {
     case "Edlyn Clarification Requested":
       return "Employee to answer Procure clarification";
     case "Purchase in Progress":
+      if (request.invoice) {
+        return request.orderConfirmedAt || request.logistics
+          ? "Procure to update delivery; Finance to clear invoice"
+          : "Procure to confirm the order and start delivery tracking; Finance to clear invoice";
+      }
       return "Procure to purchase, request clarification, or upload invoice";
     case "Aileen Finance Review":
     case "Invoice Uploaded":
@@ -1072,7 +1094,13 @@ export function getPendingAction(request: ProcurementRequest) {
     case "Order Confirmed":
       return "Procure to mark item received";
     case "Item Received":
-      return "Finance to close the case";
+      return request.invoice && !request.invoice.clearedAt
+        ? "Finance to clear invoice, then close the case"
+        : "Finance to close the case";
+    case "Cancellation Requested":
+      return "Procure to cancel the order immediately";
+    case "Cancelled":
+      return "Request cancelled";
     case "Completed":
       return "No pending action";
     case "Rashid Declined":
@@ -1307,6 +1335,81 @@ export function transitionRequest(
   };
 
   switch (workflowAction.type) {
+    case "employee-cancel-request": {
+      if (
+        actor.id !== editable.submittedById ||
+        !isRequesterCancellable(editable.status) ||
+        !hasText(workflowAction.cancellationReason)
+      ) {
+        return state;
+      }
+
+      const cancellationReason = workflowAction.cancellationReason.trim();
+      const currentAssignee = getUserById(state.users, editable.assigneeId);
+      const hasReachedProcure =
+        editable.stage === "edlyn" ||
+        editable.stage === "aileen" ||
+        Boolean(editable.invoice) ||
+        Boolean(editable.orderConfirmedAt) ||
+        Boolean(editable.logistics);
+
+      editable.previousResponsibleId = actor.id;
+      comment = cancellationReason;
+
+      if (hasReachedProcure) {
+        const procureUser = assignTo("Edlyn", { notify: false });
+        editable.status = "Cancellation Requested";
+        editable.stage = "edlyn";
+        actionLabel = "Requester requested cancellation";
+        addNotification(
+          nextState.notifications,
+          {
+            userId: procureUser.id,
+            requestId,
+            title: "Urgent cancellation requested",
+            body: `${editable.id} was cancelled by ${actor.name}. Cancel the order immediately. Reason: ${cancellationReason}`,
+            type: "system",
+          },
+          dateTime,
+        );
+
+        if (editable.invoice) {
+          const financeUser = getUserByRole(state.users, "Aileen");
+          if (financeUser) {
+            addNotification(
+              nextState.notifications,
+              {
+                userId: financeUser.id,
+                requestId,
+                title: "Cancellation requested",
+                body: `${editable.id} has a cancellation request while invoice documentation may be in progress.`,
+                type: "system",
+              },
+              dateTime,
+            );
+          }
+        }
+      } else {
+        editable.status = "Cancelled";
+        editable.assigneeId = actor.id;
+        actionLabel = "Requester cancelled request";
+
+        if (currentAssignee && currentAssignee.id !== actor.id) {
+          addNotification(
+            nextState.notifications,
+            {
+              userId: currentAssignee.id,
+              requestId,
+              title: "Request cancelled",
+              body: `${editable.id} was cancelled by ${actor.name}. Reason: ${cancellationReason}`,
+              type: "system",
+            },
+            dateTime,
+          );
+        }
+      }
+      break;
+    }
     case "mona-approve": {
       if (!canAct(["Mona Review"], "Mona")) {
         return state;
@@ -1685,8 +1788,9 @@ export function transitionRequest(
         return state;
       }
       const assignee = assignTo("Aileen", { notify: false });
-      editable.status = "Aileen Finance Review";
-      editable.stage = "aileen";
+      editable.status = "Purchase in Progress";
+      editable.stage = "edlyn";
+      editable.assigneeId = actor.id;
       editable.previousResponsibleId = actor.id;
       editable.invoice = workflowAction.invoice;
       actionLabel = "Uploaded invoice";
@@ -1706,12 +1810,22 @@ export function transitionRequest(
       break;
     }
     case "aileen-clear-invoice": {
-      if (!canAct(["Aileen Finance Review"], "Aileen") || !editable.invoice) {
+      if (
+        actor.role !== "Aileen" ||
+        !editable.invoice ||
+        editable.invoice.clearedAt ||
+        isClosed(editable.status)
+      ) {
         return state;
       }
-      const assignee = assignTo("Edlyn", { notify: false });
-      editable.status = "Edlyn Order Confirmation";
-      editable.stage = "edlyn";
+      const assignee = requireRoleUser(state.users, "Edlyn");
+      const shouldReturnToProcure = editable.status === "Aileen Finance Review";
+
+      if (shouldReturnToProcure) {
+        editable.status = "Edlyn Order Confirmation";
+        editable.stage = "edlyn";
+        editable.assigneeId = assignee.id;
+      }
       editable.invoice = editable.invoice
         ? {
             ...editable.invoice,
@@ -1738,10 +1852,10 @@ export function transitionRequest(
         {
           userId: assignee.id,
           requestId,
-          title: "Order confirmation required",
+          title: shouldReturnToProcure ? "Order confirmation required" : "Invoice cleared",
           body: workflowAction.financeNotes?.trim()
-            ? `${editable.id} is cleared by finance and is back with Procure. Finance note: ${workflowAction.financeNotes.trim()}`
-            : `${editable.id} is cleared by finance and is back with Procure. Inform the employee that the order has been placed.`,
+            ? `${editable.id} is cleared by finance. Finance note: ${workflowAction.financeNotes.trim()}`
+            : `${editable.id} invoice has been documented by finance.`,
           type: "finance",
         },
         dateTime,
@@ -1750,7 +1864,9 @@ export function transitionRequest(
     }
     case "edlyn-confirm-order":
     case "edlyn-start-delivery-tracking": {
-      if (!canAct(["Invoice Cleared", "Edlyn Order Confirmation"], "Edlyn")) {
+      if (
+        !canAct(["Purchase in Progress", "Invoice Cleared", "Edlyn Order Confirmation"], "Edlyn")
+      ) {
         return state;
       }
       editable.status = "Delivery Tracking";
@@ -1792,6 +1908,17 @@ export function transitionRequest(
       editable.assigneeId = actor.id;
       actionLabel = "Updated delivery tracking";
       comment = workflowAction.comment || workflowAction.logistics.notes;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: editable.submittedById,
+          requestId,
+          title: "Delivery update",
+          body: `${editable.id} delivery status was updated to ${editable.logistics.deliveryStatus}.`,
+          type: "order",
+        },
+        dateTime,
+      );
       break;
     }
     case "edlyn-receive-item": {
@@ -1820,10 +1947,43 @@ export function transitionRequest(
         },
         dateTime,
       );
+      addNotification(
+        nextState.notifications,
+        {
+          userId: editable.submittedById,
+          requestId,
+          title: "Item received",
+          body: `${editable.id} has been marked as received.`,
+          type: "received",
+        },
+        dateTime,
+      );
+      break;
+    }
+    case "edlyn-confirm-cancellation": {
+      if (!canAct(["Cancellation Requested"], "Edlyn")) {
+        return state;
+      }
+      editable.status = "Cancelled";
+      editable.stage = "edlyn";
+      editable.assigneeId = actor.id;
+      actionLabel = "Procure confirmed cancellation";
+      comment = workflowAction.comment;
+      addNotification(
+        nextState.notifications,
+        {
+          userId: editable.submittedById,
+          requestId,
+          title: "Request cancelled",
+          body: `${editable.id} cancellation has been confirmed by Procure.`,
+          type: "closed",
+        },
+        dateTime,
+      );
       break;
     }
     case "aileen-close": {
-      if (!canAct(["Item Received"], "Aileen")) {
+      if (!canAct(["Item Received"], "Aileen") || isInvoiceFinancePending(editable)) {
         return state;
       }
       editable.status = "Completed";
@@ -1908,7 +2068,8 @@ export function getVisibleRequests(state: ProcurementState, user: UserProfile) {
   return state.requests.filter(
     (request) =>
       request.assigneeId === user.id ||
-      request.submittedById === user.id,
+      request.submittedById === user.id ||
+      (user.role === "Aileen" && isInvoiceFinancePending(request)),
   );
 }
 
@@ -1960,7 +2121,10 @@ export function getActiveAssignedRequests(
   user: UserProfile,
 ) {
   return requests.filter(
-    (request) => request.assigneeId === user.id && !isClosed(request.status),
+    (request) =>
+      !isClosed(request.status) &&
+      (request.assigneeId === user.id ||
+        (user.role === "Aileen" && isInvoiceFinancePending(request))),
   );
 }
 
@@ -2054,9 +2218,17 @@ export function getMetrics(requests: ProcurementRequest[]) {
     approved: requests.filter((request) => isApprovedStatus(request.status)).length,
     declined: requests.filter((request) => isDeclined(request.status)).length,
     completed: completed.length,
-    pendingInvoice: requests.filter((request) => request.status === "Purchase in Progress").length,
+    pendingInvoice: requests.filter(
+      (request) => request.status === "Purchase in Progress" && !request.invoice,
+    ).length,
     pendingItemReceipt: requests.filter((request) =>
-      ["Invoice Cleared", "Edlyn Order Confirmation", "Delivery Tracking", "Order Confirmed"].includes(request.status),
+      [
+        "Purchase in Progress",
+        "Invoice Cleared",
+        "Edlyn Order Confirmation",
+        "Delivery Tracking",
+        "Order Confirmed",
+      ].includes(request.status) && Boolean(request.invoice),
     ).length,
     averageProcessingTime,
     stuck: getStuckRequests(requests).length,
