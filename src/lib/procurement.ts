@@ -1078,9 +1078,11 @@ export function getPendingAction(request: ProcurementRequest) {
       return "Employee to answer Procure clarification";
     case "Purchase in Progress":
       if (request.invoice) {
+        const financeAction = request.invoice.clearedAt ? "" : "; Finance to clear invoice";
+
         return request.orderConfirmedAt || request.logistics
-          ? "Procure to update delivery; Finance to clear invoice"
-          : "Procure to confirm the order and start delivery tracking; Finance to clear invoice";
+          ? `Procure to update delivery${financeAction}`
+          : `Procure to confirm the order and start delivery tracking${financeAction}`;
       }
       return "Procure to purchase, request clarification, or upload invoice";
     case "Aileen Finance Review":
