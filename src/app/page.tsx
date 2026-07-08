@@ -304,6 +304,20 @@ const safeStorageFileName = (value: string) =>
     .replace(/^-|-$/g, "")
     .slice(0, 120) || "invoice-file";
 
+const fileToDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error("Could not read the invoice file."));
+    };
+    reader.onerror = () => reject(reader.error || new Error("Could not read the invoice file."));
+    reader.readAsDataURL(file);
+  });
+
 function decodePdfLikeText(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -2562,7 +2576,11 @@ function ActionPanel({
     (["Invoice Cleared", "Edlyn Order Confirmation"].includes(request.status) ||
       (request.status === "Purchase in Progress" && Boolean(request.invoice)));
 
-  const invoicePayload = (storage?: { bucket: string; path: string }): InvoiceDetails => ({
+  const invoicePayload = (storage?: {
+    bucket?: string;
+    path?: string;
+    dataUrl?: string;
+  }): InvoiceDetails => ({
     invoiceNumber: invoiceNumber || `${request.id}-INV`,
     invoiceAmount,
     invoiceDate: invoiceDate || dubaiDateKey(),
@@ -2573,6 +2591,7 @@ function ActionPanel({
     uploadedInvoiceUploadedAt: nowIso(),
     uploadedInvoiceStorageBucket: storage?.bucket,
     uploadedInvoiceStoragePath: storage?.path,
+    uploadedInvoiceDataUrl: storage?.dataUrl,
     paymentTerms,
     financeNotes,
   });
@@ -2593,7 +2612,7 @@ function ActionPanel({
 
     const supabaseClient = getSupabaseBrowserClient();
     if (!supabaseClient) {
-      throw new Error("Supabase Storage is not configured for invoice uploads.");
+      return { dataUrl: await fileToDataUrl(selectedInvoiceFile) };
     }
 
     const storagePath = [
@@ -2610,7 +2629,7 @@ function ActionPanel({
       });
 
     if (error) {
-      throw new Error(`Invoice file could not be uploaded: ${error.message}`);
+      return { dataUrl: await fileToDataUrl(selectedInvoiceFile) };
     }
 
     return {
@@ -3999,16 +4018,18 @@ function InvoiceFileLink({ invoice }: { invoice: InvoiceDetails }) {
     };
   }, [invoice.uploadedInvoiceStorageBucket, invoice.uploadedInvoiceStoragePath]);
 
+  const embeddedUrl = invoice.uploadedInvoiceDataUrl || "";
   const { linkError, signedUrl } = fileLink;
+  const invoiceUrl = signedUrl || embeddedUrl;
 
   return (
     <div>
       <p className="text-xs font-semibold uppercase text-slate-500">Uploaded file</p>
-      {signedUrl ? (
+      {invoiceUrl ? (
         <a
           className="mt-1 inline-flex max-w-full items-center gap-1 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-sm font-semibold text-blue-700 hover:border-blue-200 hover:bg-blue-100"
           download={invoice.uploadedInvoiceFile}
-          href={signedUrl}
+          href={invoiceUrl}
           rel="noopener noreferrer"
           target="_blank"
           title={invoice.uploadedInvoiceFile}

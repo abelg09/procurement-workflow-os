@@ -224,6 +224,7 @@ export type InvoiceDetails = {
   uploadedInvoiceUploadedAt?: string;
   uploadedInvoiceStorageBucket?: string;
   uploadedInvoiceStoragePath?: string;
+  uploadedInvoiceDataUrl?: string;
   paymentTerms: PaymentTerm;
   financeNotes: string;
   clearedAt?: string;
@@ -2079,7 +2080,8 @@ export function transitionRequest(
         !canAct(["Purchase in Progress"], "Edlyn") ||
         !hasText(workflowAction.invoice.invoiceNumber) ||
         !hasText(workflowAction.invoice.uploadedInvoiceFile) ||
-        !hasText(workflowAction.invoice.uploadedInvoiceStoragePath) ||
+        (!hasText(workflowAction.invoice.uploadedInvoiceStoragePath) &&
+          !hasText(workflowAction.invoice.uploadedInvoiceDataUrl)) ||
         !Number.isFinite(workflowAction.invoice.invoiceAmount) ||
         workflowAction.invoice.invoiceAmount <= 0
       ) {
