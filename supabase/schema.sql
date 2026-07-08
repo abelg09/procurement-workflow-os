@@ -38,6 +38,7 @@ begin
     'Rashid Declined',
     'Dr. Majed Review',
     'Amro Review',
+    'Department Declined',
     'Edlyn Confirmation',
     'Edlyn Clarification Requested',
     'Purchase in Progress',
@@ -48,6 +49,8 @@ begin
     'Delivery Tracking',
     'Order Confirmed',
     'Item Received',
+    'Cancellation Requested',
+    'Cancelled',
     'Completed',
     'Sent Back for Clarification'
   );
@@ -73,6 +76,9 @@ exception
 end $$;
 
 alter type request_status add value if not exists 'Amro Review';
+alter type request_status add value if not exists 'Department Declined';
+alter type request_status add value if not exists 'Cancellation Requested';
+alter type request_status add value if not exists 'Cancelled';
 
 create table if not exists procurement_projects (
   id uuid primary key default gen_random_uuid(),
@@ -204,6 +210,12 @@ create table if not exists procurement_request_items (
 alter table procurement_request_items
   add column if not exists product_url text;
 
+alter table procurement_requests
+  add column if not exists procure_price_review_return_status text,
+  add column if not exists cancellation_reason text,
+  add column if not exists cancelled_at timestamptz,
+  add column if not exists cancelled_by_id uuid references profiles(id);
+
 create table if not exists vendors (
   id uuid primary key default gen_random_uuid(),
   request_id text not null references procurement_requests(id) on delete cascade,
@@ -237,7 +249,9 @@ create table if not exists invoices (
 alter table invoices
   add column if not exists uploaded_invoice_file_size bigint,
   add column if not exists uploaded_invoice_file_type text,
-  add column if not exists uploaded_invoice_uploaded_at timestamptz;
+  add column if not exists uploaded_invoice_uploaded_at timestamptz,
+  add column if not exists uploaded_invoice_storage_bucket text,
+  add column if not exists uploaded_invoice_storage_path text;
 
 create table if not exists attachments (
   id uuid primary key default gen_random_uuid(),
@@ -329,6 +343,24 @@ begin
       for select
       to authenticated
       using (bucket_id = 'procurement-files');
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_policies
+    where schemaname = 'storage'
+      and tablename = 'objects'
+      and policyname = 'Authenticated users can update procurement files'
+  ) then
+    create policy "Authenticated users can update procurement files"
+      on storage.objects
+      for update
+      to authenticated
+      using (bucket_id = 'procurement-files')
+      with check (bucket_id = 'procurement-files');
   end if;
 end $$;
 

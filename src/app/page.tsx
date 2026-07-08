@@ -65,6 +65,7 @@ import {
   answerProcurementQuestion,
   createDailyReminderNotifications,
   getAssigneeName,
+  getCancelledRequests,
   getDepartmentReviewRole,
   getMetrics,
   getPendingAction,
@@ -141,7 +142,8 @@ type View =
   | "company-dashboard"
   | "new-request"
   | "notifications"
-  | "admin";
+  | "admin"
+  | "trash";
 type AuthStatus = "checking" | "signed-out" | "signed-in" | "blocked" | "missing-config" | "local-dev";
 type LiveSyncStatus = "idle" | "loading" | "ready" | "error";
 
@@ -259,6 +261,7 @@ const displayStatus = (status: RequestStatus) => {
     "Aileen Finance Review": "Finance Review",
     "Edlyn Order Confirmation": "Procure Order Confirmation",
     "Rashid Declined": "Rejected",
+    "Department Declined": "Department Rejected",
     "Cancellation Requested": "Cancellation Requested",
     Cancelled: "Cancelled",
   };
@@ -300,6 +303,55 @@ const safeStorageFileName = (value: string) =>
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 120) || "invoice-file";
+
+function decodePdfLikeText(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+
+  return binary
+    .replace(/\\\(/g, "(")
+    .replace(/\\\)/g, ")")
+    .replace(/\\n|\\r|\\t/g, " ")
+    .replace(/[()<>[\]{}]/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function findInvoiceNumberInText(text: string) {
+  const patterns = [
+    /(?:invoice|document)\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Z0-9][A-Z0-9/-]{3,})/i,
+    /doc\.?\s*ref\.?\s*[:\-]?\s*([A-Z0-9][A-Z0-9/-]{3,})/i,
+    /pro\s*forma\s*invoice.{0,120}?\b([0-9]{5,})\b/i,
+    /\bnumber\s+([0-9]{5,})\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const candidate = match?.[1]?.replace(/[^A-Z0-9/-]/gi, "").trim();
+    if (candidate && candidate.length >= 4) {
+      return candidate;
+    }
+  }
+
+  return "";
+}
+
+async function extractInvoiceNumberFromFile(file: File) {
+  if (!file.type.includes("pdf") && !file.name.toLowerCase().endsWith(".pdf")) {
+    return "";
+  }
+
+  try {
+    const text = decodePdfLikeText(await file.arrayBuffer());
+    return findInvoiceNumberInText(text);
+  } catch {
+    return "";
+  }
+}
 
 const classNames = (...values: Array<string | false | null | undefined>) =>
   values.filter(Boolean).join(" ");
@@ -2425,8 +2477,29 @@ function ActionPanel({
   const [lastCheckpoint, setLastCheckpoint] = useState(request.logistics?.lastCheckpoint ?? "");
   const [deliveryNotes, setDeliveryNotes] = useState(request.logistics?.notes ?? "");
   const [lineItemComments, setLineItemComments] = useState<Record<string, string>>({});
+  const [staffCancellationReason, setStaffCancellationReason] = useState("");
+  const [researchLineItems, setResearchLineItems] = useState<ProcurementLineItem[]>(() =>
+    getRequestLineItems(request).map((item) => ({ ...item, productUrl: item.productUrl ?? "" })),
+  );
+  const [researchSaving, setResearchSaving] = useState(false);
+  const [researchError, setResearchError] = useState("");
+  const [drEditFields, setDrEditFields] = useState({
+    employeeName: request.employeeName,
+    department: request.department,
+    project: request.project,
+    vendorName: request.vendorName,
+    priority: request.priority,
+    requiredByDate: request.requiredByDate,
+    reasonForPurchase: request.reasonForPurchase,
+  });
+  const [drEditLineItems, setDrEditLineItems] = useState<ProcurementLineItem[]>(() =>
+    getRequestLineItems(request).map((item) => ({ ...item, productUrl: item.productUrl ?? "" })),
+  );
+  const [drEditSaving, setDrEditSaving] = useState(false);
+  const [drEditError, setDrEditError] = useState("");
   const actionNoteId = `${fieldPrefix}-action-note`;
   const declineReasonId = `${fieldPrefix}-decline-reason`;
+  const staffCancelReasonId = `${fieldPrefix}-staff-cancel-reason`;
   const invoiceNumberId = `${fieldPrefix}-invoice-number`;
   const invoiceAmountId = `${fieldPrefix}-invoice-amount`;
   const invoiceDateId = `${fieldPrefix}-invoice-date`;
@@ -2443,6 +2516,22 @@ function ActionPanel({
   const role = currentUser.role;
   const departmentReviewRole = getDepartmentReviewRole(request.department);
   const lineItems = getRequestLineItems(request);
+  const updateResearchLineItem = (
+    itemId: string,
+    updater: (item: ProcurementLineItem) => ProcurementLineItem,
+  ) => {
+    setResearchLineItems((current) =>
+      current.map((item) => (item.id === itemId ? updater(item) : item)),
+    );
+  };
+  const updateDrEditLineItem = (
+    itemId: string,
+    updater: (item: ProcurementLineItem) => ProcurementLineItem,
+  ) => {
+    setDrEditLineItems((current) =>
+      current.map((item) => (item.id === itemId ? updater(item) : item)),
+    );
+  };
   const lineItemClarificationPayload = () =>
     lineItems
       .map((item) => ({
@@ -2465,6 +2554,8 @@ function ActionPanel({
     canUse("Edlyn") &&
     (["Edlyn Confirmation", "Purchase in Progress"].includes(request.status) ||
       (request.status === "Rashid Auto Approved" && request.stage === "edlyn"));
+  const canProcureResearchPrices = canProcureClarify;
+  const canStaffCancel = role !== "Employee" && !isClosed(request.status);
   const financeCanClearInvoice = canUse("Aileen") && isInvoiceFinancePending(request);
   const procureCanStartDelivery =
     canUse("Edlyn") &&
@@ -2658,7 +2749,173 @@ function ActionPanel({
           </div>
         ) : null}
 
-        {request.status === "Mona Review" && canUse("Mona") ? (
+        {canProcureResearchPrices ? (
+          <details className={classNames(insetPanelClass, "grid gap-3 p-3")}>
+            <summary className="cursor-pointer text-sm font-semibold text-slate-950">
+              Update researched prices and item details
+            </summary>
+            <div className="mt-3 grid gap-3">
+              <p className="text-xs leading-5 text-slate-500">
+                Procure can adjust quantity, researched price, vendor, product link, and item notes.
+                Saving recalculates the AED total and sends it back to Rashid only when the updated
+                total is AED 300 or above.
+              </p>
+              {researchError ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-800">
+                  {researchError}
+                </div>
+              ) : null}
+              <div className="grid gap-3">
+                {researchLineItems.map((item, index) => (
+                  <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-3" key={item.id}>
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-xs font-semibold uppercase text-slate-500">
+                          Item {index + 1}
+                        </p>
+                        <p className="text-sm font-semibold text-slate-950">{item.itemName}</p>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-700">
+                        Current AED {roundMoney(item.aedTotal)}
+                      </p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <Field label="Item name">
+                        <TextInput
+                          value={item.itemName}
+                          onChange={(event) =>
+                            updateResearchLineItem(item.id, (current) => ({
+                              ...current,
+                              itemName: event.target.value,
+                            }))
+                          }
+                        />
+                      </Field>
+                      <Field label="Vendor">
+                        <TextInput
+                          value={item.vendorName}
+                          onChange={(event) =>
+                            updateResearchLineItem(item.id, (current) => ({
+                              ...current,
+                              vendorName: event.target.value,
+                            }))
+                          }
+                        />
+                      </Field>
+                      <Field label="Quantity">
+                        <TextInput
+                          min={0}
+                          step="any"
+                          type="number"
+                          value={item.quantity}
+                          onChange={(event) =>
+                            updateResearchLineItem(item.id, (current) => ({
+                              ...current,
+                              quantity: Number(event.target.value),
+                            }))
+                          }
+                        />
+                      </Field>
+                      <Field label="Researched unit price">
+                        <TextInput
+                          min={0}
+                          step="any"
+                          type="number"
+                          value={item.unitPrice}
+                          onChange={(event) =>
+                            updateResearchLineItem(item.id, (current) => ({
+                              ...current,
+                              unitPrice: Number(event.target.value),
+                            }))
+                          }
+                        />
+                      </Field>
+                      <Field label="Currency">
+                        <SelectInput
+                          value={item.currency}
+                          onChange={(event) =>
+                            updateResearchLineItem(item.id, (current) => ({
+                              ...current,
+                              currency: event.target.value,
+                            }))
+                          }
+                        >
+                          {BULK_SUPPORTED_CURRENCIES.map((currency) => (
+                            <option key={currency}>{currency}</option>
+                          ))}
+                        </SelectInput>
+                      </Field>
+                      <Field label="Product link">
+                        <TextInput
+                          value={item.productUrl ?? ""}
+                          onChange={(event) =>
+                            updateResearchLineItem(item.id, (current) => ({
+                              ...current,
+                              productUrl: event.target.value,
+                            }))
+                          }
+                        />
+                      </Field>
+                    </div>
+                    <Field label="Item description">
+                      <TextArea
+                        value={item.itemDescription}
+                        onChange={(event) =>
+                          updateResearchLineItem(item.id, (current) => ({
+                            ...current,
+                            itemDescription: event.target.value,
+                          }))
+                        }
+                      />
+                    </Field>
+                    <Field label="Clarification / price note">
+                      <TextArea
+                        className="min-h-20"
+                        placeholder={`Optional note for item ${index + 1}`}
+                        value={lineItemComments[item.id] ?? ""}
+                        onChange={(event) =>
+                          setLineItemComments((current) => ({
+                            ...current,
+                            [item.id]: event.target.value,
+                          }))
+                        }
+                      />
+                    </Field>
+                  </div>
+                ))}
+              </div>
+              <IconButton
+                disabled={researchSaving || !comment.trim()}
+                icon={<Pencil className="h-4 w-4" />}
+                onClick={async () => {
+                  try {
+                    setResearchSaving(true);
+                    setResearchError("");
+                    const updatedLineItems = await validateAndConvertLineItems(researchLineItems);
+                    onTransition(request.id, {
+                      type: "edlyn-update-researched-prices",
+                      comment,
+                      lineItems: updatedLineItems,
+                      lineItemClarifications: lineItemClarificationPayload(),
+                    });
+                    clearProcureClarification();
+                  } catch (error) {
+                    setResearchError(
+                      error instanceof Error ? error.message : "Could not update researched prices.",
+                    );
+                  } finally {
+                    setResearchSaving(false);
+                  }
+                }}
+                variant="secondary"
+              >
+                {researchSaving ? "Updating prices..." : "Save researched prices"}
+              </IconButton>
+            </div>
+          </details>
+        ) : null}
+
+        {request.status === "Mona Review" && request.stage === "mona" && canUse("Mona") ? (
           <div className="grid gap-2 sm:flex sm:flex-wrap">
             <IconButton
               icon={<CheckCircle2 className="h-4 w-4" />}
@@ -2747,25 +3004,279 @@ function ActionPanel({
           </div>
         ) : null}
 
-        {["Dr. Majed Review", "Amro Review", "Rashid Auto Approved"].includes(request.status) &&
+        {["Mona Review", "Dr. Majed Review", "Amro Review", "Rashid Auto Approved"].includes(request.status) &&
         departmentReviewRole &&
         request.stage === "dr-majed" &&
         canUse(departmentReviewRole) ? (
           <div className="grid gap-3">
             <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
-              {departmentReviewRole} reviews this department request. Approval decisions remain
-              with Rashid.
+              {departmentReviewRole} reviews this department request before Rashid approval.
             </div>
-            <IconButton
-              icon={<CheckCircle2 className="h-4 w-4" />}
-              onClick={() => {
-                onTransition(request.id, { type: "department-review", comment });
-                clearText();
-              }}
-              variant="success"
-            >
-              Complete review
-            </IconButton>
+            {departmentReviewRole === "Dr. Majed" ? (
+              <details className={classNames(insetPanelClass, "grid gap-3 p-3")}>
+                <summary className="cursor-pointer text-sm font-semibold text-slate-900">
+                  Modify request details
+                </summary>
+                <div className="mt-3 grid gap-3">
+                  {drEditError ? (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-800">
+                      {drEditError}
+                    </div>
+                  ) : null}
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <Field label="Employee name">
+                      <TextInput
+                        value={drEditFields.employeeName}
+                        onChange={(event) =>
+                          setDrEditFields((current) => ({
+                            ...current,
+                            employeeName: event.target.value,
+                          }))
+                        }
+                      />
+                    </Field>
+                    <Field label="Department">
+                      <SelectInput
+                        value={drEditFields.department}
+                        onChange={(event) =>
+                          setDrEditFields((current) => ({
+                            ...current,
+                            department: event.target.value,
+                          }))
+                        }
+                      >
+                        {DEPARTMENTS.map((department) => (
+                          <option key={department}>{department}</option>
+                        ))}
+                      </SelectInput>
+                    </Field>
+                    <Field label="Project">
+                      <SelectInput
+                        value={drEditFields.project}
+                        onChange={(event) =>
+                          setDrEditFields((current) => ({
+                            ...current,
+                            project: event.target.value,
+                          }))
+                        }
+                      >
+                        {state.projectOptions.map((project) => (
+                          <option key={project}>{project}</option>
+                        ))}
+                      </SelectInput>
+                    </Field>
+                    <Field label="Vendor">
+                      <TextInput
+                        value={drEditFields.vendorName}
+                        onChange={(event) =>
+                          setDrEditFields((current) => ({
+                            ...current,
+                            vendorName: event.target.value,
+                          }))
+                        }
+                      />
+                    </Field>
+                    <Field label="Priority">
+                      <SelectInput
+                        value={drEditFields.priority}
+                        onChange={(event) =>
+                          setDrEditFields((current) => ({
+                            ...current,
+                            priority: event.target.value as typeof drEditFields.priority,
+                          }))
+                        }
+                      >
+                        {PRIORITIES.map((priority) => (
+                          <option key={priority}>{priority}</option>
+                        ))}
+                      </SelectInput>
+                    </Field>
+                    <Field label="Required by">
+                      <TextInput
+                        type="date"
+                        value={drEditFields.requiredByDate}
+                        onChange={(event) =>
+                          setDrEditFields((current) => ({
+                            ...current,
+                            requiredByDate: event.target.value,
+                          }))
+                        }
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Reason">
+                    <TextArea
+                      value={drEditFields.reasonForPurchase}
+                      onChange={(event) =>
+                        setDrEditFields((current) => ({
+                          ...current,
+                          reasonForPurchase: event.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                  <div className="grid gap-3">
+                    {drEditLineItems.map((item, index) => (
+                      <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-3" key={item.id}>
+                        <p className="text-xs font-semibold uppercase text-slate-500">
+                          Item {index + 1}
+                        </p>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <Field label="Item name">
+                            <TextInput
+                              value={item.itemName}
+                              onChange={(event) =>
+                                updateDrEditLineItem(item.id, (current) => ({
+                                  ...current,
+                                  itemName: event.target.value,
+                                }))
+                              }
+                            />
+                          </Field>
+                          <Field label="Vendor">
+                            <TextInput
+                              value={item.vendorName}
+                              onChange={(event) =>
+                                updateDrEditLineItem(item.id, (current) => ({
+                                  ...current,
+                                  vendorName: event.target.value,
+                                }))
+                              }
+                            />
+                          </Field>
+                          <Field label="Quantity">
+                            <TextInput
+                              min={0}
+                              step="any"
+                              type="number"
+                              value={item.quantity}
+                              onChange={(event) =>
+                                updateDrEditLineItem(item.id, (current) => ({
+                                  ...current,
+                                  quantity: Number(event.target.value),
+                                }))
+                              }
+                            />
+                          </Field>
+                          <Field label="Unit price">
+                            <TextInput
+                              min={0}
+                              step="any"
+                              type="number"
+                              value={item.unitPrice}
+                              onChange={(event) =>
+                                updateDrEditLineItem(item.id, (current) => ({
+                                  ...current,
+                                  unitPrice: Number(event.target.value),
+                                }))
+                              }
+                            />
+                          </Field>
+                          <Field label="Currency">
+                            <SelectInput
+                              value={item.currency}
+                              onChange={(event) =>
+                                updateDrEditLineItem(item.id, (current) => ({
+                                  ...current,
+                                  currency: event.target.value,
+                                }))
+                              }
+                            >
+                              {BULK_SUPPORTED_CURRENCIES.map((currency) => (
+                                <option key={currency}>{currency}</option>
+                              ))}
+                            </SelectInput>
+                          </Field>
+                          <Field label="Product link">
+                            <TextInput
+                              value={item.productUrl ?? ""}
+                              onChange={(event) =>
+                                updateDrEditLineItem(item.id, (current) => ({
+                                  ...current,
+                                  productUrl: event.target.value,
+                                }))
+                              }
+                            />
+                          </Field>
+                        </div>
+                        <Field label="Item description">
+                          <TextArea
+                            value={item.itemDescription}
+                            onChange={(event) =>
+                              updateDrEditLineItem(item.id, (current) => ({
+                                ...current,
+                                itemDescription: event.target.value,
+                              }))
+                            }
+                          />
+                        </Field>
+                      </div>
+                    ))}
+                  </div>
+                  <IconButton
+                    disabled={drEditSaving || !comment.trim()}
+                    icon={<Pencil className="h-4 w-4" />}
+                    onClick={async () => {
+                      try {
+                        setDrEditSaving(true);
+                        setDrEditError("");
+                        const updatedLineItems = await validateAndConvertLineItems(drEditLineItems);
+                        onTransition(request.id, {
+                          type: "dr-majed-update-request",
+                          comment,
+                          fields: drEditFields,
+                          lineItems: updatedLineItems,
+                        });
+                        clearText();
+                      } catch (error) {
+                        setDrEditError(
+                          error instanceof Error ? error.message : "Could not save request changes.",
+                        );
+                      } finally {
+                        setDrEditSaving(false);
+                      }
+                    }}
+                    variant="secondary"
+                  >
+                    {drEditSaving ? "Saving changes..." : "Save Dr. Majed changes"}
+                  </IconButton>
+                </div>
+              </details>
+            ) : null}
+            <Field label="Decline reason" htmlFor={declineReasonId} required>
+              <TextArea
+                id={declineReasonId}
+                placeholder="Required when declining"
+                value={declineReason}
+                onChange={(event) => setDeclineReason(event.target.value)}
+              />
+            </Field>
+            <div className="grid gap-2 sm:flex sm:flex-wrap">
+              <IconButton
+                icon={<CheckCircle2 className="h-4 w-4" />}
+                onClick={() => {
+                  onTransition(request.id, { type: "department-review", comment });
+                  clearText();
+                }}
+                variant="success"
+              >
+                Approve
+              </IconButton>
+              <IconButton
+                disabled={!declineReason.trim()}
+                icon={<XCircle className="h-4 w-4" />}
+                onClick={() => {
+                  onTransition(request.id, {
+                    type: "department-decline",
+                    declineReason,
+                  });
+                  clearText();
+                }}
+                variant="danger"
+              >
+                Decline
+              </IconButton>
+            </div>
           </div>
         ) : null}
 
@@ -2861,6 +3372,13 @@ function ActionPanel({
                       name: file.name,
                       size: file.size,
                       type: file.type,
+                    });
+                    void extractInvoiceNumberFromFile(file).then((detectedNumber) => {
+                      if (detectedNumber) {
+                        setInvoiceNumber((current) =>
+                          current.trim() ? current : detectedNumber,
+                        );
+                      }
                     });
                   }}
                 />
@@ -3054,11 +3572,44 @@ function ActionPanel({
           </div>
         ) : null}
 
+        {canStaffCancel ? (
+          <div className="grid gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+            <div>
+              <p className="font-semibold">Cancel this request</p>
+              <p className="mt-1">
+                Cancelled requests leave active dashboards and move to Trash with the audit trail.
+              </p>
+            </div>
+            <Field label="Cancellation reason" htmlFor={staffCancelReasonId} required>
+              <TextArea
+                id={staffCancelReasonId}
+                placeholder="Reason required before cancellation"
+                value={staffCancellationReason}
+                onChange={(event) => setStaffCancellationReason(event.target.value)}
+              />
+            </Field>
+            <IconButton
+              disabled={!staffCancellationReason.trim()}
+              icon={<XCircle className="h-4 w-4" />}
+              onClick={() => {
+                onTransition(request.id, {
+                  type: "staff-cancel-request",
+                  cancellationReason: staffCancellationReason,
+                });
+                setStaffCancellationReason("");
+              }}
+              variant="danger"
+            >
+              Cancel request
+            </IconButton>
+          </div>
+        ) : null}
+
         {!isClosed(request.status) &&
         !(
           (request.status === "Mona Review" && canUse("Mona")) ||
           (request.status === "Rashid Review" && canUse("Rashid")) ||
-          (["Dr. Majed Review", "Amro Review", "Rashid Auto Approved"].includes(
+          (["Mona Review", "Dr. Majed Review", "Amro Review", "Rashid Auto Approved"].includes(
             request.status,
           ) &&
             departmentReviewRole &&
@@ -3140,7 +3691,7 @@ function RequestDetails({
         </div>
       </div>
 
-      <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
+      <div className="grid min-w-0 gap-5">
         <div className="grid min-w-0 gap-5">
           <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
             <h3 className="text-base font-bold text-slate-950">Request details</h3>
@@ -3569,6 +4120,132 @@ function NotificationsCenter({
           ))
         )}
       </div>
+    </section>
+  );
+}
+
+function TrashPanel({
+  currentUser,
+  state,
+}: {
+  currentUser: UserProfile;
+  state: ProcurementState;
+}) {
+  const cancelledRequests = getCancelledRequests(state, currentUser);
+  const cancellationAudit = (request: ProcurementRequest) =>
+    [...state.auditLogs]
+      .reverse()
+      .find(
+        (log) =>
+          log.requestId === request.id &&
+          (log.newStatus === "Cancelled" || log.action.toLowerCase().includes("cancel")),
+      );
+
+  return (
+    <section className={classNames(panelClass, "min-w-0 overflow-hidden")}>
+      <div className="flex flex-col gap-2 border-b border-slate-200 p-5 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <XCircle className="h-5 w-5 text-red-700" />
+            <h2 className="text-lg font-bold text-slate-950">Trash</h2>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            Cancelled requests are hidden from active dashboards and kept here with audit details.
+          </p>
+        </div>
+        <span className="rounded-full border border-red-100 bg-red-50 px-3 py-1 text-sm font-semibold text-red-800">
+          {cancelledRequests.length} cancelled
+        </span>
+      </div>
+
+      {cancelledRequests.length === 0 ? (
+        <div className="p-5 text-sm text-slate-500">No cancelled requests yet.</div>
+      ) : (
+        <>
+          <div className="grid gap-3 p-4 md:hidden">
+            {cancelledRequests.map((request) => {
+              const audit = cancellationAudit(request);
+              const cancelledBy =
+                getUserById(state.users, request.cancelledById ?? "")?.name ??
+                audit?.userName ??
+                "Unknown";
+              const cancelledAt = request.cancelledAt ?? audit?.dateTime ?? request.updatedAt;
+              const reason = request.cancellationReason ?? audit?.comment ?? "No reason recorded";
+
+              return (
+                <div className={classNames(insetPanelClass, "p-3")} key={request.id}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-slate-950">{request.id}</p>
+                      <p className="mt-1 text-sm text-slate-600">
+                        {request.employeeName} - {request.itemName}
+                      </p>
+                    </div>
+                    <StatusBadge status={request.status} />
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    <Detail label="Cancelled by" value={cancelledBy} />
+                    <Detail label="Cancelled at" value={formatDateTime(cancelledAt)} />
+                    <Detail label="Reason" value={reason} />
+                    <Detail
+                      label="Audit action"
+                      value={audit?.action ?? "Cancellation audit unavailable"}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="hidden overflow-x-auto md:block">
+            <table className="w-full min-w-[980px] text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Request</th>
+                  <th className="px-4 py-3">Project</th>
+                  <th className="px-4 py-3">Cancelled by</th>
+                  <th className="px-4 py-3">Cancelled at</th>
+                  <th className="px-4 py-3">Reason</th>
+                  <th className="px-4 py-3">Audit action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {cancelledRequests.map((request) => {
+                  const audit = cancellationAudit(request);
+                  const cancelledBy =
+                    getUserById(state.users, request.cancelledById ?? "")?.name ??
+                    audit?.userName ??
+                    "Unknown";
+                  const cancelledAt = request.cancelledAt ?? audit?.dateTime ?? request.updatedAt;
+                  const reason =
+                    request.cancellationReason ?? audit?.comment ?? "No reason recorded";
+
+                  return (
+                    <tr key={request.id}>
+                      <td className="px-4 py-3">
+                        <p className="font-bold text-slate-950">{request.id}</p>
+                        <p className="mt-1 line-clamp-1 text-slate-500">
+                          {request.employeeName} - {request.itemName}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3">{request.project}</td>
+                      <td className="px-4 py-3">{cancelledBy}</td>
+                      <td className="px-4 py-3 text-slate-500">
+                        {formatDateTime(cancelledAt)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="line-clamp-2 max-w-lg text-red-900">{reason}</span>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {audit?.action ?? "Cancellation audit unavailable"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -5191,7 +5868,7 @@ function Dashboard({
   const visibleRequests = useMemo(
     () =>
       requestScope === "company"
-        ? state.requests
+        ? state.requests.filter((request) => request.status !== "Cancelled")
         : getVisibleRequests(state, currentUser),
     [currentUser, requestScope, state],
   );
@@ -5268,63 +5945,61 @@ function Dashboard({
         ))}
       </div>
 
-      <div className="grid min-w-0 gap-5 2xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="grid min-w-0 gap-5">
-          <RequestsTable
-            currentUser={currentUser}
-            onSelect={setSelectedRequestId}
-            requests={visibleRequests}
-            selectedRequestId={selectedRequest?.id}
-            users={state.users}
-          />
-          <RequestDetails
-            currentUser={currentUser}
-            onTransition={(requestId, action) =>
-              setState((current) => transitionRequest(current, requestId, currentUser.id, action))
-            }
-            request={selectedRequest}
-            state={state}
-          />
-        </div>
-        <div className="grid min-w-0 gap-5 content-start">
+      <div className="grid min-w-0 gap-5">
+        <RequestsTable
+          currentUser={currentUser}
+          onSelect={setSelectedRequestId}
+          requests={visibleRequests}
+          selectedRequestId={selectedRequest?.id}
+          users={state.users}
+        />
+        <RequestDetails
+          currentUser={currentUser}
+          onTransition={(requestId, action) =>
+            setState((current) => transitionRequest(current, requestId, currentUser.id, action))
+          }
+          request={selectedRequest}
+          state={state}
+        />
+        <div className="grid min-w-0 gap-5 xl:grid-cols-2">
           <ProcurementAssistant
             currentUser={currentUser}
             setState={setState}
             state={state}
           />
           <section className={classNames(panelClass, "min-w-0 p-4")}>
-            <div className="flex items-center gap-2">
-              <Filter className="h-5 w-5 text-slate-700" />
-              <h2 className="text-base font-bold text-slate-950">Watchlist</h2>
-            </div>
-            <div className="mt-3 grid gap-2">
-              {watchlistRequests.length === 0 ? (
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                  No overdue tasks assigned to you.
-                </div>
-              ) : null}
-              {watchlistRequests.map((request) => (
-                <button
-                  className={classNames(
-                    "rounded-md border p-3 text-left text-sm",
-                    showingPersonalBlockages
-                      ? "border-red-200 bg-red-50 text-red-900"
-                      : "border-orange-200 bg-orange-50 text-orange-900",
-                  )}
-                  key={request.id}
-                  onClick={() => setSelectedRequestId(request.id)}
-                  type="button"
-                >
-                  <strong>{request.id}</strong> has been over {OVERDUE_REQUEST_HOURS}h since{" "}
-                  {formatDateTime(request.updatedAt)}
-                  <span className="mt-1 block text-xs">
-                    {showingPersonalBlockages ? "Overdue on you" : getAssigneeName(request, state.users)} -{" "}
-                    {getPendingAction(request)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </section>
+          <div className="flex items-center gap-2">
+            <Filter className="h-5 w-5 text-slate-700" />
+            <h2 className="text-base font-bold text-slate-950">Watchlist</h2>
+          </div>
+          <div className="mt-3 grid gap-2">
+            {watchlistRequests.length === 0 ? (
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                No overdue tasks assigned to you.
+              </div>
+            ) : null}
+            {watchlistRequests.map((request) => (
+              <button
+                className={classNames(
+                  "rounded-md border p-3 text-left text-sm",
+                  showingPersonalBlockages
+                    ? "border-red-200 bg-red-50 text-red-900"
+                    : "border-orange-200 bg-orange-50 text-orange-900",
+                )}
+                key={request.id}
+                onClick={() => setSelectedRequestId(request.id)}
+                type="button"
+              >
+                <strong>{request.id}</strong> has been over {OVERDUE_REQUEST_HOURS}h since{" "}
+                {formatDateTime(request.updatedAt)}
+                <span className="mt-1 block text-xs">
+                  {showingPersonalBlockages ? "Overdue on you" : getAssigneeName(request, state.users)} -{" "}
+                  {getPendingAction(request)}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
         </div>
       </div>
     </div>
@@ -5478,8 +6153,9 @@ export default function Home() {
           return;
         }
 
-        const remoteState = data?.state
-          ? parseState(JSON.stringify(data.state))
+        const liveStateRow = data as { state?: unknown } | null;
+        const remoteState = liveStateRow?.state
+          ? parseState(JSON.stringify(liveStateRow.state))
           : latestStateRef.current;
         const profileHydratedState = stateWithSignedInProfile(remoteState, authUser);
         const hydratedState = applyLaunchCleanup(profileHydratedState);
@@ -5489,7 +6165,7 @@ export default function Home() {
 
         setState(hydratedState);
 
-        if (!data?.state || cleanupApplied) {
+        if (!liveStateRow?.state || cleanupApplied) {
           await supabaseClient.from("procurement_app_state").upsert({
             id: LIVE_STATE_ROW_ID,
             state: hydratedState,
@@ -5647,6 +6323,7 @@ export default function Home() {
             : []),
           { id: "new-request", label: "New request", icon: <Plus className="h-4 w-4" /> },
           { id: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" /> },
+          { id: "trash", label: "Trash", icon: <XCircle className="h-4 w-4" /> },
           {
             id: "admin",
             label: "Admin",
@@ -5685,11 +6362,16 @@ export default function Home() {
       title: "Admin controls",
       subtitle: "Users, reassignment, exports, and audit visibility.",
     },
+    trash: {
+      title: "Trash",
+      subtitle: "Cancelled requests and cancellation audit history.",
+    },
   };
   const activeView =
     currentUser.role === "Employee" &&
     (view === "new-request" ||
       view === "admin" ||
+      view === "trash" ||
       view === "company-dashboard" ||
       view === "work-queue")
       ? "dashboard"
@@ -6056,6 +6738,13 @@ export default function Home() {
             onRunReminder={() =>
               setState((current) => createDailyReminderNotifications(current))
             }
+            state={state}
+          />
+        ) : null}
+
+        {activeView === "trash" && !isEmployee ? (
+          <TrashPanel
+            currentUser={currentUser}
             state={state}
           />
         ) : null}

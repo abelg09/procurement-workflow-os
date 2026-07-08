@@ -49,6 +49,7 @@ export const STATUSES = [
   "Rashid Declined",
   "Dr. Majed Review",
   "Amro Review",
+  "Department Declined",
   "Edlyn Confirmation",
   "Edlyn Clarification Requested",
   "Purchase in Progress",
@@ -82,14 +83,14 @@ export const WORKFLOW_STAGES: Array<{
   ownerLabel?: string;
 }> = [
   { id: 1, key: "mona", label: "Mona Review", ownerRole: "Mona" },
-  { id: 2, key: "rashid", label: "Rashid Approval", ownerRole: "Rashid" },
   {
-    id: 3,
+    id: 2,
     key: "dr-majed",
     label: "Department Review",
     ownerRole: "Dr. Majed",
     ownerLabel: "Dr. Majed / Mona / Amro",
   },
+  { id: 3, key: "rashid", label: "Rashid Approval", ownerRole: "Rashid" },
   {
     id: 4,
     key: "edlyn",
@@ -289,8 +290,12 @@ export type ProcurementRequest = {
   submittedById: string;
   previousResponsibleId?: string;
   edlynClarificationReturnStatus?: "Edlyn Confirmation" | "Purchase in Progress";
+  procurePriceReviewReturnStatus?: "Edlyn Confirmation" | "Purchase in Progress";
   lineItemClarifications?: LineItemClarification[];
   logistics?: LogisticsDetails;
+  cancellationReason?: string;
+  cancelledAt?: string;
+  cancelledById?: string;
   orderConfirmedAt?: string;
   itemReceivedAt?: string;
   completedAt?: string;
@@ -356,6 +361,24 @@ export type ProcurementState = {
   };
 };
 
+export type RequestFieldPatch = Partial<
+  Pick<
+    ProcurementRequest,
+    | "employeeName"
+    | "department"
+    | "project"
+    | "itemName"
+    | "itemDescription"
+    | "quantity"
+    | "estimatedAmount"
+    | "currency"
+    | "vendorName"
+    | "reasonForPurchase"
+    | "priority"
+    | "requiredByDate"
+  >
+>;
+
 export type DailyReminderEmail = {
   userId: string;
   name: string;
@@ -394,6 +417,8 @@ export type WorkflowAction =
   | { type: "rashid-decline"; declineReason: string }
   | { type: "dr-review"; comment?: string }
   | { type: "department-review"; comment?: string }
+  | { type: "department-decline"; declineReason: string }
+  | { type: "dr-majed-update-request"; comment: string; fields: RequestFieldPatch; lineItems: ProcurementLineItem[] }
   | { type: "edlyn-confirm"; comment?: string }
   | {
       type: "edlyn-request-clarification";
@@ -401,6 +426,12 @@ export type WorkflowAction =
       lineItemClarifications?: Array<{ lineItemId: string; comment: string }>;
     }
   | { type: "employee-submit-edlyn-clarification"; comment: string; lineItems?: ProcurementLineItem[] }
+  | {
+      type: "edlyn-update-researched-prices";
+      comment: string;
+      lineItems: ProcurementLineItem[];
+      lineItemClarifications?: Array<{ lineItemId: string; comment: string }>;
+    }
   | { type: "edlyn-upload-invoice"; invoice: InvoiceDetails; comment?: string }
   | { type: "aileen-clear-invoice"; financeNotes?: string }
   | { type: "edlyn-confirm-order"; comment?: string }
@@ -409,6 +440,7 @@ export type WorkflowAction =
   | { type: "edlyn-receive-item"; comment?: string }
   | { type: "employee-cancel-request"; cancellationReason: string }
   | { type: "edlyn-confirm-cancellation"; comment?: string }
+  | { type: "staff-cancel-request"; cancellationReason: string }
   | { type: "aileen-close"; comment?: string }
   | { type: "admin-reassign"; assigneeId: string; comment?: string };
 
@@ -993,6 +1025,7 @@ export function getStageIndex(stage: WorkflowStage) {
 export function isDeclined(status: RequestStatus) {
   return (
     status === "Rashid Declined" ||
+    status === "Department Declined" ||
     status === "Sent Back for Clarification"
   );
 }
@@ -1058,15 +1091,15 @@ export function getPendingAction(request: ProcurementRequest) {
   switch (request.status) {
     case "Mona Review":
       if (request.stage === "dr-majed") {
-        return "Mona to review and forward to Procure";
+        return "Mona to approve or decline department review";
       }
       return "Mona to approve or request clarification";
     case "Rashid Review":
       return "Rashid to approve or decline";
     case "Dr. Majed Review":
-      return "Dr. Majed to review and forward to Procure";
+      return "Dr. Majed to approve, decline, or modify request";
     case "Amro Review":
-      return "Amro to review and forward to Procure";
+      return "Amro to approve or decline department review";
     case "Rashid Auto Approved":
       if (request.stage === "edlyn") {
         return "Procure to confirm item details";
@@ -1107,6 +1140,8 @@ export function getPendingAction(request: ProcurementRequest) {
       return "No pending action";
     case "Rashid Declined":
       return "Rejected by Rashid; employee notified";
+    case "Department Declined":
+      return "Rejected by department reviewer; employee notified";
     case "Sent Back for Clarification":
       return "Employee to clarify request";
     default:
@@ -1186,40 +1221,109 @@ function requireRoleUser(users: UserProfile[], role: Role) {
   return user;
 }
 
-function getPostRashidRoute(
-  request: ProcurementRequest,
-  autoApproved: boolean,
-): {
+type WorkflowRoute = {
   role: Role;
   status: RequestStatus;
   stage: WorkflowStage;
   title: string;
   body: string;
-} {
+};
+
+const SELF_APPROVAL_ROLES: Role[] = ["Mona", "Dr. Majed", "Amro"];
+
+function isSelfApprovalRole(role: Role) {
+  return SELF_APPROVAL_ROLES.includes(role);
+}
+
+function getPostMonaRoute(request: ProcurementRequest): WorkflowRoute {
   const reviewRole = getDepartmentReviewRole(request.department);
 
   if (reviewRole) {
     const reviewStatus = getDepartmentReviewStatus(request.department) ?? "Dr. Majed Review";
     return {
       role: reviewRole,
-      status: autoApproved ? "Rashid Auto Approved" : reviewStatus,
+      status: reviewStatus,
       stage: "dr-majed",
-      title: autoApproved ? "Auto-approved request ready" : "Review required",
-      body: autoApproved
-        ? `${request.id} was auto approved at Rashid stage and is ready for ${reviewRole} review.`
-        : `${request.id} is ready for ${reviewRole} review.`,
+      title: "Department review required",
+      body: `${request.id} is ready for ${reviewRole} department review.`,
+    };
+  }
+
+  return getPostDepartmentReviewRoute(request);
+}
+
+function getPostDepartmentReviewRoute(request: ProcurementRequest): WorkflowRoute {
+  const totalAed = getRequestTotalAed(request);
+
+  if (totalAed >= 300) {
+    return {
+      role: "Rashid",
+      status: "Rashid Review",
+      stage: "rashid",
+      title: "Approval required",
+      body: `${request.id} is ready for Rashid approval.`,
     };
   }
 
   return {
     role: "Edlyn",
-    status: autoApproved ? "Rashid Auto Approved" : "Edlyn Confirmation",
+    status: "Rashid Auto Approved",
     stage: "edlyn",
-    title: autoApproved ? "Auto-approved purchase task" : "Purchase task assigned",
-    body: autoApproved
-      ? `${request.id} was auto approved at Rashid stage and is ready for Procure item confirmation.`
-      : `${request.id} is ready for Procure item confirmation.`,
+    title: "Auto-approved purchase task",
+    body: `${request.id} is below AED 300 and is ready for Procure item confirmation.`,
   };
+}
+
+function getPostRashidRoute(request: ProcurementRequest): WorkflowRoute {
+  return {
+    role: "Edlyn",
+    status: request.procurePriceReviewReturnStatus ?? "Edlyn Confirmation",
+    stage: "edlyn",
+    title: "Purchase task assigned",
+    body: `${request.id} is ready for Procure item confirmation.`,
+  };
+}
+
+function applyLineItemUpdate(editable: ProcurementRequest, lineItems: ProcurementLineItem[]) {
+  const normalizedLineItems = lineItems.map((item) => ({
+    ...item,
+    productUrl: item.productUrl ?? "",
+  }));
+  const totalAed = roundMoney(
+    normalizedLineItems.reduce((total, item) => total + item.aedTotal, 0),
+  );
+  const totalQuantity = normalizedLineItems.reduce((total, item) => total + item.quantity, 0);
+  const vendorName =
+    Array.from(new Set(normalizedLineItems.map((item) => item.vendorName).filter(Boolean))).join(
+      ", ",
+    ) || editable.vendorName;
+
+  editable.lineItems = normalizedLineItems;
+  editable.estimatedAmountAed = totalAed;
+  editable.quantity = totalQuantity;
+  editable.exchangeRateDate =
+    normalizedLineItems[0]?.exchangeRateDate ?? DEFAULT_EXCHANGE_RATE_DATE;
+  editable.exchangeRateSource =
+    Array.from(new Set(normalizedLineItems.map((item) => item.exchangeRateSource))).join(", ") ||
+    editable.exchangeRateSource;
+  editable.vendorName = vendorName;
+  editable.vendor = {
+    ...editable.vendor,
+    companyName: vendorName || editable.vendor.companyName,
+  };
+
+  if (normalizedLineItems.length === 1) {
+    const [item] = normalizedLineItems;
+    editable.itemName = item.itemName;
+    editable.itemDescription = item.itemDescription;
+    editable.estimatedAmount = item.originalTotal;
+    editable.currency = item.currency;
+  } else {
+    editable.itemName = `Bulk upload (${normalizedLineItems.length} items)`;
+    editable.itemDescription = `Bulk procurement upload containing ${normalizedLineItems.length} item(s).`;
+    editable.estimatedAmount = totalAed;
+    editable.currency = "AED";
+  }
 }
 
 export function submitProcurementRequest(
@@ -1252,17 +1356,72 @@ export function submitProcurementRequest(
   addAudit(nextState.auditLogs, request, actor, "Draft", "Submitted request", dateTime, {
     assignedPerson: monaUser.name,
   });
-  addNotification(
-    nextState.notifications,
-    {
-      userId: monaUser.id,
-      requestId: request.id,
-      title: "New procurement request",
-      body: `${request.id} from ${request.employeeName} is ready for Mona review.`,
-      type: "assigned",
-    },
-    dateTime,
-  );
+
+  const applyRoute = (route: WorkflowRoute) => {
+    const assignee = requireRoleUser(state.users, route.role);
+    request.status = route.status;
+    request.stage = route.stage;
+    request.assigneeId = assignee.id;
+    addNotification(
+      nextState.notifications,
+      {
+        userId: assignee.id,
+        requestId: request.id,
+        title: route.title,
+        body: route.body,
+        type: route.status === "Rashid Auto Approved" ? "approved" : "assigned",
+      },
+      dateTime,
+    );
+    return assignee;
+  };
+
+  if (actor.role === "Mona") {
+    const previousStatus = request.status;
+    let route = getPostMonaRoute(request);
+    let auditAction = "Mona self-approved own request";
+    request.previousResponsibleId = actor.id;
+
+    if (route.role === actor.role && isSelfApprovalRole(route.role)) {
+      request.status = route.status;
+      request.stage = route.stage;
+      request.assigneeId = actor.id;
+      addAudit(
+        nextState.auditLogs,
+        request,
+        actor,
+        previousStatus,
+        "Mona self-approved own department review",
+        dateTime,
+        { assignedPerson: actor.name },
+      );
+      route = getPostDepartmentReviewRoute(request);
+      auditAction = "Mona self-approved own request and department review";
+    }
+
+    const assignee = applyRoute(route);
+    addAudit(
+      nextState.auditLogs,
+      request,
+      actor,
+      previousStatus,
+      auditAction,
+      dateTime,
+      { assignedPerson: assignee.name },
+    );
+  } else {
+    addNotification(
+      nextState.notifications,
+      {
+        userId: monaUser.id,
+        requestId: request.id,
+        title: "New procurement request",
+        body: `${request.id} from ${request.employeeName} is ready for Mona review.`,
+        type: "assigned",
+      },
+      dateTime,
+    );
+  }
 
   return nextState;
 }
@@ -1335,6 +1494,56 @@ export function transitionRequest(
     }
     return assignee;
   };
+  const applyRoute = (route: WorkflowRoute, type: NotificationRecord["type"] = "assigned") => {
+    const assignee = assignTo(route.role, { notify: false });
+    editable.status = route.status;
+    editable.stage = route.stage;
+    addNotification(
+      nextState.notifications,
+      {
+        userId: assignee.id,
+        requestId,
+        title: route.title,
+        body: route.body,
+        type,
+      },
+      dateTime,
+    );
+    return assignee;
+  };
+  const applyPostMonaRoute = () => {
+    let route = getPostMonaRoute(editable);
+    const requester = getUserById(state.users, editable.submittedById);
+
+    if (
+      requester &&
+      route.stage === "dr-majed" &&
+      route.role === requester.role &&
+      isSelfApprovalRole(route.role)
+    ) {
+      const selfPreviousStatus = editable.status;
+      editable.status = route.status;
+      editable.stage = route.stage;
+      editable.assigneeId = requester.id;
+      editable.previousResponsibleId = requester.id;
+      addAudit(
+        nextState.auditLogs,
+        editable,
+        requester,
+        selfPreviousStatus,
+        `${requester.name} self-approved own department review`,
+        dateTime,
+        { assignedPerson: requester.name },
+      );
+      route = getPostDepartmentReviewRoute(editable);
+    }
+
+    return applyRoute(route, route.status === "Rashid Auto Approved" ? "approved" : "assigned");
+  };
+  const applyPostDepartmentReviewRoute = () => {
+    const route = getPostDepartmentReviewRoute(editable);
+    return applyRoute(route, route.status === "Rashid Auto Approved" ? "approved" : "assigned");
+  };
 
   switch (workflowAction.type) {
     case "employee-cancel-request": {
@@ -1356,6 +1565,8 @@ export function transitionRequest(
         Boolean(editable.logistics);
 
       editable.previousResponsibleId = actor.id;
+      editable.cancellationReason = cancellationReason;
+      editable.cancelledById = actor.id;
       comment = cancellationReason;
 
       if (hasReachedProcure) {
@@ -1394,6 +1605,7 @@ export function transitionRequest(
       } else {
         editable.status = "Cancelled";
         editable.assigneeId = actor.id;
+        editable.cancelledAt = dateTime;
         actionLabel = "Requester cancelled request";
 
         if (currentAssignee && currentAssignee.id !== actor.id) {
@@ -1412,73 +1624,74 @@ export function transitionRequest(
       }
       break;
     }
-    case "mona-approve": {
-      if (!canAct(["Mona Review"], "Mona")) {
+    case "staff-cancel-request": {
+      if (
+        actor.role === "Employee" ||
+        isClosed(editable.status) ||
+        !hasText(workflowAction.cancellationReason)
+      ) {
         return state;
       }
-      if (
-        editable.stage === "dr-majed" &&
-        getDepartmentReviewRole(editable.department) === "Mona"
-      ) {
-        const assignee = assignTo("Edlyn", { notify: false });
-        editable.status = "Edlyn Confirmation";
-        editable.stage = "edlyn";
-        editable.previousResponsibleId = actor.id;
-        actionLabel = "Mona completed department review";
-        comment = workflowAction.comment;
+
+      const cancellationReason = workflowAction.cancellationReason.trim();
+      const currentAssignee = getUserById(state.users, editable.assigneeId);
+
+      editable.status = "Cancelled";
+      editable.assigneeId = actor.id;
+      editable.previousResponsibleId = actor.id;
+      editable.cancelledAt = dateTime;
+      editable.cancelledById = actor.id;
+      editable.cancellationReason = cancellationReason;
+      actionLabel = "Staff cancelled request";
+      comment = cancellationReason;
+
+      if (editable.submittedById !== actor.id) {
         addNotification(
           nextState.notifications,
           {
-            userId: assignee.id,
+            userId: editable.submittedById,
             requestId,
-            title: "Purchase task assigned",
-            body: `${editable.id} has been reviewed by ${actor.name} and is ready for item confirmation.`,
-            type: "assigned",
+            title: "Request cancelled",
+            body: `${editable.id} was cancelled by ${actor.name}. Reason: ${cancellationReason}`,
+            type: "closed",
           },
           dateTime,
         );
-        break;
+      }
+
+      if (currentAssignee && currentAssignee.id !== actor.id && currentAssignee.id !== editable.submittedById) {
+        addNotification(
+          nextState.notifications,
+          {
+            userId: currentAssignee.id,
+            requestId,
+            title: "Request cancelled",
+            body: `${editable.id} was cancelled by ${actor.name}. Reason: ${cancellationReason}`,
+            type: "system",
+          },
+          dateTime,
+        );
+      }
+      break;
+    }
+    case "mona-approve": {
+      if (!canAct(["Mona Review"], "Mona") || editable.stage !== "mona") {
+        return state;
       }
       comment = workflowAction.comment;
-      const totalAed = getRequestTotalAed(editable);
-      if (totalAed < 300) {
-        const route = getPostRashidRoute(editable, true);
-        const assignee = assignTo(route.role, { notify: false });
-        editable.status = route.status;
-        editable.stage = route.stage;
-        editable.previousResponsibleId = actor.id;
-        actionLabel = "Mona approved request; Rashid auto approved below AED 300";
+      const assignee = applyPostMonaRoute();
+      editable.previousResponsibleId = actor.id;
+      actionLabel =
+        editable.status === "Rashid Auto Approved"
+          ? "Mona approved request; Rashid auto approved below AED 300"
+          : "Mona approved request";
+      if (editable.status === "Rashid Auto Approved") {
         comment =
           comment ??
-          `Total converted value is AED ${totalAed.toFixed(2)}, so Rashid approval was skipped.`;
-        addNotification(
-          nextState.notifications,
-          {
-            userId: assignee.id,
-            requestId,
-            title: route.title,
-            body: route.body,
-            type: "approved",
-          },
-          dateTime,
-        );
-      } else {
-        const assignee = assignTo("Rashid", { notify: false });
-        editable.status = "Rashid Review";
-        editable.stage = "rashid";
+          `Total converted value is AED ${getRequestTotalAed(editable).toFixed(2)}, so Rashid approval was skipped.`;
+      }
+      if (assignee.id === actor.id) {
         editable.previousResponsibleId = actor.id;
-        actionLabel = "Mona approved request";
-        addNotification(
-          nextState.notifications,
-          {
-            userId: assignee.id,
-            requestId,
-            title: "Approval required",
-            body: `${editable.id} is ready for Rashid approval.`,
-            type: "approved",
-          },
-          dateTime,
-        );
       }
       break;
     }
@@ -1576,24 +1789,12 @@ export function transitionRequest(
       if (!canAct(["Rashid Review"], "Rashid")) {
         return state;
       }
-      const route = getPostRashidRoute(editable, false);
-      const assignee = assignTo(route.role, { notify: false });
-      editable.status = route.status;
-      editable.stage = route.stage;
+      const route = getPostRashidRoute(editable);
+      applyRoute(route, "assigned");
       editable.previousResponsibleId = actor.id;
+      delete editable.procurePriceReviewReturnStatus;
       actionLabel = "Rashid approved request";
       comment = workflowAction.comment;
-      addNotification(
-        nextState.notifications,
-        {
-          userId: assignee.id,
-          requestId,
-          title: route.title,
-          body: route.body,
-          type: "assigned",
-        },
-        dateTime,
-      );
       break;
     }
     case "rashid-decline": {
@@ -1627,26 +1828,121 @@ export function transitionRequest(
         ? [reviewStatus, "Rashid Auto Approved"]
         : ["Rashid Auto Approved"];
 
-      if (!reviewRole || !canAct(reviewStatuses, reviewRole)) {
+      if (!reviewRole || editable.stage !== "dr-majed" || !canAct(reviewStatuses, reviewRole)) {
         return state;
       }
-      const assignee = assignTo("Edlyn", { notify: false });
-      editable.status = "Edlyn Confirmation";
-      editable.stage = "edlyn";
+      const assignee = applyPostDepartmentReviewRoute();
       editable.previousResponsibleId = actor.id;
       actionLabel = `${actor.name} completed department review`;
       comment = workflowAction.comment;
+      if (editable.status === "Rashid Auto Approved") {
+        comment =
+          comment ??
+          `Total converted value is AED ${getRequestTotalAed(editable).toFixed(2)}, so Rashid approval was skipped.`;
+      }
+      if (assignee.id === actor.id) {
+        editable.previousResponsibleId = actor.id;
+      }
+      break;
+    }
+    case "department-decline": {
+      const reviewRole = getDepartmentReviewRole(editable.department);
+      const reviewStatus = getDepartmentReviewStatus(editable.department);
+      const reviewStatuses: RequestStatus[] = reviewStatus
+        ? [reviewStatus, "Rashid Auto Approved"]
+        : ["Rashid Auto Approved"];
+
+      if (
+        !reviewRole ||
+        editable.stage !== "dr-majed" ||
+        !canAct(reviewStatuses, reviewRole) ||
+        !hasText(workflowAction.declineReason)
+      ) {
+        return state;
+      }
+
+      editable.status = "Department Declined";
+      editable.stage = "dr-majed";
+      editable.assigneeId = editable.submittedById;
+      editable.previousResponsibleId = actor.id;
+      actionLabel = `${actor.name} declined department review`;
+      declineReason = workflowAction.declineReason;
       addNotification(
         nextState.notifications,
         {
-          userId: assignee.id,
+          userId: editable.submittedById,
           requestId,
-          title: "Purchase task assigned",
-          body: `${editable.id} has been reviewed by ${actor.name} and is ready for item confirmation.`,
-          type: "assigned",
+          title: "Request rejected",
+          body: `${editable.id} was rejected by ${actor.name}. Reason: ${declineReason}`,
+          type: "declined",
         },
         dateTime,
       );
+      break;
+    }
+    case "dr-majed-update-request": {
+      if (
+        actor.role !== "Dr. Majed" ||
+        editable.stage !== "dr-majed" ||
+        editable.status !== "Dr. Majed Review" ||
+        workflowAction.lineItems.length === 0 ||
+        !hasText(workflowAction.comment)
+      ) {
+        return state;
+      }
+
+      editable.employeeName = workflowAction.fields.employeeName ?? editable.employeeName;
+      editable.department = workflowAction.fields.department ?? editable.department;
+      editable.project = workflowAction.fields.project ?? editable.project;
+      editable.priority = workflowAction.fields.priority ?? editable.priority;
+      editable.requiredByDate =
+        workflowAction.fields.requiredByDate ?? editable.requiredByDate;
+      editable.reasonForPurchase =
+        workflowAction.fields.reasonForPurchase ?? editable.reasonForPurchase;
+      editable.vendorName = workflowAction.fields.vendorName ?? editable.vendorName;
+      applyLineItemUpdate(editable, workflowAction.lineItems);
+      editable.previousResponsibleId = actor.id;
+      actionLabel = "Dr. Majed modified request details";
+      comment = workflowAction.comment;
+      break;
+    }
+    case "edlyn-update-researched-prices": {
+      const lineItemIds = new Set(getRequestLineItems(editable).map((item) => item.id));
+      const itemClarifications = (workflowAction.lineItemClarifications ?? [])
+        .map((item) => ({
+          lineItemId: item.lineItemId,
+          comment: item.comment.trim(),
+        }))
+        .filter((item) => lineItemIds.has(item.lineItemId) && hasText(item.comment));
+      if (
+        !canAct(["Edlyn Confirmation", "Purchase in Progress", "Rashid Auto Approved"], "Edlyn") ||
+        workflowAction.lineItems.length === 0 ||
+        !hasText(workflowAction.comment)
+      ) {
+        return state;
+      }
+
+      const returnStatus =
+        editable.status === "Purchase in Progress" ? "Purchase in Progress" : "Edlyn Confirmation";
+      applyLineItemUpdate(editable, workflowAction.lineItems);
+      editable.procurePriceReviewReturnStatus = returnStatus;
+      editable.lineItemClarifications =
+        itemClarifications.length > 0
+          ? itemClarifications.map((item) => ({
+              ...item,
+              createdAt: dateTime,
+              createdBy: actor.id,
+              createdByName: actor.name,
+            }))
+          : editable.lineItemClarifications;
+      const route = getPostDepartmentReviewRoute(editable);
+      if (route.status === "Rashid Auto Approved") {
+        delete editable.procurePriceReviewReturnStatus;
+      }
+      applyRoute(route, route.status === "Rashid Auto Approved" ? "approved" : "assigned");
+      editable.previousResponsibleId = actor.id;
+      actionLabel = "Procure updated researched prices";
+      comment = workflowAction.comment;
       break;
     }
     case "edlyn-confirm": {
@@ -1969,6 +2265,8 @@ export function transitionRequest(
       editable.status = "Cancelled";
       editable.stage = "edlyn";
       editable.assigneeId = actor.id;
+      editable.cancelledAt = dateTime;
+      editable.cancelledById = editable.cancelledById ?? actor.id;
       actionLabel = "Procure confirmed cancellation";
       comment = workflowAction.comment;
       addNotification(
@@ -2060,7 +2358,7 @@ export function markNotificationRead(
 
 export function getVisibleRequests(state: ProcurementState, user: UserProfile) {
   if (user.role === "Admin") {
-    return state.requests;
+    return state.requests.filter((request) => request.status !== "Cancelled");
   }
 
   if (user.role === "Employee") {
@@ -2069,10 +2367,19 @@ export function getVisibleRequests(state: ProcurementState, user: UserProfile) {
 
   return state.requests.filter(
     (request) =>
-      request.assigneeId === user.id ||
-      request.submittedById === user.id ||
-      (user.role === "Aileen" && isInvoiceFinancePending(request)),
+      request.status !== "Cancelled" &&
+      (request.assigneeId === user.id ||
+        request.submittedById === user.id ||
+        (user.role === "Aileen" && isInvoiceFinancePending(request))),
   );
+}
+
+export function getCancelledRequests(state: ProcurementState, user: UserProfile) {
+  if (user.role === "Employee") {
+    return getPersonalRequests(state, user).filter((request) => request.status === "Cancelled");
+  }
+
+  return state.requests.filter((request) => request.status === "Cancelled");
 }
 
 export function getPersonalRequests(state: ProcurementState, user: UserProfile) {

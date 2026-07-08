@@ -1,4 +1,38 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
+
+type ProcurementDatabase = {
+  public: {
+    Tables: {
+      procurement_app_state: {
+        Row: {
+          id: string;
+          state: unknown;
+          updated_by: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          state: unknown;
+          updated_by?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          state?: unknown;
+          updated_by?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+    };
+    Views: Record<string, never>;
+    Functions: Record<string, never>;
+    Enums: Record<string, never>;
+    CompositeTypes: Record<string, never>;
+  };
+};
+
+let browserClient: SupabaseClient<ProcurementDatabase> | null = null;
 
 export function getSupabaseBrowserClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -8,7 +42,17 @@ export function getSupabaseBrowserClient() {
     return null;
   }
 
-  return createClient(url, anonKey);
+  if (!browserClient) {
+    browserClient = createClient<ProcurementDatabase>(url, anonKey, {
+      auth: {
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        persistSession: true,
+      },
+    });
+  }
+
+  return browserClient;
 }
 
 export function getSupabaseServiceClient() {
