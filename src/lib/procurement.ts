@@ -1549,7 +1549,7 @@ export function transitionRequest(
   switch (workflowAction.type) {
     case "employee-cancel-request": {
       if (
-        actor.id !== editable.submittedById ||
+        !isPersonalRequestForUser(editable, actor) ||
         !isRequesterCancellable(editable.status) ||
         !hasText(workflowAction.cancellationReason)
       ) {
@@ -2384,14 +2384,15 @@ export function getCancelledRequests(state: ProcurementState, user: UserProfile)
   return state.requests.filter((request) => request.status === "Cancelled");
 }
 
-export function getPersonalRequests(state: ProcurementState, user: UserProfile) {
-  const userName = user.name.trim().toLowerCase();
-
-  return state.requests.filter(
-    (request) =>
-      request.submittedById === user.id ||
-      request.employeeName.trim().toLowerCase() === userName,
+export function isPersonalRequestForUser(request: ProcurementRequest, user: UserProfile) {
+  return (
+    request.submittedById === user.id ||
+    request.employeeName.trim().toLowerCase() === user.name.trim().toLowerCase()
   );
+}
+
+export function getPersonalRequests(state: ProcurementState, user: UserProfile) {
+  return state.requests.filter((request) => isPersonalRequestForUser(request, user));
 }
 
 export function getStuckRequests(

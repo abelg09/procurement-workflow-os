@@ -84,6 +84,7 @@ import {
   isClosed,
   isDeclined,
   isInvoiceFinancePending,
+  isPersonalRequestForUser,
   isRequestOverdue,
   isRequesterCancellable,
   isUserBlockedTask,
@@ -5650,7 +5651,7 @@ function EmployeeRequestStatus({
     )
     .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
   const canCancelRequest =
-    request.submittedById === currentUser.id && isRequesterCancellable(request.status);
+    isPersonalRequestForUser(request, currentUser) && isRequesterCancellable(request.status);
   const monaClarification = state.auditLogs
     .filter(
       (log) =>
