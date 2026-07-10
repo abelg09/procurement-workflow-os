@@ -4117,7 +4117,7 @@ function NotificationsCenter({
             <h2 className="text-lg font-bold text-slate-950">Notification center</h2>
           </div>
           <p className="mt-1 text-sm text-slate-500">
-            Internal alerts now, with Asana, email, and Slack hooks prepared later.
+            Internal alerts now, with email and Slack support for 3 PM reminders.
           </p>
         </div>
         <IconButton

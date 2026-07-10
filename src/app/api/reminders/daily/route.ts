@@ -18,6 +18,12 @@ type EmailResult = {
   message: string;
 };
 
+type SlackResult = {
+  channel: "slack";
+  status: "sent" | "skipped" | "failed";
+  message: string;
+};
+
 function dashboardUrl() {
   return (
     process.env.PROCUREMENT_DASHBOARD_URL ||
@@ -26,9 +32,9 @@ function dashboardUrl() {
   );
 }
 
-function parseEmailOverrides() {
+function parseOverrides(envName: string) {
   return Object.fromEntries(
-    (process.env.REMINDER_EMAIL_OVERRIDES ?? "")
+    (process.env[envName] ?? "")
       .split(",")
       .map((pair) => pair.trim())
       .filter(Boolean)
@@ -51,6 +57,90 @@ function resolvedRecipientEmail(payload: DailyReminderEmail, overrides: Record<s
 
 function isPlaceholderEmail(email: string) {
   return email.toLowerCase().endsWith("@example.com");
+}
+
+function slackEscape(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function resolvedSlackMention(
+  payload: DailyReminderEmail,
+  overrides: Record<string, string>,
+) {
+  return (
+    overrides[payload.role.toLowerCase()] ||
+    overrides[payload.roleLabel.toLowerCase()] ||
+    overrides[payload.name.toLowerCase()] ||
+    `*${payload.name}*`
+  );
+}
+
+function buildSlackMessage(
+  payloads: DailyReminderEmail[],
+  overrides: Record<string, string>,
+) {
+  const totalActive = payloads.reduce((total, payload) => total + payload.activeCount, 0);
+  const totalOverdue = payloads.reduce((total, payload) => total + payload.overdueCount, 0);
+  const fields = payloads.map((payload) => {
+    const mention = resolvedSlackMention(payload, overrides);
+    const activeText =
+      payload.activeRequestIds.length > 0
+        ? payload.activeRequestIds.join(", ")
+        : "none";
+    const overdueText =
+      payload.overdueRequestIds.length > 0
+        ? payload.overdueRequestIds.join(", ")
+        : "none";
+
+    return {
+      type: "mrkdwn",
+      text: [
+        `${mention} (*${slackEscape(payload.roleLabel)}*)`,
+        `Active: *${payload.activeCount}* (${slackEscape(activeText)})`,
+        `Over 24h: *${payload.overdueCount}* (${slackEscape(overdueText)})`,
+      ].join("\n"),
+    };
+  });
+  const messageBlocks: Array<Record<string, unknown>> = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text:
+          totalOverdue > 0
+            ? `Procurement reminder: ${totalOverdue} overdue task(s)`
+            : "Procurement dashboard reminder",
+        emoji: false,
+      },
+    },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `Please check the dashboard today. <${dashboardUrl()}|Open Procurement Workflow OS>`,
+      },
+    },
+  ];
+
+  if (fields.length > 0) {
+    messageBlocks.push({
+      type: "section",
+      fields,
+    });
+  }
+
+  return {
+    text: [
+      "Procurement dashboard reminder",
+      `Active tasks: ${totalActive}`,
+      `Over 24 hours: ${totalOverdue}`,
+      dashboardUrl(),
+    ].join(" | "),
+    blocks: messageBlocks,
+  };
 }
 
 async function sendReminderEmail(
@@ -112,6 +202,43 @@ async function sendReminderEmail(
   };
 }
 
+async function sendSlackReminder(
+  payloads: DailyReminderEmail[],
+  overrides: Record<string, string>,
+): Promise<SlackResult> {
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+
+  if (!webhookUrl) {
+    return {
+      channel: "slack",
+      status: "skipped",
+      message: "SLACK_WEBHOOK_URL is not configured.",
+    };
+  }
+
+  const response = await fetch(webhookUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(buildSlackMessage(payloads, overrides)),
+  });
+
+  if (!response.ok) {
+    return {
+      channel: "slack",
+      status: "failed",
+      message: await response.text(),
+    };
+  }
+
+  return {
+    channel: "slack",
+    status: "sent",
+    message: "Slack reminder sent.",
+  };
+}
+
 export async function POST() {
   const supabase = getSupabaseServiceClient();
 
@@ -152,12 +279,16 @@ export async function POST() {
     );
   }
 
-  const overrides = parseEmailOverrides();
+  const overrides = parseOverrides("REMINDER_EMAIL_OVERRIDES");
+  const slackMentionOverrides = parseOverrides("SLACK_MENTION_OVERRIDES");
   const emailPayloads = getDailyReminderEmailPayloads(currentState, dashboardUrl());
   const emailResults = await Promise.all(
     emailPayloads.map((payload) => sendReminderEmail(payload, overrides)),
   );
-  const failed = emailResults.filter((result) => result.status === "failed");
+  const slackResult = await sendSlackReminder(emailPayloads, slackMentionOverrides);
+  const failed = [...emailResults, slackResult].filter(
+    (result) => result.status === "failed",
+  );
 
   return NextResponse.json(
     {
@@ -165,6 +296,7 @@ export async function POST() {
       inserted,
       schedule: "Daily at 3:00 PM Asia/Dubai",
       emailResults,
+      slackResult,
     },
     { status: failed.length === 0 ? 200 : 502 },
   );

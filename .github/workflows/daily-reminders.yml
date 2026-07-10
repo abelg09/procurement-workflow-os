@@ -18,12 +18,14 @@ jobs:
         with:
           node-version: 24
 
-      - name: Send reminder emails
+      - name: Send reminder notifications
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           REMINDER_EMAIL_FROM: ${{ vars.REMINDER_EMAIL_FROM || secrets.REMINDER_EMAIL_FROM }}
           REMINDER_EMAIL_OVERRIDES: ${{ vars.REMINDER_EMAIL_OVERRIDES || secrets.REMINDER_EMAIL_OVERRIDES }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MENTION_OVERRIDES: ${{ vars.SLACK_MENTION_OVERRIDES || secrets.SLACK_MENTION_OVERRIDES }}
           PROCUREMENT_DASHBOARD_URL: ${{ vars.PROCUREMENT_DASHBOARD_URL || 'https://procurement.sulmi.ai/' }}
         run: node scripts/send-daily-reminders.mjs

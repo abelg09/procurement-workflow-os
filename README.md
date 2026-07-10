@@ -62,6 +62,8 @@ SUPABASE_SERVICE_ROLE_KEY=
 RESEND_API_KEY=
 REMINDER_EMAIL_FROM=
 REMINDER_EMAIL_OVERRIDES=
+SLACK_WEBHOOK_URL=
+SLACK_MENTION_OVERRIDES=
 PROCUREMENT_DASHBOARD_URL=
 ```
 
@@ -69,16 +71,18 @@ Apply `supabase/schema.sql` to a Supabase project. Enable Google as a Supabase A
 
 ## Daily reminders
 
-Daily reminder emails run from `.github/workflows/daily-reminders.yml` at `11:00 UTC`, which is `3:00 PM Asia/Dubai`. Configure these repository secrets or variables:
+Daily reminder notifications run from `.github/workflows/daily-reminders.yml` at `11:00 UTC`, which is `3:00 PM Asia/Dubai`. Configure these repository secrets or variables:
 
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `RESEND_API_KEY`
-- `REMINDER_EMAIL_FROM`, for example `Procurement Workflow <procurement@sulmi.ai>`
+- `RESEND_API_KEY`, optional for email reminders
+- `REMINDER_EMAIL_FROM`, optional for email reminders, for example `Procurement Workflow <procurement@sulmi.ai>`
 - `PROCUREMENT_DASHBOARD_URL`, optional. Defaults to `https://procurement.sulmi.ai/`.
 - `REMINDER_EMAIL_OVERRIDES`, optional comma-separated role or name mappings such as `Mona:mona@sulmi.ai,Rashid:rashid@sulmi.ai,Dr. Majed:dr.majed@sulmi.ai`
+- `SLACK_WEBHOOK_URL`, optional incoming webhook URL for the Slack reminder channel.
+- `SLACK_MENTION_OVERRIDES`, optional comma-separated role or name mappings such as `Mona:<@U012ABCDEF>,Rashid:<@U045ABCDEF>,Dr. Majed:<@U078ABCDEF>,Procure:<@U091ABCDEF>,Finance:<@U092ABCDEF>`
 
-The reminder job emails Mona, Rashid, Dr. Majed, Amro, Procure, and Finance. It uses the email saved on each role profile unless an override is provided.
+The reminder job checks Mona, Rashid, Dr. Majed, Amro, Procure, and Finance. Email is sent when Resend settings are present. Slack posts one channel digest when `SLACK_WEBHOOK_URL` is present, with optional user mentions from `SLACK_MENTION_OVERRIDES`.
 
 ## Custom domain
 
