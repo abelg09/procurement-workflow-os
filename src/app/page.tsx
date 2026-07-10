@@ -97,6 +97,7 @@ import {
   serializeState,
   submitProcurementRequest,
   transitionRequest,
+  updateUserAvailability,
 } from "@/lib/procurement";
 import { getSupabaseBrowserClient } from "@/lib/supabase";
 
@@ -4521,6 +4522,9 @@ function AdminPanel({
       ),
     }));
   };
+  const updateAvailability = (userId: string, active: boolean) => {
+    setState((current) => updateUserAvailability(current, userId, active, "user-admin"));
+  };
   const addProjectOption = () => {
     const projectName = newProjectName.trim();
 
@@ -4594,6 +4598,9 @@ function AdminPanel({
             <UserCog className="h-5 w-5 text-slate-700" />
             <h3 className="text-base font-bold text-slate-950">Users and roles</h3>
           </div>
+          <p className="mt-1 text-sm text-slate-500">
+            Mark approval users on leave to move their pending reviews to the next workflow stage.
+          </p>
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-sm">
               <thead className="text-xs uppercase text-slate-500">
@@ -4601,7 +4608,7 @@ function AdminPanel({
                   <th className="py-2">User</th>
                   <th className="py-2">Role</th>
                   <th className="py-2">Department</th>
-                  <th className="py-2">Active</th>
+                  <th className="py-2">Availability</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -4627,12 +4634,15 @@ function AdminPanel({
                     </td>
                     <td className="py-3">{user.department}</td>
                     <td className="py-3">
-                      <input
-                        checked={user.active}
-                        className="h-4 w-4 accent-blue-700"
-                        type="checkbox"
-                        onChange={(event) => updateUser(user.id, { active: event.target.checked })}
-                      />
+                      <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
+                        <input
+                          checked={user.active}
+                          className="h-4 w-4 accent-blue-700"
+                          type="checkbox"
+                          onChange={(event) => updateAvailability(user.id, event.target.checked)}
+                        />
+                        {user.active ? "Available" : "On leave"}
+                      </label>
                     </td>
                   </tr>
                 ))}

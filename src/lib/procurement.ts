@@ -1231,9 +1231,64 @@ type WorkflowRoute = {
 };
 
 const SELF_APPROVAL_ROLES: Role[] = ["Mona", "Dr. Majed", "Amro"];
+const SKIPPABLE_REVIEW_ROLES: Role[] = ["Mona", "Dr. Majed", "Amro", "Rashid"];
 
 function isSelfApprovalRole(role: Role) {
   return SELF_APPROVAL_ROLES.includes(role);
+}
+
+function isSkippableReviewRole(role: Role) {
+  return SKIPPABLE_REVIEW_ROLES.includes(role);
+}
+
+function getAvailableUserByRole(users: UserProfile[], role: Role) {
+  return users.find((user) => user.role === role && user.active);
+}
+
+function shouldSkipRoute(users: UserProfile[], route: WorkflowRoute) {
+  return isSkippableReviewRole(route.role) && !getAvailableUserByRole(users, route.role);
+}
+
+function routeAfterSkippedReview(request: ProcurementRequest, route: WorkflowRoute) {
+  if (route.stage === "dr-majed") {
+    return getPostDepartmentReviewRoute(request);
+  }
+
+  if (route.stage === "rashid") {
+    return getPostRashidRoute(request);
+  }
+
+  return route;
+}
+
+function resolveAvailableRoute(
+  request: ProcurementRequest,
+  users: UserProfile[],
+  route: WorkflowRoute,
+) {
+  let resolved = route;
+  const skippedRoles: Role[] = [];
+  const seenStages = new Set<string>();
+
+  while (shouldSkipRoute(users, resolved) && !seenStages.has(`${resolved.stage}-${resolved.role}`)) {
+    seenStages.add(`${resolved.stage}-${resolved.role}`);
+    skippedRoles.push(resolved.role);
+    const nextRoute = routeAfterSkippedReview(request, resolved);
+
+    if (nextRoute === resolved) {
+      break;
+    }
+
+    resolved = nextRoute;
+  }
+
+  return { route: resolved, skippedRoles };
+}
+
+function skippedRolesComment(skippedRoles: Role[]) {
+  if (skippedRoles.length === 0) return "";
+
+  return `Skipped ${skippedRoles.map(getRoleDisplayName).join(", ")} because marked on leave.`;
 }
 
 function getPostMonaRoute(request: ProcurementRequest): WorkflowRoute {
@@ -1333,8 +1388,14 @@ export function submitProcurementRequest(
   submittedById: string,
 ) {
   const dateTime = nowIso();
-  const monaUser = requireRoleUser(state.users, "Mona");
+  const monaUser = getUserByRole(state.users, "Mona");
+  const monaAvailable = Boolean(monaUser?.active);
   const actor = getUserById(state.users, submittedById) ?? monaUser;
+
+  if (!actor || !monaUser) {
+    return state;
+  }
+
   const request: ProcurementRequest = normalizeRequestFinancials({
     ...draft,
     id: nextRequestId(state.requests),
@@ -1359,28 +1420,36 @@ export function submitProcurementRequest(
   });
 
   const applyRoute = (route: WorkflowRoute) => {
-    const assignee = requireRoleUser(state.users, route.role);
-    request.status = route.status;
-    request.stage = route.stage;
+    const resolved = resolveAvailableRoute(request, state.users, route);
+    const assignee =
+      getAvailableUserByRole(state.users, resolved.route.role) ??
+      getUserByRole(state.users, resolved.route.role);
+
+    if (!assignee) {
+      return undefined;
+    }
+
+    request.status = resolved.route.status;
+    request.stage = resolved.route.stage;
     request.assigneeId = assignee.id;
     addNotification(
       nextState.notifications,
       {
         userId: assignee.id,
         requestId: request.id,
-        title: route.title,
-        body: route.body,
-        type: route.status === "Rashid Auto Approved" ? "approved" : "assigned",
+        title: resolved.route.title,
+        body: resolved.route.body,
+        type: resolved.route.status === "Rashid Auto Approved" ? "approved" : "assigned",
       },
       dateTime,
     );
-    return assignee;
+    return { assignee, skippedRoles: resolved.skippedRoles };
   };
 
-  if (actor.role === "Mona") {
+  if (actor.role === "Mona" || !monaAvailable) {
     const previousStatus = request.status;
     let route = getPostMonaRoute(request);
-    let auditAction = "Mona self-approved own request";
+    let auditAction = actor.role === "Mona" ? "Mona self-approved own request" : "Mona skipped because on leave";
     request.previousResponsibleId = actor.id;
 
     if (route.role === actor.role && isSelfApprovalRole(route.role)) {
@@ -1400,7 +1469,14 @@ export function submitProcurementRequest(
       auditAction = "Mona self-approved own request and department review";
     }
 
-    const assignee = applyRoute(route);
+    const routed = applyRoute(route);
+    if (!routed) {
+      return nextState;
+    }
+    const skipComment = skippedRolesComment([
+      ...(monaAvailable ? [] : ["Mona" as Role]),
+      ...routed.skippedRoles,
+    ]);
     addAudit(
       nextState.auditLogs,
       request,
@@ -1408,7 +1484,10 @@ export function submitProcurementRequest(
       previousStatus,
       auditAction,
       dateTime,
-      { assignedPerson: assignee.name },
+      {
+        assignedPerson: routed.assignee.name,
+        comment: skipComment || undefined,
+      },
     );
   } else {
     addNotification(
@@ -1496,20 +1575,25 @@ export function transitionRequest(
     return assignee;
   };
   const applyRoute = (route: WorkflowRoute, type: NotificationRecord["type"] = "assigned") => {
-    const assignee = assignTo(route.role, { notify: false });
-    editable.status = route.status;
-    editable.stage = route.stage;
+    const resolved = resolveAvailableRoute(editable, state.users, route);
+    const assignee = assignTo(resolved.route.role, { notify: false });
+    editable.status = resolved.route.status;
+    editable.stage = resolved.route.stage;
     addNotification(
       nextState.notifications,
       {
         userId: assignee.id,
         requestId,
-        title: route.title,
-        body: route.body,
-        type,
+        title: resolved.route.title,
+        body: resolved.route.body,
+        type: resolved.route.status === "Rashid Auto Approved" ? "approved" : type,
       },
       dateTime,
     );
+    const skipComment = skippedRolesComment(resolved.skippedRoles);
+    if (skipComment) {
+      comment = [comment, skipComment].filter(Boolean).join("\n");
+    }
     return assignee;
   };
   const applyPostMonaRoute = () => {
@@ -2339,6 +2423,131 @@ export function transitionRequest(
     declineReason,
     uploadedInvoiceReference,
     assignedPerson: getAssigneeName(editable, state.users),
+  });
+
+  return nextState;
+}
+
+function getLeaveReroute(request: ProcurementRequest, unavailableUser: UserProfile) {
+  if (isClosed(request.status) || request.assigneeId !== unavailableUser.id) {
+    return null;
+  }
+
+  if (
+    unavailableUser.role === "Mona" &&
+    request.stage === "mona" &&
+    request.status === "Mona Review"
+  ) {
+    return getPostMonaRoute(request);
+  }
+
+  if (
+    ["Mona", "Dr. Majed", "Amro"].includes(unavailableUser.role) &&
+    request.stage === "dr-majed" &&
+    ["Mona Review", "Dr. Majed Review", "Amro Review", "Rashid Auto Approved"].includes(
+      request.status,
+    )
+  ) {
+    return getPostDepartmentReviewRoute(request);
+  }
+
+  if (
+    unavailableUser.role === "Rashid" &&
+    request.stage === "rashid" &&
+    request.status === "Rashid Review"
+  ) {
+    return getPostRashidRoute(request);
+  }
+
+  return null;
+}
+
+export function updateUserAvailability(
+  state: ProcurementState,
+  userId: string,
+  active: boolean,
+  actorId = "user-admin",
+) {
+  const targetUser = getUserById(state.users, userId);
+  const actor = getUserById(state.users, actorId) ?? targetUser;
+
+  if (!targetUser || !actor || targetUser.active === active) {
+    return state;
+  }
+
+  const dateTime = nowIso();
+  const users = state.users.map((user) =>
+    user.id === userId ? { ...user, active } : user,
+  );
+  const nextState: ProcurementState = {
+    ...state,
+    users,
+    requests: state.requests.map((request) => ({
+      ...request,
+      invoice: request.invoice ? { ...request.invoice } : request.invoice,
+      logistics: request.logistics ? { ...request.logistics } : request.logistics,
+    })),
+    auditLogs: [...state.auditLogs],
+    notifications: [...state.notifications],
+  };
+
+  if (active || !isSkippableReviewRole(targetUser.role)) {
+    return nextState;
+  }
+
+  nextState.requests.forEach((request) => {
+    const route = getLeaveReroute(request, targetUser);
+
+    if (!route) {
+      return;
+    }
+
+    const previousStatus = request.status;
+    const resolved = resolveAvailableRoute(request, users, route);
+    const assignee =
+      getAvailableUserByRole(users, resolved.route.role) ??
+      getUserByRole(users, resolved.route.role);
+
+    if (!assignee || assignee.id === targetUser.id) {
+      return;
+    }
+
+    request.status = resolved.route.status;
+    request.stage = resolved.route.stage;
+    request.assigneeId = assignee.id;
+    request.updatedAt = dateTime;
+
+    const skippedRoles = Array.from(
+      new Set<Role>([
+        targetUser.role,
+        ...resolved.skippedRoles,
+      ]),
+    );
+    const skipComment = skippedRolesComment(skippedRoles);
+
+    addNotification(
+      nextState.notifications,
+      {
+        userId: assignee.id,
+        requestId: request.id,
+        title: "Request rerouted",
+        body: `${request.id} moved to you because ${targetUser.name} is marked on leave.`,
+        type: resolved.route.status === "Rashid Auto Approved" ? "approved" : "assigned",
+      },
+      dateTime,
+    );
+    addAudit(
+      nextState.auditLogs,
+      request,
+      actor,
+      previousStatus,
+      `${targetUser.name} marked on leave; request rerouted`,
+      dateTime,
+      {
+        assignedPerson: assignee.name,
+        comment: skipComment,
+      },
+    );
   });
 
   return nextState;
