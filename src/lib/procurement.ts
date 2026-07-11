@@ -1538,12 +1538,15 @@ export function submitProcurementRequest(
         request,
         actor,
         previousStatus,
-        "Mona self-approved own department review",
+        `${actor.name} self-approved own department review`,
         dateTime,
         { assignedPerson: actor.name },
       );
       route = getPostDepartmentReviewRoute(request);
-      auditAction = "Mona self-approved own request and department review";
+      auditAction =
+        actor.role === "Mona"
+          ? "Mona self-approved own request and department review"
+          : `Mona skipped because on leave; ${actor.name} self-approved own department review`;
     }
 
     const routed = applyRoute(route);

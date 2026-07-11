@@ -446,7 +446,6 @@ const getSignedInProfile = (
       name: displayName,
       email: user.email,
       role: inferredRole,
-      active: true,
     };
   }
 
