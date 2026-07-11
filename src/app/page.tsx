@@ -90,6 +90,7 @@ import {
   isUserBlockedTask,
   makeId,
   markNotificationRead,
+  mergeProcurementStates,
   nowIso,
   nextRequestId,
   parseState,
@@ -6186,18 +6187,25 @@ export default function Home() {
         }
 
         const liveStateRow = data as { state?: unknown } | null;
+        const localState = applyLaunchCleanup(latestStateRef.current);
         const remoteState = liveStateRow?.state
           ? parseState(JSON.stringify(liveStateRow.state))
-          : latestStateRef.current;
-        const profileHydratedState = stateWithSignedInProfile(remoteState, authUser);
+          : localState;
+        const mergedState = liveStateRow?.state
+          ? mergeProcurementStates(remoteState, localState)
+          : localState;
+        const profileHydratedState = stateWithSignedInProfile(mergedState, authUser);
         const hydratedState = applyLaunchCleanup(profileHydratedState);
         const cleanupApplied =
           hydratedState.maintenance?.launchCleanupVersion !==
           profileHydratedState.maintenance?.launchCleanupVersion;
+        const mergeApplied =
+          liveStateRow?.state &&
+          serializeState(mergedState) !== serializeState(remoteState);
 
         setState(hydratedState);
 
-        if (!liveStateRow?.state || cleanupApplied) {
+        if (!liveStateRow?.state || cleanupApplied || mergeApplied) {
           await supabaseClient.from("procurement_app_state").upsert({
             id: LIVE_STATE_ROW_ID,
             state: hydratedState,
@@ -6228,20 +6236,47 @@ export default function Home() {
     }
 
     const timeoutId = window.setTimeout(() => {
-      void supabaseClient
-        .from("procurement_app_state")
-        .upsert({
-          id: LIVE_STATE_ROW_ID,
-          state,
-          updated_by: authUser.id,
-          updated_at: nowIso(),
-        })
-        .then(({ error }) => {
-          if (error) {
-            setLiveSyncStatus("error");
-            setLiveSyncError(error.message);
-          }
-        });
+      void (async () => {
+        const { data, error: fetchError } = await supabaseClient
+          .from("procurement_app_state")
+          .select("state")
+          .eq("id", LIVE_STATE_ROW_ID)
+          .maybeSingle();
+
+        if (fetchError) {
+          setLiveSyncStatus("error");
+          setLiveSyncError(fetchError.message);
+          return;
+        }
+
+        const remoteRow = data as { state?: unknown } | null;
+        const localState = applyLaunchCleanup(state);
+        const stateToSave = remoteRow?.state
+          ? mergeProcurementStates(
+              parseState(JSON.stringify(remoteRow.state)),
+              localState,
+            )
+          : localState;
+
+        const { error } = await supabaseClient
+          .from("procurement_app_state")
+          .upsert({
+            id: LIVE_STATE_ROW_ID,
+            state: stateToSave,
+            updated_by: authUser.id,
+            updated_at: nowIso(),
+          });
+
+        if (error) {
+          setLiveSyncStatus("error");
+          setLiveSyncError(error.message);
+          return;
+        }
+
+        if (serializeState(stateToSave) !== serializeState(state)) {
+          setState(stateToSave);
+        }
+      })();
     }, 500);
 
     return () => {

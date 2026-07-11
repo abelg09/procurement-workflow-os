@@ -362,6 +362,83 @@ export type ProcurementState = {
   };
 };
 
+function latestTimestampValue(value?: string) {
+  const time = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function mergeUniqueById<T extends { id: string }>(
+  remoteItems: T[],
+  localItems: T[],
+  chooseItem?: (remoteItem: T, localItem: T) => T,
+) {
+  const merged = new Map<string, T>();
+
+  remoteItems.forEach((item) => {
+    merged.set(item.id, item);
+  });
+
+  localItems.forEach((item) => {
+    const existing = merged.get(item.id);
+    merged.set(item.id, existing && chooseItem ? chooseItem(existing, item) : item);
+  });
+
+  return Array.from(merged.values());
+}
+
+function compareByDateDesc<T>(getDate: (item: T) => string | undefined) {
+  return (left: T, right: T) =>
+    latestTimestampValue(getDate(right)) - latestTimestampValue(getDate(left));
+}
+
+function chooseLatestRequest(
+  remoteRequest: ProcurementRequest,
+  localRequest: ProcurementRequest,
+) {
+  const remoteUpdatedAt = latestTimestampValue(remoteRequest.updatedAt);
+  const localUpdatedAt = latestTimestampValue(localRequest.updatedAt);
+
+  return localUpdatedAt >= remoteUpdatedAt ? localRequest : remoteRequest;
+}
+
+export function mergeProcurementStates(
+  remoteState: ProcurementState,
+  localState: ProcurementState,
+): ProcurementState {
+  return {
+    ...remoteState,
+    ...localState,
+    users: localState.users,
+    requests: mergeUniqueById(
+      remoteState.requests,
+      localState.requests,
+      chooseLatestRequest,
+    ).sort(compareByDateDesc((request) => request.createdAt)),
+    auditLogs: mergeUniqueById(remoteState.auditLogs, localState.auditLogs).sort(
+      compareByDateDesc((auditLog) => auditLog.dateTime),
+    ),
+    notifications: mergeUniqueById(
+      remoteState.notifications,
+      localState.notifications,
+    ).sort(compareByDateDesc((notification) => notification.createdAt)),
+    chatbotMessages: mergeUniqueById(
+      remoteState.chatbotMessages,
+      localState.chatbotMessages,
+    ).sort(compareByDateDesc((message) => message.createdAt)),
+    projectOptions: Array.from(
+      new Set([
+        ...localState.projectOptions,
+        ...remoteState.projectOptions,
+        ...DEFAULT_PROJECT_OPTIONS,
+      ]),
+    ),
+    maintenance: {
+      ...remoteState.maintenance,
+      ...localState.maintenance,
+    },
+  };
+}
+
 export type RequestFieldPatch = Partial<
   Pick<
     ProcurementRequest,
