@@ -149,6 +149,21 @@ export const DELIVERY_STATUSES = [
 
 export type DeliveryStatus = (typeof DELIVERY_STATUSES)[number];
 
+export const LINE_ITEM_STATUSES = [
+  "Pending",
+  "Processing",
+  "On hold",
+  "Purchased",
+  "Invoice uploaded",
+  "Delivered",
+  "Cancelled",
+] as const;
+
+export type LineItemStatus = (typeof LINE_ITEM_STATUSES)[number];
+
+export const INVOICE_STATUSES = ["Pending Finance", "Cleared", "Replaced"] as const;
+export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
+
 type DepartmentReviewRole = "Dr. Majed" | "Mona" | "Amro";
 
 const DR_MAJED_REVIEW_DEPARTMENTS = ["Operations", "Engineering"];
@@ -214,10 +229,13 @@ export type VendorDetails = {
 };
 
 export type InvoiceDetails = {
+  id?: string;
   invoiceNumber: string;
   invoiceAmount: number;
   invoiceDate: string;
   vendor: string;
+  lineItemIds?: string[];
+  status?: InvoiceStatus;
   uploadedInvoiceFile: string;
   uploadedInvoiceFileSize?: number;
   uploadedInvoiceFileType?: string;
@@ -228,6 +246,8 @@ export type InvoiceDetails = {
   paymentTerms: PaymentTerm;
   financeNotes: string;
   clearedAt?: string;
+  replacedAt?: string;
+  replacedById?: string;
 };
 
 export type LogisticsDetails = {
@@ -245,6 +265,11 @@ export type ProcurementLineItem = {
   itemName: string;
   itemDescription: string;
   productUrl?: string;
+  status?: LineItemStatus;
+  holdReason?: string;
+  invoiceIds?: string[];
+  processedAt?: string;
+  deliveredAt?: string;
   quantity: number;
   unitPrice: number;
   currency: string;
@@ -285,6 +310,7 @@ export type ProcurementRequest = {
   exchangeRateSource: string;
   exchangeRateDate: string;
   invoice?: InvoiceDetails;
+  invoices?: InvoiceDetails[];
   status: RequestStatus;
   stage: WorkflowStage;
   assigneeId: string;
@@ -510,8 +536,14 @@ export type WorkflowAction =
       lineItems: ProcurementLineItem[];
       lineItemClarifications?: Array<{ lineItemId: string; comment: string }>;
     }
+  | {
+      type: "edlyn-update-line-items";
+      comment?: string;
+      lineItems: ProcurementLineItem[];
+      lineItemClarifications?: Array<{ lineItemId: string; comment: string }>;
+    }
   | { type: "edlyn-upload-invoice"; invoice: InvoiceDetails; comment?: string }
-  | { type: "aileen-clear-invoice"; financeNotes?: string }
+  | { type: "aileen-clear-invoice"; invoiceId?: string; financeNotes?: string }
   | { type: "edlyn-confirm-order"; comment?: string }
   | { type: "edlyn-start-delivery-tracking"; logistics?: LogisticsDetails; comment?: string }
   | { type: "edlyn-update-logistics"; logistics: LogisticsDetails; comment?: string }
@@ -551,9 +583,86 @@ export function roundMoney(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+function isLineItemStatus(value: unknown): value is LineItemStatus {
+  return LINE_ITEM_STATUSES.includes(value as LineItemStatus);
+}
+
+function defaultLineItemStatusForRequest(request: ProcurementRequest): LineItemStatus {
+  if (request.status === "Completed" || request.status === "Item Received") {
+    return "Delivered";
+  }
+
+  if (request.status === "Cancelled" || isDeclined(request.status)) {
+    return "Cancelled";
+  }
+
+  if (request.invoice || (Array.isArray(request.invoices) && request.invoices.length > 0)) {
+    return "Invoice uploaded";
+  }
+
+  if (
+    [
+      "Purchase in Progress",
+      "Invoice Cleared",
+      "Edlyn Order Confirmation",
+      "Delivery Tracking",
+      "Order Confirmed",
+    ].includes(request.status)
+  ) {
+    return "Processing";
+  }
+
+  return "Pending";
+}
+
+function normalizeLineItem(
+  item: ProcurementLineItem,
+  fallbackStatus: LineItemStatus,
+): ProcurementLineItem {
+  const invoiceIds = Array.isArray(item.invoiceIds)
+    ? item.invoiceIds.map(String).filter(Boolean)
+    : undefined;
+
+  return {
+    ...item,
+    productUrl: item.productUrl ?? "",
+    status: isLineItemStatus(item.status) ? item.status : fallbackStatus,
+    holdReason: item.holdReason ?? "",
+    invoiceIds,
+  };
+}
+
+function isInvoiceStatus(value: unknown): value is InvoiceStatus {
+  return INVOICE_STATUSES.includes(value as InvoiceStatus);
+}
+
+function normalizeInvoiceDetails(
+  invoice: InvoiceDetails,
+  fallbackId: string,
+  fallbackLineItemIds: string[] = [],
+): InvoiceDetails {
+  const lineItemIds = Array.isArray(invoice.lineItemIds)
+    ? invoice.lineItemIds.map(String).filter(Boolean)
+    : fallbackLineItemIds;
+
+  return {
+    ...invoice,
+    id: invoice.id || fallbackId,
+    lineItemIds,
+    status: isInvoiceStatus(invoice.status)
+      ? invoice.status
+      : invoice.clearedAt
+        ? "Cleared"
+        : "Pending Finance",
+    financeNotes: invoice.financeNotes ?? "",
+  };
+}
+
 export function getRequestLineItems(request: ProcurementRequest) {
+  const fallbackStatus = defaultLineItemStatusForRequest(request);
+
   if (Array.isArray(request.lineItems) && request.lineItems.length > 0) {
-    return request.lineItems;
+    return request.lineItems.map((item) => normalizeLineItem(item, fallbackStatus));
   }
 
   const quantity = Number.isFinite(request.quantity) && request.quantity > 0 ? request.quantity : 1;
@@ -586,8 +695,47 @@ export function getRequestLineItems(request: ProcurementRequest) {
       exchangeRateSource:
         request.exchangeRateSource ||
         (currency === "AED" ? AED_EXCHANGE_RATE_SOURCE : "Legacy amount"),
+      status: fallbackStatus,
+      holdReason: "",
     },
   ];
+}
+
+export function getRequestInvoices(request: ProcurementRequest) {
+  const lineItemIds = getRequestLineItems(request).map((item) => item.id);
+  const invoices = Array.isArray(request.invoices)
+    ? request.invoices
+    : request.invoice
+      ? [request.invoice]
+      : [];
+
+  return invoices
+    .filter((invoice) => invoice && invoice.status !== "Replaced")
+    .map((invoice, index) =>
+      normalizeInvoiceDetails(
+        invoice,
+        `${request.id.toLowerCase()}-invoice-${index + 1}`,
+        lineItemIds,
+      ),
+    );
+}
+
+export function getPendingFinanceInvoices(request: ProcurementRequest) {
+  return getRequestInvoices(request).filter((invoice) => !invoice.clearedAt);
+}
+
+export function getInvoiceSummary(request: ProcurementRequest) {
+  const invoices = getRequestInvoices(request);
+  if (invoices.length === 0) {
+    return "Pending";
+  }
+
+  if (invoices.length === 1) {
+    return invoices[0]?.invoiceNumber ?? "Pending";
+  }
+
+  const pendingCount = invoices.filter((invoice) => !invoice.clearedAt).length;
+  return `${invoices.length} invoices${pendingCount > 0 ? ` (${pendingCount} pending)` : ""}`;
 }
 
 export function getRequestTotalAed(request: ProcurementRequest) {
@@ -608,6 +756,19 @@ export function normalizeRequestFinancials(
   request: ProcurementRequest & { project?: string },
 ): ProcurementRequest {
   const lineItems = getRequestLineItems(request);
+  const invoiceLineItemIds = lineItems.map((item) => item.id);
+  const invoices = (Array.isArray(request.invoices)
+    ? request.invoices
+    : request.invoice
+      ? [request.invoice]
+      : []
+  ).map((invoice, index) =>
+    normalizeInvoiceDetails(
+      invoice,
+      `${request.id.toLowerCase()}-invoice-${index + 1}`,
+      invoiceLineItemIds,
+    ),
+  );
   const estimatedAmountAed = roundMoney(
     lineItems.reduce((total, item) => total + item.aedTotal, 0),
   );
@@ -640,6 +801,8 @@ export function normalizeRequestFinancials(
     ...request,
     project: request.project || DEFAULT_PROJECT_OPTIONS[0],
     lineItems,
+    invoices: invoices.length > 0 ? invoices : undefined,
+    invoice: invoices[0] ?? request.invoice,
     estimatedAmountAed,
     logistics,
     edlynClarificationReturnStatus,
@@ -1122,7 +1285,7 @@ export function isRequesterCancellable(status: RequestStatus) {
 }
 
 export function isInvoiceFinancePending(request: ProcurementRequest) {
-  return Boolean(request.invoice && !request.invoice.clearedAt && !isClosed(request.status));
+  return getPendingFinanceInvoices(request).length > 0 && !isClosed(request.status);
 }
 
 export function isRequestOverdue(
@@ -1188,8 +1351,12 @@ export function getPendingAction(request: ProcurementRequest) {
     case "Edlyn Clarification Requested":
       return "Employee to answer Procure clarification";
     case "Purchase in Progress":
-      if (request.invoice) {
-        const financeAction = request.invoice.clearedAt ? "" : "; Finance to clear invoice";
+      if (getRequestInvoices(request).length > 0) {
+        const pendingInvoices = getPendingFinanceInvoices(request).length;
+        const financeAction =
+          pendingInvoices > 0
+            ? `; Finance to clear ${pendingInvoices} invoice${pendingInvoices === 1 ? "" : "s"}`
+            : "";
 
         return request.orderConfirmedAt || request.logistics
           ? `Procure to update delivery${financeAction}`
@@ -1207,8 +1374,8 @@ export function getPendingAction(request: ProcurementRequest) {
     case "Order Confirmed":
       return "Procure to mark item received";
     case "Item Received":
-      return request.invoice && !request.invoice.clearedAt
-        ? "Finance to clear invoice, then close the case"
+      return getPendingFinanceInvoices(request).length > 0
+        ? "Finance to clear pending invoices, then close the case"
         : "Finance to close the case";
     case "Cancellation Requested":
       return "Procure to cancel the order immediately";
@@ -1459,6 +1626,85 @@ function applyLineItemUpdate(editable: ProcurementRequest, lineItems: Procuremen
   }
 }
 
+function setRequestInvoices(editable: ProcurementRequest, invoices: InvoiceDetails[]) {
+  const activeInvoices = invoices
+    .map((invoice, index) =>
+      normalizeInvoiceDetails(
+        invoice,
+        `${editable.id.toLowerCase()}-invoice-${index + 1}`,
+        getRequestLineItems(editable).map((item) => item.id),
+      ),
+    )
+    .filter((invoice) => invoice.status !== "Replaced");
+
+  editable.invoices = activeInvoices.length > 0 ? activeInvoices : undefined;
+  editable.invoice = activeInvoices[0] ?? undefined;
+}
+
+function upsertRequestInvoice(
+  editable: ProcurementRequest,
+  invoice: InvoiceDetails,
+  dateTime: string,
+) {
+  const lineItems = getRequestLineItems(editable);
+  const validLineItemIds = new Set(lineItems.map((item) => item.id));
+  let lineItemIds =
+    Array.isArray(invoice.lineItemIds) && invoice.lineItemIds.length > 0
+      ? invoice.lineItemIds.filter((lineItemId) => validLineItemIds.has(lineItemId))
+      : lineItems
+          .filter((item) => item.status !== "Cancelled")
+          .map((item) => item.id);
+  if (lineItemIds.length === 0) {
+    lineItemIds = lineItems.filter((item) => item.status !== "Cancelled").map((item) => item.id);
+  }
+  const normalizedInvoice = normalizeInvoiceDetails(
+    {
+      ...invoice,
+      lineItemIds,
+      status: invoice.clearedAt ? "Cleared" : "Pending Finance",
+    },
+    makeId("invoice"),
+    lineItemIds,
+  );
+  const existingInvoices = getRequestInvoices(editable);
+  const existingIndex = existingInvoices.findIndex(
+    (candidate) => candidate.id === normalizedInvoice.id,
+  );
+  const nextInvoices =
+    existingIndex >= 0
+      ? existingInvoices.map((candidate) =>
+          candidate.id === normalizedInvoice.id
+            ? {
+                ...normalizedInvoice,
+                financeNotes: normalizedInvoice.financeNotes || candidate.financeNotes,
+              }
+            : candidate,
+        )
+      : [normalizedInvoice, ...existingInvoices];
+  const invoiceId = normalizedInvoice.id ?? makeId("invoice");
+  const updatedLineItems = lineItems.map((item) => {
+    if (!lineItemIds.includes(item.id)) {
+      return item;
+    }
+
+    return {
+      ...item,
+      status: "Invoice uploaded" as LineItemStatus,
+      invoiceIds: Array.from(new Set([...(item.invoiceIds ?? []), invoiceId])),
+      processedAt: item.processedAt ?? dateTime,
+    };
+  });
+
+  setRequestInvoices(editable, nextInvoices);
+  applyLineItemUpdate(editable, updatedLineItems);
+
+  return {
+    invoice: normalizedInvoice,
+    replaced: existingIndex >= 0,
+    lineItemIds,
+  };
+}
+
 export function submitProcurementRequest(
   state: ProcurementState,
   draft: ProcurementRequestDraft,
@@ -1602,6 +1848,7 @@ export function transitionRequest(
   const dateTime = nowIso();
   const nextRequests = state.requests.map((candidate) => ({
     ...candidate,
+    invoices: candidate.invoices?.map((invoice) => ({ ...invoice })),
     invoice: candidate.invoice ? { ...candidate.invoice } : candidate.invoice,
     logistics: candidate.logistics ? { ...candidate.logistics } : candidate.logistics,
   }));
@@ -1634,6 +1881,20 @@ export function transitionRequest(
       (editable.assigneeId === actor.id || assignee?.role === role)
     );
   };
+  const canProcureWorkOnPurchase = () =>
+    actor.role === "Edlyn" &&
+    !isClosed(editable.status) &&
+    [
+      "Edlyn Confirmation",
+      "Rashid Auto Approved",
+      "Purchase in Progress",
+      "Invoice Uploaded",
+      "Aileen Finance Review",
+      "Invoice Cleared",
+      "Edlyn Order Confirmation",
+      "Delivery Tracking",
+      "Order Confirmed",
+    ].includes(editable.status);
   const hasText = (value?: string) => Boolean(value?.trim());
 
   const assignTo = (role: Role, options: { notify?: boolean } = {}) => {
@@ -2110,6 +2371,36 @@ export function transitionRequest(
       comment = workflowAction.comment;
       break;
     }
+    case "edlyn-update-line-items": {
+      const lineItemIds = new Set(getRequestLineItems(editable).map((item) => item.id));
+      const itemClarifications = (workflowAction.lineItemClarifications ?? [])
+        .map((item) => ({
+          lineItemId: item.lineItemId,
+          comment: item.comment.trim(),
+        }))
+        .filter((item) => lineItemIds.has(item.lineItemId) && hasText(item.comment));
+
+      if (!canProcureWorkOnPurchase() || workflowAction.lineItems.length === 0) {
+        return state;
+      }
+
+      applyLineItemUpdate(editable, workflowAction.lineItems);
+      editable.lineItemClarifications =
+        itemClarifications.length > 0
+          ? itemClarifications.map((item) => ({
+              ...item,
+              createdAt: dateTime,
+              createdBy: actor.id,
+              createdByName: actor.name,
+            }))
+          : editable.lineItemClarifications;
+      editable.stage = "edlyn";
+      editable.assigneeId = actor.id;
+      editable.previousResponsibleId = actor.id;
+      actionLabel = "Procure updated line item progress";
+      comment = workflowAction.comment;
+      break;
+    }
     case "edlyn-confirm": {
       if (!canAct(["Edlyn Confirmation", "Rashid Auto Approved"], "Edlyn")) {
         return state;
@@ -2117,6 +2408,14 @@ export function transitionRequest(
       editable.status = "Purchase in Progress";
       editable.stage = "edlyn";
       editable.assigneeId = actor.id;
+      applyLineItemUpdate(
+        editable,
+        getRequestLineItems(editable).map((item) => ({
+          ...item,
+          status: item.status === "Pending" ? "Processing" : item.status,
+          processedAt: item.processedAt ?? dateTime,
+        })),
+      );
       actionLabel = "Procure confirmed item details";
       comment = workflowAction.comment;
       break;
@@ -2241,7 +2540,7 @@ export function transitionRequest(
     }
     case "edlyn-upload-invoice": {
       if (
-        !canAct(["Purchase in Progress"], "Edlyn") ||
+        !canProcureWorkOnPurchase() ||
         !hasText(workflowAction.invoice.invoiceNumber) ||
         !hasText(workflowAction.invoice.uploadedInvoiceFile) ||
         (!hasText(workflowAction.invoice.uploadedInvoiceStoragePath) &&
@@ -2252,21 +2551,23 @@ export function transitionRequest(
         return state;
       }
       const assignee = assignTo("Aileen", { notify: false });
-      editable.status = "Purchase in Progress";
+      if (["Edlyn Confirmation", "Rashid Auto Approved"].includes(editable.status)) {
+        editable.status = "Purchase in Progress";
+      }
       editable.stage = "edlyn";
       editable.assigneeId = actor.id;
       editable.previousResponsibleId = actor.id;
-      editable.invoice = workflowAction.invoice;
-      actionLabel = "Uploaded invoice";
+      const upserted = upsertRequestInvoice(editable, workflowAction.invoice, dateTime);
+      actionLabel = upserted.replaced ? "Replaced invoice" : "Uploaded invoice";
       comment = workflowAction.comment;
-      uploadedInvoiceReference = workflowAction.invoice.uploadedInvoiceFile;
+      uploadedInvoiceReference = upserted.invoice.uploadedInvoiceFile;
       addNotification(
         nextState.notifications,
         {
           userId: assignee.id,
           requestId,
-          title: "Invoice uploaded",
-          body: `${editable.id} invoice ${workflowAction.invoice.invoiceNumber} is ready for finance documentation.`,
+          title: upserted.replaced ? "Invoice replaced" : "Invoice uploaded",
+          body: `${editable.id} invoice ${upserted.invoice.invoiceNumber} is ready for finance documentation for ${upserted.lineItemIds.length} item(s).`,
           type: "invoice",
         },
         dateTime,
@@ -2274,10 +2575,14 @@ export function transitionRequest(
       break;
     }
     case "aileen-clear-invoice": {
+      const pendingInvoices = getPendingFinanceInvoices(editable);
+      const invoiceToClear =
+        pendingInvoices.find((invoice) => invoice.id === workflowAction.invoiceId) ??
+        pendingInvoices[0];
+
       if (
         actor.role !== "Aileen" ||
-        !editable.invoice ||
-        editable.invoice.clearedAt ||
+        !invoiceToClear ||
         isClosed(editable.status)
       ) {
         return state;
@@ -2298,6 +2603,19 @@ export function transitionRequest(
             clearedAt: dateTime,
           }
         : editable.invoice;
+      setRequestInvoices(
+        editable,
+        getRequestInvoices(editable).map((invoice) =>
+          invoice.id === invoiceToClear.id
+            ? {
+                ...invoice,
+                financeNotes: workflowAction.financeNotes || invoice.financeNotes,
+                clearedAt: dateTime,
+                status: "Cleared",
+              }
+            : invoice,
+        ),
+      );
       actionLabel = "Finance cleared invoice";
       comment = workflowAction.financeNotes;
       addNotification(
@@ -2306,7 +2624,7 @@ export function transitionRequest(
           userId: editable.submittedById,
           requestId,
           title: "Invoice cleared",
-          body: `${editable.id} invoice has been documented by finance.`,
+          body: `${editable.id} invoice ${invoiceToClear.invoiceNumber} has been documented by finance.`,
           type: "finance",
         },
         dateTime,
@@ -2318,8 +2636,8 @@ export function transitionRequest(
           requestId,
           title: shouldReturnToProcure ? "Order confirmation required" : "Invoice cleared",
           body: workflowAction.financeNotes?.trim()
-            ? `${editable.id} is cleared by finance. Finance note: ${workflowAction.financeNotes.trim()}`
-            : `${editable.id} invoice has been documented by finance.`,
+            ? `${editable.id} invoice ${invoiceToClear.invoiceNumber} is cleared by finance. Finance note: ${workflowAction.financeNotes.trim()}`
+            : `${editable.id} invoice ${invoiceToClear.invoiceNumber} has been documented by finance.`,
           type: "finance",
         },
         dateTime,
@@ -2328,15 +2646,24 @@ export function transitionRequest(
     }
     case "edlyn-confirm-order":
     case "edlyn-start-delivery-tracking": {
-      if (
-        !canAct(["Purchase in Progress", "Invoice Cleared", "Edlyn Order Confirmation"], "Edlyn")
-      ) {
+      if (!canProcureWorkOnPurchase()) {
         return state;
       }
       editable.status = "Delivery Tracking";
       editable.stage = "edlyn";
       editable.assigneeId = actor.id;
       editable.orderConfirmedAt = dateTime;
+      applyLineItemUpdate(
+        editable,
+        getRequestLineItems(editable).map((item) => ({
+          ...item,
+          status:
+            item.status === "Cancelled" || item.status === "On hold"
+              ? item.status
+              : "Purchased",
+          processedAt: item.processedAt ?? dateTime,
+        })),
+      );
       editable.logistics = mergeLogistics(
         editable.logistics,
         workflowAction.type === "edlyn-start-delivery-tracking"
@@ -2393,6 +2720,20 @@ export function transitionRequest(
       editable.status = "Item Received";
       editable.stage = "aileen";
       editable.itemReceivedAt = dateTime;
+      applyLineItemUpdate(
+        editable,
+        getRequestLineItems(editable).map((item) => ({
+          ...item,
+          status:
+            item.status === "Cancelled" || item.status === "On hold"
+              ? item.status
+              : "Delivered",
+          deliveredAt:
+            item.status === "Cancelled" || item.status === "On hold"
+              ? item.deliveredAt
+              : (item.deliveredAt ?? dateTime),
+        })),
+      );
       editable.logistics = mergeLogistics(
         editable.logistics,
         { deliveryStatus: "Delivered", lastCheckpoint: "Item received" },
@@ -2564,6 +2905,7 @@ export function updateUserAvailability(
     users,
     requests: state.requests.map((request) => ({
       ...request,
+      invoices: request.invoices?.map((invoice) => ({ ...invoice })),
       invoice: request.invoice ? { ...request.invoice } : request.invoice,
       logistics: request.logistics ? { ...request.logistics } : request.logistics,
     })),
@@ -2820,7 +3162,8 @@ export function getMetrics(requests: ProcurementRequest[]) {
     declined: requests.filter((request) => isDeclined(request.status)).length,
     completed: completed.length,
     pendingInvoice: requests.filter(
-      (request) => request.status === "Purchase in Progress" && !request.invoice,
+      (request) =>
+        request.status === "Purchase in Progress" && getRequestInvoices(request).length === 0,
     ).length,
     pendingItemReceipt: requests.filter((request) =>
       [
@@ -2829,7 +3172,7 @@ export function getMetrics(requests: ProcurementRequest[]) {
         "Edlyn Order Confirmation",
         "Delivery Tracking",
         "Order Confirmed",
-      ].includes(request.status) && Boolean(request.invoice),
+      ].includes(request.status) && getRequestInvoices(request).length > 0,
     ).length,
     averageProcessingTime,
     stuck: getStuckRequests(requests).length,
@@ -2982,7 +3325,7 @@ export function answerProcurementQuestion(
     normalized.includes("invoice") &&
     (normalized.includes("aileen") || normalized.includes("finance"))
   ) {
-    const rows = state.requests.filter((request) => request.status === "Aileen Finance Review");
+    const rows = state.requests.filter((request) => isInvoiceFinancePending(request));
     return rows.length
       ? rows.map(describe).join("\n")
       : "No invoices are currently pending with Finance.";

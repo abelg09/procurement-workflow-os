@@ -45,6 +45,7 @@ import {
   DEFAULT_PROJECT_OPTIONS,
   FINANCE_APPROVAL_EMAIL,
   InvoiceDetails,
+  LINE_ITEM_STATUSES,
   LogisticsDetails,
   NotificationRecord,
   OVERDUE_REQUEST_HOURS,
@@ -68,9 +69,12 @@ import {
   getCancelledRequests,
   getDepartmentReviewRole,
   getMetrics,
+  getInvoiceSummary,
   getPendingAction,
+  getPendingFinanceInvoices,
   getPersonalRequests,
   getRoleDisplayName,
+  getRequestInvoices,
   getRequestItemCount,
   getRequestLineItems,
   getRequestTotalAed,
@@ -795,6 +799,8 @@ async function convertRowsToLineItems(rows: BulkImportRow[]) {
       itemName: row.itemName,
       itemDescription: row.itemDescription,
       productUrl: row.productUrl,
+      status: "Pending",
+      holdReason: "",
       quantity: row.quantity,
       unitPrice: roundMoney(row.unitPrice),
       currency: row.currency,
@@ -938,6 +944,31 @@ function StatusBadge({ status }: { status: RequestStatus }) {
       className={classNames(
         "inline-flex max-w-full items-center justify-center whitespace-normal rounded-full border px-2.5 py-1 text-center text-xs font-semibold leading-4",
         statusClass[tone],
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function LineItemStatusBadge({ status }: { status?: ProcurementLineItem["status"] }) {
+  const label = status ?? "Pending";
+  const classes =
+    label === "Delivered"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : label === "Invoice uploaded" || label === "Purchased"
+        ? "border-blue-200 bg-blue-50 text-blue-800"
+        : label === "On hold"
+          ? "border-amber-200 bg-amber-50 text-amber-800"
+          : label === "Cancelled"
+            ? "border-red-200 bg-red-50 text-red-800"
+            : "border-slate-200 bg-slate-50 text-slate-700";
+
+  return (
+    <span
+      className={classNames(
+        "inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold",
+        classes,
       )}
     >
       {label}
@@ -2330,7 +2361,7 @@ function RequestsTable({
                   <div className="flex justify-between gap-3">
                     <span className="text-slate-500">Invoice</span>
                     <span className="min-w-0 break-words text-right font-medium text-slate-800">
-                      {request.invoice?.invoiceNumber ?? "Pending"}
+                      {getInvoiceSummary(request)}
                     </span>
                   </div>
                   <div className="rounded-lg bg-slate-50 p-2 text-slate-700">
@@ -2417,8 +2448,8 @@ function RequestsTable({
                     <StatusBadge status={request.status} />
                   </td>
                   <td className="px-4 py-3">
-                    {request.invoice ? (
-                      <span className="text-emerald-700">{request.invoice.invoiceNumber}</span>
+                    {getRequestInvoices(request).length > 0 ? (
+                      <span className="text-emerald-700">{getInvoiceSummary(request)}</span>
                     ) : (
                       <span className="text-amber-700">Pending</span>
                     )}
@@ -2454,6 +2485,9 @@ function ActionPanel({
   onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
 }) {
   const fieldPrefix = useId();
+  const initialLineItems = useMemo(() => getRequestLineItems(request), [request]);
+  const initialInvoices = useMemo(() => getRequestInvoices(request), [request]);
+  const initialPendingInvoices = useMemo(() => getPendingFinanceInvoices(request), [request]);
   const [comment, setComment] = useState("");
   const [declineReason, setDeclineReason] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState(request.invoice?.invoiceNumber ?? "");
@@ -2482,6 +2516,13 @@ function ActionPanel({
     request.invoice?.paymentTerms ?? "COD",
   );
   const [financeNotes, setFinanceNotes] = useState(request.invoice?.financeNotes ?? "");
+  const [replaceInvoiceId, setReplaceInvoiceId] = useState("new");
+  const [financeInvoiceId, setFinanceInvoiceId] = useState(initialPendingInvoices[0]?.id ?? "");
+  const [selectedInvoiceLineItemIds, setSelectedInvoiceLineItemIds] = useState<string[]>(() =>
+    initialLineItems
+      .filter((item) => item.status !== "Cancelled")
+      .map((item) => item.id),
+  );
   const [deliveryStatus, setDeliveryStatus] = useState<LogisticsDetails["deliveryStatus"]>(
     request.logistics?.deliveryStatus ?? "Order placed",
   );
@@ -2531,7 +2572,46 @@ function ActionPanel({
 
   const role = currentUser.role;
   const departmentReviewRole = getDepartmentReviewRole(request.department);
-  const lineItems = getRequestLineItems(request);
+  const lineItems = initialLineItems;
+  const invoices = initialInvoices;
+  const pendingFinanceInvoices = initialPendingInvoices;
+  const updateInvoiceMode = (mode: string) => {
+    setReplaceInvoiceId(mode);
+    if (mode === "new") {
+      if (invoices.length > 0) {
+        setInvoiceNumber("");
+        setInvoiceAmount(
+          selectedInvoiceLineItemIds.length > 0
+            ? roundMoney(
+                lineItems
+                  .filter((item) => selectedInvoiceLineItemIds.includes(item.id))
+                  .reduce((total, item) => total + item.aedTotal, 0),
+              )
+            : getRequestTotalAed(request),
+        );
+        setInvoiceDate(dubaiDateKey());
+        setPaymentTerms("COD");
+        setFinanceNotes("");
+      }
+      return;
+    }
+
+    const invoice = invoices.find((candidate) => candidate.id === mode);
+    if (!invoice) {
+      return;
+    }
+
+    setInvoiceNumber(invoice.invoiceNumber);
+    setInvoiceAmount(invoice.invoiceAmount);
+    setInvoiceDate(invoice.invoiceDate);
+    setPaymentTerms(invoice.paymentTerms);
+    setFinanceNotes(invoice.financeNotes);
+    setSelectedInvoiceLineItemIds(
+      invoice.lineItemIds && invoice.lineItemIds.length > 0
+        ? invoice.lineItemIds
+        : lineItems.map((item) => item.id),
+    );
+  };
   const updateResearchLineItem = (
     itemId: string,
     updater: (item: ProcurementLineItem) => ProcurementLineItem,
@@ -2569,24 +2649,46 @@ function ActionPanel({
   const canProcureClarify =
     canUse("Edlyn") &&
     (["Edlyn Confirmation", "Purchase in Progress"].includes(request.status) ||
-      (request.status === "Rashid Auto Approved" && request.stage === "edlyn"));
+      (request.status === "Rashid Auto Approved" && request.stage === "edlyn") ||
+      ["Invoice Uploaded", "Aileen Finance Review", "Invoice Cleared", "Edlyn Order Confirmation", "Delivery Tracking", "Order Confirmed"].includes(request.status));
   const canProcureResearchPrices = canProcureClarify;
   const canStaffCancel = role !== "Employee" && !isClosed(request.status);
   const financeCanClearInvoice = canUse("Aileen") && isInvoiceFinancePending(request);
+  const procureCanUploadInvoice =
+    canUse("Edlyn") &&
+    !isClosed(request.status) &&
+    [
+      "Edlyn Confirmation",
+      "Rashid Auto Approved",
+      "Purchase in Progress",
+      "Invoice Uploaded",
+      "Aileen Finance Review",
+      "Invoice Cleared",
+      "Edlyn Order Confirmation",
+      "Delivery Tracking",
+      "Order Confirmed",
+    ].includes(request.status);
   const procureCanStartDelivery =
     canUse("Edlyn") &&
     (["Invoice Cleared", "Edlyn Order Confirmation"].includes(request.status) ||
-      (request.status === "Purchase in Progress" && Boolean(request.invoice)));
+      (["Purchase in Progress", "Aileen Finance Review", "Invoice Uploaded"].includes(request.status) &&
+        invoices.length > 0));
 
   const invoicePayload = (storage?: {
     bucket?: string;
     path?: string;
     dataUrl?: string;
   }): InvoiceDetails => ({
+    id: replaceInvoiceId === "new" ? makeId("invoice") : replaceInvoiceId,
     invoiceNumber: invoiceNumber || `${request.id}-INV`,
     invoiceAmount,
     invoiceDate: invoiceDate || dubaiDateKey(),
     vendor: request.vendorName || request.vendor.companyName,
+    lineItemIds:
+      selectedInvoiceLineItemIds.length > 0
+        ? selectedInvoiceLineItemIds
+        : lineItems.map((item) => item.id),
+    status: "Pending Finance",
     uploadedInvoiceFile: invoiceFile.trim(),
     uploadedInvoiceFileSize: invoiceFileMeta?.size,
     uploadedInvoiceFileType: invoiceFileMeta?.type,
@@ -2602,6 +2704,7 @@ function ActionPanel({
     Boolean(invoiceFile.trim()) &&
     Number.isFinite(invoiceAmount) &&
     invoiceAmount > 0 &&
+    selectedInvoiceLineItemIds.length > 0 &&
     !invoiceUploading;
   const invoiceFileSizeLabel = fileSizeLabel(invoiceFileMeta?.size);
   const uploadInvoiceFile = async () => {
@@ -2877,6 +2980,33 @@ function ActionPanel({
                           }
                         />
                       </Field>
+                      <Field label="Item status">
+                        <SelectInput
+                          value={item.status ?? "Pending"}
+                          onChange={(event) =>
+                            updateResearchLineItem(item.id, (current) => ({
+                              ...current,
+                              status: event.target.value as ProcurementLineItem["status"],
+                            }))
+                          }
+                        >
+                          {LINE_ITEM_STATUSES.map((status) => (
+                            <option key={status}>{status}</option>
+                          ))}
+                        </SelectInput>
+                      </Field>
+                      <Field label="Hold / progress note">
+                        <TextInput
+                          value={item.holdReason ?? ""}
+                          onChange={(event) =>
+                            updateResearchLineItem(item.id, (current) => ({
+                              ...current,
+                              holdReason: event.target.value,
+                            }))
+                          }
+                          placeholder="Reason if this item is on hold"
+                        />
+                      </Field>
                     </div>
                     <Field label="Item description">
                       <TextArea
@@ -2931,6 +3061,33 @@ function ActionPanel({
                 variant="secondary"
               >
                 {researchSaving ? "Updating prices..." : "Save researched prices"}
+              </IconButton>
+              <IconButton
+                disabled={researchSaving}
+                icon={<CheckCircle2 className="h-4 w-4" />}
+                onClick={async () => {
+                  try {
+                    setResearchSaving(true);
+                    setResearchError("");
+                    const updatedLineItems = await validateAndConvertLineItems(researchLineItems);
+                    onTransition(request.id, {
+                      type: "edlyn-update-line-items",
+                      comment,
+                      lineItems: updatedLineItems,
+                      lineItemClarifications: lineItemClarificationPayload(),
+                    });
+                    clearProcureClarification();
+                  } catch (error) {
+                    setResearchError(
+                      error instanceof Error ? error.message : "Could not update item progress.",
+                    );
+                  } finally {
+                    setResearchSaving(false);
+                  }
+                }}
+                variant="secondary"
+              >
+                {researchSaving ? "Saving progress..." : "Save item progress"}
               </IconButton>
             </div>
           </details>
@@ -3332,17 +3489,32 @@ function ActionPanel({
           </div>
         ) : null}
 
-        {request.status === "Purchase in Progress" && canUse("Edlyn") ? (
+        {procureCanUploadInvoice ? (
           <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
-            {request.invoice ? (
+            {invoices.length > 0 ? (
               <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
-                <p className="font-semibold">Invoice sent to Finance</p>
+                <p className="font-semibold">Invoice activity</p>
                 <p className="mt-1">
-                  Finance can clear the invoice separately. Procure can confirm the order and update delivery now.
+                  {invoices.length} invoice(s) uploaded. Finance can clear them separately while Procure keeps updating items and delivery.
                 </p>
               </div>
             ) : null}
             <div className="grid gap-3">
+              {invoices.length > 0 ? (
+                <Field label="Invoice action">
+                  <SelectInput
+                    value={replaceInvoiceId}
+                    onChange={(event) => updateInvoiceMode(event.target.value)}
+                  >
+                    <option value="new">Add another invoice</option>
+                    {invoices.map((invoice) => (
+                      <option key={invoice.id} value={invoice.id}>
+                        Replace {invoice.invoiceNumber}
+                      </option>
+                    ))}
+                  </SelectInput>
+                </Field>
+              ) : null}
               <Field label="Invoice number" htmlFor={invoiceNumberId}>
                 <TextInput id={invoiceNumberId} placeholder="INV-001" value={invoiceNumber} onChange={(event) => setInvoiceNumber(event.target.value)} />
               </Field>
@@ -3365,6 +3537,46 @@ function ActionPanel({
                   ))}
                 </SelectInput>
               </Field>
+              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                <p className="text-sm font-semibold text-slate-950">Covered line items</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Select the item(s) covered by this invoice. You can upload more invoices for the remaining items later.
+                </p>
+                <div className="mt-3 grid gap-2">
+                  {lineItems.map((item, index) => (
+                    <label
+                      className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-2 text-sm"
+                      key={item.id}
+                    >
+                      <input
+                        checked={selectedInvoiceLineItemIds.includes(item.id)}
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600"
+                        onChange={(event) => {
+                          setSelectedInvoiceLineItemIds((current) =>
+                            event.target.checked
+                              ? Array.from(new Set([...current, item.id]))
+                              : current.filter((id) => id !== item.id),
+                          );
+                        }}
+                        type="checkbox"
+                      />
+                      <span className="min-w-0">
+                        <span className="block font-semibold text-slate-950">
+                          Item {index + 1}: {item.itemName}
+                        </span>
+                        <span className="block text-xs text-slate-500">
+                          {money(item.aedTotal, "AED")} - {item.status ?? "Pending"}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {selectedInvoiceLineItemIds.length === 0 ? (
+                  <p className="mt-2 text-xs font-semibold text-red-700">
+                    Select at least one line item before uploading.
+                  </p>
+                ) : null}
+              </div>
               <Field label="Upload invoice file" htmlFor={invoiceFileId} required>
                 <TextInput
                   id={invoiceFileId}
@@ -3438,6 +3650,10 @@ function ActionPanel({
                       comment,
                     });
                     clearText();
+                    setReplaceInvoiceId("new");
+                    setInvoiceFile("");
+                    setInvoiceFileMeta(null);
+                    setSelectedInvoiceFile(null);
                   } catch (error) {
                     setInvoiceUploadError(
                       error instanceof Error
@@ -3467,7 +3683,7 @@ function ActionPanel({
                 Request clarification
               </IconButton>
             </div>
-            {request.invoice ? (
+            {invoices.length > 0 ? (
               <div className="grid gap-3 border-t border-slate-200 pt-3">
                 {logisticsFields}
                 <IconButton
@@ -3490,6 +3706,24 @@ function ActionPanel({
 
         {financeCanClearInvoice ? (
           <div className="grid gap-3">
+            {pendingFinanceInvoices.length > 1 ? (
+              <Field label="Invoice to clear">
+                <SelectInput
+                  value={financeInvoiceId}
+                  onChange={(event) => setFinanceInvoiceId(event.target.value)}
+                >
+                  {pendingFinanceInvoices.map((invoice) => (
+                    <option key={invoice.id} value={invoice.id}>
+                      {invoice.invoiceNumber} - {money(invoice.invoiceAmount, "AED")}
+                    </option>
+                  ))}
+                </SelectInput>
+              </Field>
+            ) : pendingFinanceInvoices[0] ? (
+              <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-900">
+                Finance clearing invoice {pendingFinanceInvoices[0].invoiceNumber}.
+              </div>
+            ) : null}
             <Field label="Finance notes" htmlFor={financeNotesId}>
               <TextArea
                 id={financeNotesId}
@@ -3503,6 +3737,7 @@ function ActionPanel({
               onClick={() => {
                 onTransition(request.id, {
                   type: "aileen-clear-invoice",
+                  invoiceId: financeInvoiceId || pendingFinanceInvoices[0]?.id,
                   financeNotes,
                 });
                 setFinanceNotes("");
@@ -3516,10 +3751,12 @@ function ActionPanel({
 
         {procureCanStartDelivery && request.status !== "Purchase in Progress" ? (
           <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
-            {request.invoice?.financeNotes ? (
+            {invoices.find((invoice) => invoice.financeNotes)?.financeNotes ? (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
                 <p className="font-semibold">Finance note</p>
-                <p className="mt-1 whitespace-pre-line">{request.invoice.financeNotes}</p>
+                <p className="mt-1 whitespace-pre-line">
+                  {invoices.find((invoice) => invoice.financeNotes)?.financeNotes}
+                </p>
               </div>
             ) : null}
             {logisticsFields}
@@ -3753,6 +3990,12 @@ function RequestDetails({
                   </div>
                   <p className="mt-2 text-sm text-slate-600">{item.itemDescription}</p>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    <div className="col-span-2">
+                      <p className="text-xs font-semibold uppercase text-slate-500">Status</p>
+                      <div className="mt-1">
+                        <LineItemStatusBadge status={item.status} />
+                      </div>
+                    </div>
                     <Detail label="Qty" value={String(item.quantity)} />
                     <Detail label="Unit price" value={money(item.unitPrice, item.currency)} />
                     <Detail label="Original total" value={money(item.originalTotal, item.currency)} />
@@ -3763,6 +4006,11 @@ function RequestDetails({
                           label="Clarification note"
                           value={lineItemClarificationMap.get(item.id) ?? ""}
                         />
+                      </div>
+                    ) : null}
+                    {item.holdReason ? (
+                      <div className="col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-2">
+                        <Detail label="Hold / progress note" value={item.holdReason} />
                       </div>
                     ) : null}
                     <div className="col-span-2">
@@ -3780,6 +4028,7 @@ function RequestDetails({
                 <thead className="bg-slate-50 text-xs uppercase text-slate-500">
                   <tr>
                     <th className="px-3 py-2">No.</th>
+                    <th className="px-3 py-2">Status</th>
                     <th className="px-3 py-2">Item</th>
                     <th className="px-3 py-2">Qty</th>
                     <th className="px-3 py-2">Unit price</th>
@@ -3796,6 +4045,14 @@ function RequestDetails({
                     <tr key={item.id}>
                       <td className="px-3 py-2 font-semibold text-slate-600">
                         Item {index + 1}
+                      </td>
+                      <td className="px-3 py-2">
+                        <LineItemStatusBadge status={item.status} />
+                        {item.holdReason ? (
+                          <p className="mt-1 max-w-56 whitespace-pre-line text-xs text-amber-700">
+                            {item.holdReason}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2">
                         <p className="font-semibold text-slate-950">{item.itemName}</p>
@@ -3849,36 +4106,7 @@ function RequestDetails({
 
             <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
               <h3 className="text-base font-bold text-slate-950">Invoice documentation</h3>
-              {request.invoice ? (
-                <div className="mt-4 grid gap-3 text-sm">
-                  <Detail label="Invoice number" value={request.invoice.invoiceNumber} />
-                  <Detail label="Amount" value={money(request.invoice.invoiceAmount, "AED")} />
-                  <Detail label="Invoice date" value={formatDate(request.invoice.invoiceDate)} />
-                  <Detail label="Payment terms" value={request.invoice.paymentTerms} />
-                  <InvoiceFileLink invoice={request.invoice} />
-                  <Detail
-                    label="File size"
-                    value={fileSizeLabel(request.invoice.uploadedInvoiceFileSize) || "Not recorded"}
-                  />
-                  <Detail
-                    label="File type"
-                    value={request.invoice.uploadedInvoiceFileType || "Not recorded"}
-                  />
-                  <Detail
-                    label="Uploaded at"
-                    value={
-                      request.invoice.uploadedInvoiceUploadedAt
-                        ? formatDateTime(request.invoice.uploadedInvoiceUploadedAt)
-                        : "Not recorded"
-                    }
-                  />
-                  <Detail label="Finance notes" value={request.invoice.financeNotes || "No notes"} />
-                </div>
-              ) : (
-                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                  Invoice is pending upload by Procure.
-                </div>
-              )}
+              <InvoiceList request={request} />
             </div>
 
             <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
@@ -4047,6 +4275,82 @@ function InvoiceFileLink({ invoice }: { invoice: InvoiceDetails }) {
       {linkError ? (
         <p className="mt-1 text-xs font-medium text-amber-700">{linkError}</p>
       ) : null}
+    </div>
+  );
+}
+
+function InvoiceList({ request }: { request: ProcurementRequest }) {
+  const invoices = getRequestInvoices(request);
+  const lineItems = getRequestLineItems(request);
+  const lineItemNameById = new Map(lineItems.map((item, index) => [item.id, `Item ${index + 1}: ${item.itemName}`]));
+
+  if (invoices.length === 0) {
+    return (
+      <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
+        Invoice has not been uploaded by Procure yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 grid gap-3">
+      {invoices.map((invoice) => {
+        const coveredItems =
+          invoice.lineItemIds && invoice.lineItemIds.length > 0
+            ? invoice.lineItemIds
+                .map((lineItemId) => lineItemNameById.get(lineItemId))
+                .filter(Boolean)
+                .join(", ")
+            : "All items";
+
+        return (
+          <div className="rounded-xl border border-slate-200 bg-white p-3 text-sm" key={invoice.id}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="font-semibold text-slate-950">{invoice.invoiceNumber}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {invoice.clearedAt ? "Cleared by Finance" : "Pending Finance"}
+                </p>
+              </div>
+              <span
+                className={classNames(
+                  "inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold",
+                  invoice.clearedAt
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : "border-amber-200 bg-amber-50 text-amber-800",
+                )}
+              >
+                {invoice.clearedAt ? "Cleared" : "Pending"}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <Detail label="Amount" value={money(invoice.invoiceAmount, "AED")} />
+              <Detail label="Invoice date" value={formatDate(invoice.invoiceDate)} />
+              <Detail label="Vendor" value={invoice.vendor || "Not provided"} />
+              <Detail label="Payment terms" value={invoice.paymentTerms} />
+              <Detail label="Covered items" value={coveredItems || "Not recorded"} />
+              <InvoiceFileLink invoice={invoice} />
+              <Detail
+                label="File size"
+                value={fileSizeLabel(invoice.uploadedInvoiceFileSize) || "Not recorded"}
+              />
+              <Detail label="File type" value={invoice.uploadedInvoiceFileType || "Not recorded"} />
+              <Detail
+                label="Uploaded at"
+                value={
+                  invoice.uploadedInvoiceUploadedAt
+                    ? formatDateTime(invoice.uploadedInvoiceUploadedAt)
+                    : "Not recorded"
+                }
+              />
+              <Detail
+                label="Finance notes"
+                value={invoice.financeNotes || "No notes"}
+              />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -4348,7 +4652,7 @@ function rowsForExport(state: ProcurementState) {
     Status: displayStatus(request.status),
     Stage: WORKFLOW_STAGES.find((stage) => stage.key === request.stage)?.label,
     Assignee: getAssigneeName(request, state.users),
-    Invoice: request.invoice?.invoiceNumber ?? "Pending",
+    Invoice: getInvoiceSummary(request),
     "Delivery status": request.logistics?.deliveryStatus ?? "Not started",
     "Logistics provider": request.logistics?.provider ?? "",
     "Tracking number": request.logistics?.trackingNumber ?? "",
@@ -4368,6 +4672,8 @@ function lineItemRowsForExport(state: ProcurementState) {
       Project: request.project,
       Item: item.itemName,
       Description: item.itemDescription,
+      Status: item.status ?? "Pending",
+      "Hold/progress note": item.holdReason ?? "",
       Quantity: item.quantity,
       "Unit price": item.unitPrice,
       Currency: item.currency,
@@ -4376,8 +4682,32 @@ function lineItemRowsForExport(state: ProcurementState) {
       "FX to AED": item.fxRateToAed,
       "AED total": item.aedTotal,
       Vendor: item.vendorName,
+      "Invoice IDs": item.invoiceIds?.join(", ") ?? "",
       "FX source": item.exchangeRateSource,
       "FX date": item.exchangeRateDate,
+    })),
+  );
+}
+
+function invoiceRowsForExport(state: ProcurementState) {
+  return state.requests.flatMap((request) =>
+    getRequestInvoices(request).map((invoice) => ({
+      "Request ID": request.id,
+      Employee: request.employeeName,
+      Department: request.department,
+      Project: request.project,
+      "Invoice ID": invoice.id ?? "",
+      "Invoice number": invoice.invoiceNumber,
+      Amount: invoice.invoiceAmount,
+      Vendor: invoice.vendor,
+      Date: invoice.invoiceDate,
+      Status: invoice.clearedAt ? "Cleared" : "Pending Finance",
+      "Payment terms": invoice.paymentTerms,
+      "Line item IDs": invoice.lineItemIds?.join(", ") ?? "",
+      "Uploaded file": invoice.uploadedInvoiceFile,
+      "Uploaded at": invoice.uploadedInvoiceUploadedAt ?? "",
+      "Cleared at": invoice.clearedAt ?? "",
+      "Finance notes": invoice.financeNotes,
     })),
   );
 }
@@ -4508,9 +4838,11 @@ function AdminPanel({
     const XLSX = await import("xlsx");
     const worksheet = XLSX.utils.json_to_sheet(rowsForExport(state));
     const itemWorksheet = XLSX.utils.json_to_sheet(lineItemRowsForExport(state));
+    const invoiceWorksheet = XLSX.utils.json_to_sheet(invoiceRowsForExport(state));
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Procurement");
     XLSX.utils.book_append_sheet(workbook, itemWorksheet, "Line Items");
+    XLSX.utils.book_append_sheet(workbook, invoiceWorksheet, "Invoices");
     XLSX.writeFile(workbook, "procurement-report.xlsx");
   };
 
@@ -5204,6 +5536,12 @@ function EmployeeLineItemsPanel({ request }: { request: ProcurementRequest }) {
               </p>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+              <div className="col-span-2">
+                <p className="text-xs font-semibold uppercase text-slate-500">Status</p>
+                <div className="mt-1">
+                  <LineItemStatusBadge status={item.status} />
+                </div>
+              </div>
               <Detail label="Qty" value={String(item.quantity)} />
               <Detail label="Unit price" value={money(item.unitPrice, item.currency)} />
               <Detail label="Original total" value={money(item.originalTotal, item.currency)} />
@@ -5222,15 +5560,21 @@ function EmployeeLineItemsPanel({ request }: { request: ProcurementRequest }) {
                   />
                 </div>
               ) : null}
+              {item.holdReason ? (
+                <div className="col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <Detail label="Hold / progress note" value={item.holdReason} />
+                </div>
+              ) : null}
             </div>
           </div>
         ))}
       </div>
       <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[1040px] text-left text-sm">
+        <table className="w-full min-w-[1160px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-4 py-3">Item</th>
+              <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Qty</th>
               <th className="px-4 py-3">Unit price</th>
               <th className="px-4 py-3">Original total</th>
@@ -5250,6 +5594,14 @@ function EmployeeLineItemsPanel({ request }: { request: ProcurementRequest }) {
                   <p className="mt-1 line-clamp-2 text-xs text-slate-500">
                     {item.itemDescription}
                   </p>
+                </td>
+                <td className="px-4 py-3">
+                  <LineItemStatusBadge status={item.status} />
+                  {item.holdReason ? (
+                    <p className="mt-1 max-w-56 whitespace-pre-line text-xs text-amber-700">
+                      {item.holdReason}
+                    </p>
+                  ) : null}
                 </td>
                 <td className="px-4 py-3">{item.quantity}</td>
                 <td className="px-4 py-3">{money(item.unitPrice, item.currency)}</td>
@@ -5281,39 +5633,7 @@ function EmployeeInvoicePanel({ request }: { request: ProcurementRequest }) {
   return (
     <div className={classNames(insetPanelClass, "mt-5 bg-white p-4")}>
       <h3 className="text-base font-bold text-slate-950">Invoice documentation</h3>
-      {request.invoice ? (
-        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Detail label="Invoice number" value={request.invoice.invoiceNumber} />
-          <Detail label="Amount" value={money(request.invoice.invoiceAmount, "AED")} />
-          <Detail label="Invoice date" value={formatDate(request.invoice.invoiceDate)} />
-          <Detail label="Vendor" value={request.invoice.vendor || "Not provided"} />
-          <Detail label="Payment terms" value={request.invoice.paymentTerms} />
-          <InvoiceFileLink invoice={request.invoice} />
-          <Detail
-            label="File size"
-            value={fileSizeLabel(request.invoice.uploadedInvoiceFileSize) || "Not recorded"}
-          />
-          <Detail
-            label="File type"
-            value={request.invoice.uploadedInvoiceFileType || "Not recorded"}
-          />
-          <Detail
-            label="Uploaded at"
-            value={
-              request.invoice.uploadedInvoiceUploadedAt
-                ? formatDateTime(request.invoice.uploadedInvoiceUploadedAt)
-                : "Not recorded"
-            }
-          />
-          <div className="sm:col-span-2 lg:col-span-3">
-            <Detail label="Finance notes" value={request.invoice.financeNotes || "No notes"} />
-          </div>
-        </div>
-      ) : (
-        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
-          Invoice has not been uploaded by Procure yet.
-        </div>
-      )}
+      <InvoiceList request={request} />
     </div>
   );
 }
@@ -5706,7 +6026,7 @@ function EmployeeRequestStatus({
       <div className="mt-5 grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Detail label="Items" value={String(getRequestItemCount(request))} />
         <Detail label="Project" value={request.project} />
-        <Detail label="Invoice" value={request.invoice?.invoiceNumber ?? "Pending"} />
+        <Detail label="Invoice" value={getInvoiceSummary(request)} />
         <Detail label="Required by" value={formatDate(request.requiredByDate)} />
         <Detail label="Pending action" value={getPendingAction(request)} />
       </div>
