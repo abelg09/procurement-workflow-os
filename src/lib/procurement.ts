@@ -587,6 +587,19 @@ function isLineItemStatus(value: unknown): value is LineItemStatus {
   return LINE_ITEM_STATUSES.includes(value as LineItemStatus);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function textValue(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+
+function finiteNumberValue(value: unknown, fallback = 0) {
+  const numberValue = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
 function defaultLineItemStatusForRequest(request: ProcurementRequest): LineItemStatus {
   if (request.status === "Completed" || request.status === "Item Received") {
     return "Delivered";
@@ -616,18 +629,50 @@ function defaultLineItemStatusForRequest(request: ProcurementRequest): LineItemS
 }
 
 function normalizeLineItem(
-  item: ProcurementLineItem,
+  item: unknown,
   fallbackStatus: LineItemStatus,
-): ProcurementLineItem {
+  fallbackId: string,
+): ProcurementLineItem | null {
+  if (!isRecord(item)) {
+    return null;
+  }
+
+  const itemName = textValue(item.itemName).trim();
+  const itemDescription = textValue(item.itemDescription).trim();
+  if (!itemName && !itemDescription) {
+    return null;
+  }
+
+  const quantity = Math.max(finiteNumberValue(item.quantity, 1), 1);
+  const unitPrice = finiteNumberValue(item.unitPrice, 0);
+  const originalTotal = finiteNumberValue(item.originalTotal, unitPrice * quantity);
+  const aedTotal = finiteNumberValue(item.aedTotal, originalTotal);
+  const currency = textValue(item.currency, "AED").trim() || "AED";
   const invoiceIds = Array.isArray(item.invoiceIds)
     ? item.invoiceIds.map(String).filter(Boolean)
     : undefined;
 
   return {
-    ...item,
-    productUrl: item.productUrl ?? "",
+    id: textValue(item.id, fallbackId).trim() || fallbackId,
+    itemName: itemName || "Untitled item",
+    itemDescription,
+    productUrl: textValue(item.productUrl),
     status: isLineItemStatus(item.status) ? item.status : fallbackStatus,
-    holdReason: item.holdReason ?? "",
+    holdReason: textValue(item.holdReason),
+    processedAt: textValue(item.processedAt) || undefined,
+    deliveredAt: textValue(item.deliveredAt) || undefined,
+    quantity,
+    unitPrice: roundMoney(unitPrice),
+    currency,
+    originalTotal: roundMoney(originalTotal),
+    fxRateToAed: finiteNumberValue(item.fxRateToAed, currency === "AED" ? 1 : 0),
+    aedTotal: roundMoney(aedTotal),
+    vendorName: textValue(item.vendorName),
+    exchangeRateDate: textValue(item.exchangeRateDate, DEFAULT_EXCHANGE_RATE_DATE),
+    exchangeRateSource: textValue(
+      item.exchangeRateSource,
+      currency === "AED" ? AED_EXCHANGE_RATE_SOURCE : "Imported amount",
+    ),
     invoiceIds,
   };
 }
@@ -637,24 +682,52 @@ function isInvoiceStatus(value: unknown): value is InvoiceStatus {
 }
 
 function normalizeInvoiceDetails(
-  invoice: InvoiceDetails,
+  invoice: unknown,
   fallbackId: string,
   fallbackLineItemIds: string[] = [],
-): InvoiceDetails {
+): InvoiceDetails | null {
+  if (!isRecord(invoice)) {
+    return null;
+  }
+
+  const invoiceNumber = textValue(invoice.invoiceNumber).trim();
+  const uploadedInvoiceFile = textValue(invoice.uploadedInvoiceFile).trim();
+  const invoiceAmount = finiteNumberValue(invoice.invoiceAmount, 0);
+  if (!invoiceNumber && !uploadedInvoiceFile && invoiceAmount <= 0) {
+    return null;
+  }
+
   const lineItemIds = Array.isArray(invoice.lineItemIds)
     ? invoice.lineItemIds.map(String).filter(Boolean)
     : fallbackLineItemIds;
+  const paymentTerms = PAYMENT_TERMS.includes(invoice.paymentTerms as PaymentTerm)
+    ? (invoice.paymentTerms as PaymentTerm)
+    : "COD";
 
   return {
-    ...invoice,
-    id: invoice.id || fallbackId,
+    id: textValue(invoice.id, fallbackId).trim() || fallbackId,
+    invoiceNumber: invoiceNumber || fallbackId,
+    invoiceAmount: roundMoney(invoiceAmount),
+    invoiceDate: textValue(invoice.invoiceDate, DEFAULT_EXCHANGE_RATE_DATE),
+    vendor: textValue(invoice.vendor),
     lineItemIds,
     status: isInvoiceStatus(invoice.status)
       ? invoice.status
       : invoice.clearedAt
         ? "Cleared"
         : "Pending Finance",
-    financeNotes: invoice.financeNotes ?? "",
+    uploadedInvoiceFile,
+    uploadedInvoiceFileSize: finiteNumberValue(invoice.uploadedInvoiceFileSize, 0) || undefined,
+    uploadedInvoiceFileType: textValue(invoice.uploadedInvoiceFileType) || undefined,
+    uploadedInvoiceUploadedAt: textValue(invoice.uploadedInvoiceUploadedAt) || undefined,
+    uploadedInvoiceStorageBucket: textValue(invoice.uploadedInvoiceStorageBucket) || undefined,
+    uploadedInvoiceStoragePath: textValue(invoice.uploadedInvoiceStoragePath) || undefined,
+    uploadedInvoiceDataUrl: textValue(invoice.uploadedInvoiceDataUrl) || undefined,
+    paymentTerms,
+    financeNotes: textValue(invoice.financeNotes),
+    clearedAt: textValue(invoice.clearedAt) || undefined,
+    replacedAt: textValue(invoice.replacedAt) || undefined,
+    replacedById: textValue(invoice.replacedById) || undefined,
   };
 }
 
@@ -662,7 +735,15 @@ export function getRequestLineItems(request: ProcurementRequest) {
   const fallbackStatus = defaultLineItemStatusForRequest(request);
 
   if (Array.isArray(request.lineItems) && request.lineItems.length > 0) {
-    return request.lineItems.map((item) => normalizeLineItem(item, fallbackStatus));
+    const lineItems = request.lineItems
+      .map((item, index) =>
+        normalizeLineItem(item, fallbackStatus, `${request.id.toLowerCase()}-item-${index + 1}`),
+      )
+      .filter((item): item is ProcurementLineItem => Boolean(item));
+
+    if (lineItems.length > 0) {
+      return lineItems;
+    }
   }
 
   const quantity = Number.isFinite(request.quantity) && request.quantity > 0 ? request.quantity : 1;
@@ -717,7 +798,8 @@ export function getRequestInvoices(request: ProcurementRequest) {
         `${request.id.toLowerCase()}-invoice-${index + 1}`,
         lineItemIds,
       ),
-    );
+    )
+    .filter((invoice): invoice is InvoiceDetails => Boolean(invoice));
 }
 
 export function getPendingFinanceInvoices(request: ProcurementRequest) {
@@ -762,13 +844,15 @@ export function normalizeRequestFinancials(
     : request.invoice
       ? [request.invoice]
       : []
-  ).map((invoice, index) =>
-    normalizeInvoiceDetails(
-      invoice,
-      `${request.id.toLowerCase()}-invoice-${index + 1}`,
-      invoiceLineItemIds,
-    ),
-  );
+  )
+    .map((invoice, index) =>
+      normalizeInvoiceDetails(
+        invoice,
+        `${request.id.toLowerCase()}-invoice-${index + 1}`,
+        invoiceLineItemIds,
+      ),
+    )
+    .filter((invoice): invoice is InvoiceDetails => Boolean(invoice));
   const estimatedAmountAed = roundMoney(
     lineItems.reduce((total, item) => total + item.aedTotal, 0),
   );
@@ -1635,6 +1719,7 @@ function setRequestInvoices(editable: ProcurementRequest, invoices: InvoiceDetai
         getRequestLineItems(editable).map((item) => item.id),
       ),
     )
+    .filter((invoice): invoice is InvoiceDetails => Boolean(invoice))
     .filter((invoice) => invoice.status !== "Replaced");
 
   editable.invoices = activeInvoices.length > 0 ? activeInvoices : undefined;
@@ -1666,6 +1751,9 @@ function upsertRequestInvoice(
     makeId("invoice"),
     lineItemIds,
   );
+  if (!normalizedInvoice) {
+    throw new Error("Invoice details are incomplete.");
+  }
   const existingInvoices = getRequestInvoices(editable);
   const existingIndex = existingInvoices.findIndex(
     (candidate) => candidate.id === normalizedInvoice.id,

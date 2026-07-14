@@ -377,6 +377,21 @@ async function extractInvoiceNumberFromFile(file: File) {
 const classNames = (...values: Array<string | false | null | undefined>) =>
   values.filter(Boolean).join(" ");
 
+function writeBrowserStateSafely(state: ProcurementState) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(STORAGE_KEY, serializeState(state));
+  } catch (error) {
+    console.warn(
+      "Procurement browser cache could not be updated. Live Supabase data remains the source of truth.",
+      error,
+    );
+  }
+}
+
 const isAllowedEmail = (email: string) => {
   const domain = email.toLowerCase().split("@")[1] ?? "";
   return allowedEmailDomains.includes(domain);
@@ -6389,7 +6404,7 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof window !== "undefined" && browserStateLoaded) {
-      window.localStorage.setItem(STORAGE_KEY, serializeState(state));
+      writeBrowserStateSafely(state);
     }
   }, [browserStateLoaded, state]);
 
