@@ -3478,13 +3478,29 @@ function ActionPanel({
         canUse("Edlyn") ? (
           <div className="grid gap-2 sm:flex sm:flex-wrap">
             <IconButton
+              disabled={researchSaving}
               icon={<ShoppingCart className="h-4 w-4" />}
-              onClick={() => {
-                onTransition(request.id, { type: "edlyn-confirm", comment });
-                clearText();
+              onClick={async () => {
+                try {
+                  setResearchSaving(true);
+                  setResearchError("");
+                  const updatedLineItems = await validateAndConvertLineItems(researchLineItems);
+                  onTransition(request.id, {
+                    type: "edlyn-confirm",
+                    comment,
+                    lineItems: updatedLineItems,
+                  });
+                  clearProcureClarification();
+                } catch (error) {
+                  setResearchError(
+                    error instanceof Error ? error.message : "Could not confirm item details.",
+                  );
+                } finally {
+                  setResearchSaving(false);
+                }
               }}
             >
-              Confirm item details
+              {researchSaving ? "Saving item details..." : "Confirm item details"}
             </IconButton>
             <IconButton
               disabled={!hasProcureClarification}

@@ -523,7 +523,7 @@ export type WorkflowAction =
   | { type: "department-review"; comment?: string }
   | { type: "department-decline"; declineReason: string }
   | { type: "dr-majed-update-request"; comment?: string; fields: RequestFieldPatch; lineItems: ProcurementLineItem[] }
-  | { type: "edlyn-confirm"; comment?: string }
+  | { type: "edlyn-confirm"; comment?: string; lineItems?: ProcurementLineItem[] }
   | {
       type: "edlyn-request-clarification";
       comment?: string;
@@ -2505,16 +2505,22 @@ export function transitionRequest(
       editable.status = "Purchase in Progress";
       editable.stage = "edlyn";
       editable.assigneeId = actor.id;
+      const sourceLineItems =
+        workflowAction.lineItems && workflowAction.lineItems.length > 0
+          ? workflowAction.lineItems
+          : getRequestLineItems(editable);
       applyLineItemUpdate(
         editable,
-        getRequestLineItems(editable).map((item) => ({
+        sourceLineItems.map((item) => ({
           ...item,
           status: item.status === "Pending" ? "Processing" : item.status,
           processedAt: item.processedAt ?? dateTime,
         })),
       );
       actionLabel = "Procure confirmed item details";
-      comment = workflowAction.comment;
+      comment = hasText(workflowAction.comment)
+        ? workflowAction.comment
+        : "Confirmed item details and saved current line item quantities.";
       break;
     }
     case "edlyn-request-clarification": {
