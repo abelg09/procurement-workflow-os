@@ -3051,7 +3051,7 @@ function ActionPanel({
                 ))}
               </div>
               <IconButton
-                disabled={researchSaving || !comment.trim()}
+                disabled={researchSaving}
                 icon={<Pencil className="h-4 w-4" />}
                 onClick={async () => {
                   try {
@@ -3407,7 +3407,7 @@ function ActionPanel({
                     ))}
                   </div>
                   <IconButton
-                    disabled={drEditSaving || !comment.trim()}
+                    disabled={drEditSaving}
                     icon={<Pencil className="h-4 w-4" />}
                     onClick={async () => {
                       try {
@@ -5479,16 +5479,16 @@ function EmployeeMonaClarificationPanel({
         ))}
       </div>
 
-      <Field label="Reply to Mona" required>
+      <Field label="Reply to Mona">
         <TextArea
-          placeholder="Explain what you updated"
+          placeholder="Optional: explain what you updated"
           value={response}
           onChange={(event) => setResponse(event.target.value)}
         />
       </Field>
 
       <IconButton
-        disabled={uploading || saving || !response.trim()}
+        disabled={uploading || saving}
         icon={<Send className="h-4 w-4" />}
         onClick={async () => {
           try {
@@ -5920,15 +5920,15 @@ function EmployeeProcureClarificationPanel({
           </div>
         ))}
       </div>
-      <Field label="Reply to Procure" required>
+      <Field label="Reply to Procure">
         <TextArea
-          placeholder="Explain what you updated or answered"
+          placeholder="Optional: explain what you updated or answered"
           value={response}
           onChange={(event) => setResponse(event.target.value)}
         />
       </Field>
       <IconButton
-        disabled={saving || !response.trim()}
+        disabled={saving}
         icon={<Send className="h-4 w-4" />}
         onClick={async () => {
           try {

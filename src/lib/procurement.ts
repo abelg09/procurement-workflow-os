@@ -516,23 +516,23 @@ export type ProcurementRequestDraft = Omit<
 export type WorkflowAction =
   | { type: "mona-approve"; comment?: string }
   | { type: "mona-clarify"; comment: string }
-  | { type: "employee-resubmit-mona-clarification"; comment: string; lineItems: ProcurementLineItem[] }
+  | { type: "employee-resubmit-mona-clarification"; comment?: string; lineItems: ProcurementLineItem[] }
   | { type: "rashid-approve"; comment?: string }
   | { type: "rashid-decline"; declineReason: string }
   | { type: "dr-review"; comment?: string }
   | { type: "department-review"; comment?: string }
   | { type: "department-decline"; declineReason: string }
-  | { type: "dr-majed-update-request"; comment: string; fields: RequestFieldPatch; lineItems: ProcurementLineItem[] }
+  | { type: "dr-majed-update-request"; comment?: string; fields: RequestFieldPatch; lineItems: ProcurementLineItem[] }
   | { type: "edlyn-confirm"; comment?: string }
   | {
       type: "edlyn-request-clarification";
       comment?: string;
       lineItemClarifications?: Array<{ lineItemId: string; comment: string }>;
     }
-  | { type: "employee-submit-edlyn-clarification"; comment: string; lineItems?: ProcurementLineItem[] }
+  | { type: "employee-submit-edlyn-clarification"; comment?: string; lineItems?: ProcurementLineItem[] }
   | {
       type: "edlyn-update-researched-prices";
-      comment: string;
+      comment?: string;
       lineItems: ProcurementLineItem[];
       lineItemClarifications?: Array<{ lineItemId: string; comment: string }>;
     }
@@ -2235,7 +2235,6 @@ export function transitionRequest(
       if (
         editable.status !== "Sent Back for Clarification" ||
         actor.id !== editable.submittedById ||
-        !hasText(workflowAction.comment) ||
         workflowAction.lineItems.length === 0
       ) {
         return state;
@@ -2285,7 +2284,9 @@ export function transitionRequest(
       editable.stage = "mona";
       editable.previousResponsibleId = actor.id;
       actionLabel = "Employee updated request and resubmitted";
-      comment = workflowAction.comment;
+      comment = hasText(workflowAction.comment)
+        ? workflowAction.comment
+        : "Updated request details.";
       addNotification(
         nextState.notifications,
         {
@@ -2395,12 +2396,17 @@ export function transitionRequest(
       break;
     }
     case "dr-majed-update-request": {
+      const reviewRole = getDepartmentReviewRole(editable.department);
+      const reviewStatus = getDepartmentReviewStatus(editable.department);
+      const reviewStatuses: RequestStatus[] = reviewStatus
+        ? [reviewStatus, "Rashid Auto Approved"]
+        : ["Rashid Auto Approved"];
+
       if (
-        actor.role !== "Dr. Majed" ||
+        reviewRole !== "Dr. Majed" ||
         editable.stage !== "dr-majed" ||
-        editable.status !== "Dr. Majed Review" ||
-        workflowAction.lineItems.length === 0 ||
-        !hasText(workflowAction.comment)
+        !canAct(reviewStatuses, "Dr. Majed") ||
+        workflowAction.lineItems.length === 0
       ) {
         return state;
       }
@@ -2417,7 +2423,9 @@ export function transitionRequest(
       applyLineItemUpdate(editable, workflowAction.lineItems);
       editable.previousResponsibleId = actor.id;
       actionLabel = "Dr. Majed modified request details";
-      comment = workflowAction.comment;
+      comment = hasText(workflowAction.comment)
+        ? workflowAction.comment
+        : "Updated request fields and line items.";
       break;
     }
     case "edlyn-update-researched-prices": {
@@ -2430,8 +2438,7 @@ export function transitionRequest(
         .filter((item) => lineItemIds.has(item.lineItemId) && hasText(item.comment));
       if (
         !canAct(["Edlyn Confirmation", "Purchase in Progress", "Rashid Auto Approved"], "Edlyn") ||
-        workflowAction.lineItems.length === 0 ||
-        !hasText(workflowAction.comment)
+        workflowAction.lineItems.length === 0
       ) {
         return state;
       }
@@ -2456,7 +2463,9 @@ export function transitionRequest(
       applyRoute(route, route.status === "Rashid Auto Approved" ? "approved" : "assigned");
       editable.previousResponsibleId = actor.id;
       actionLabel = "Procure updated researched prices";
-      comment = workflowAction.comment;
+      comment = hasText(workflowAction.comment)
+        ? workflowAction.comment
+        : "Updated researched prices and item details.";
       break;
     }
     case "edlyn-update-line-items": {
@@ -2560,8 +2569,7 @@ export function transitionRequest(
     case "employee-submit-edlyn-clarification": {
       if (
         editable.status !== "Edlyn Clarification Requested" ||
-        actor.id !== editable.submittedById ||
-        !hasText(workflowAction.comment)
+        actor.id !== editable.submittedById
       ) {
         return state;
       }
@@ -2612,7 +2620,9 @@ export function transitionRequest(
       delete editable.edlynClarificationReturnStatus;
       delete editable.lineItemClarifications;
       actionLabel = "Employee answered Procure clarification";
-      comment = workflowAction.comment;
+      comment = hasText(workflowAction.comment)
+        ? workflowAction.comment
+        : "Updated item details for Procure.";
       addNotification(
         nextState.notifications,
         {
