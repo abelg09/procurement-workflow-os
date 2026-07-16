@@ -161,6 +161,82 @@ type SignedInUser = {
   avatarUrl?: string;
 };
 
+type SupabaseBrowserClient = NonNullable<ReturnType<typeof getSupabaseBrowserClient>>;
+type LiveStateRow = {
+  state?: unknown;
+  updated_at?: string | null;
+} | null;
+
+async function saveLiveStateWithRetry(
+  supabaseClient: SupabaseBrowserClient,
+  localState: ProcurementState,
+  authUser: SignedInUser,
+  maxAttempts = 4,
+) {
+  let lastError = "";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const { data, error: fetchError } = await supabaseClient
+      .from("procurement_app_state")
+      .select("state,updated_at")
+      .eq("id", LIVE_STATE_ROW_ID)
+      .maybeSingle();
+
+    if (fetchError) {
+      return { error: fetchError.message, state: localState };
+    }
+
+    const remoteRow = data as LiveStateRow;
+    const remoteState = remoteRow?.state
+      ? parseState(JSON.stringify(remoteRow.state))
+      : null;
+    const stateToSave = remoteState
+      ? mergeProcurementStates(remoteState, localState)
+      : localState;
+    const payload = {
+      id: LIVE_STATE_ROW_ID,
+      state: stateToSave,
+      updated_by: authUser.id,
+      updated_at: nowIso(),
+    };
+
+    if (!remoteRow?.state) {
+      const { error: insertError } = await supabaseClient
+        .from("procurement_app_state")
+        .insert(payload);
+
+      if (!insertError) {
+        return { state: stateToSave };
+      }
+
+      lastError = insertError.message;
+      continue;
+    }
+
+    const { data: updatedRows, error: updateError } = await supabaseClient
+      .from("procurement_app_state")
+      .update(payload)
+      .eq("id", LIVE_STATE_ROW_ID)
+      .eq("updated_at", remoteRow.updated_at ?? "")
+      .select("updated_at");
+
+    if (updateError) {
+      return { error: updateError.message, state: stateToSave };
+    }
+
+    if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+      return { state: stateToSave };
+    }
+
+    lastError = "The workspace changed while saving; retrying with the latest data.";
+  }
+
+  return {
+    error: lastError || "The workspace changed while saving. Please try again.",
+    state: localState,
+  };
+}
+
 type FxRateResult = {
   rate: number;
   date: string;
@@ -6522,7 +6598,7 @@ export default function Home() {
       void (async () => {
         const { data, error } = await supabaseClient
           .from("procurement_app_state")
-          .select("state")
+          .select("state,updated_at")
           .eq("id", LIVE_STATE_ROW_ID)
           .maybeSingle();
 
@@ -6536,7 +6612,7 @@ export default function Home() {
           return;
         }
 
-        const liveStateRow = data as { state?: unknown } | null;
+        const liveStateRow = data as LiveStateRow;
         const localState = applyLaunchCleanup(latestStateRef.current);
         const remoteState = liveStateRow?.state
           ? parseState(JSON.stringify(liveStateRow.state))
@@ -6556,12 +6632,21 @@ export default function Home() {
         setState(hydratedState);
 
         if (!liveStateRow?.state || cleanupApplied || mergeApplied) {
-          await supabaseClient.from("procurement_app_state").upsert({
-            id: LIVE_STATE_ROW_ID,
-            state: hydratedState,
-            updated_by: authUser.id,
-            updated_at: nowIso(),
-          });
+          const saveResult = await saveLiveStateWithRetry(
+            supabaseClient,
+            hydratedState,
+            authUser,
+          );
+
+          if (saveResult.error) {
+            setLiveSyncStatus("error");
+            setLiveSyncError(saveResult.error);
+            return;
+          }
+
+          if (serializeState(saveResult.state) !== serializeState(hydratedState)) {
+            setState(saveResult.state);
+          }
         }
 
         if (!cancelled) {
@@ -6587,44 +6672,21 @@ export default function Home() {
 
     const timeoutId = window.setTimeout(() => {
       void (async () => {
-        const { data, error: fetchError } = await supabaseClient
-          .from("procurement_app_state")
-          .select("state")
-          .eq("id", LIVE_STATE_ROW_ID)
-          .maybeSingle();
-
-        if (fetchError) {
-          setLiveSyncStatus("error");
-          setLiveSyncError(fetchError.message);
-          return;
-        }
-
-        const remoteRow = data as { state?: unknown } | null;
         const localState = applyLaunchCleanup(state);
-        const stateToSave = remoteRow?.state
-          ? mergeProcurementStates(
-              parseState(JSON.stringify(remoteRow.state)),
-              localState,
-            )
-          : localState;
+        const saveResult = await saveLiveStateWithRetry(
+          supabaseClient,
+          localState,
+          authUser,
+        );
 
-        const { error } = await supabaseClient
-          .from("procurement_app_state")
-          .upsert({
-            id: LIVE_STATE_ROW_ID,
-            state: stateToSave,
-            updated_by: authUser.id,
-            updated_at: nowIso(),
-          });
-
-        if (error) {
+        if (saveResult.error) {
           setLiveSyncStatus("error");
-          setLiveSyncError(error.message);
+          setLiveSyncError(saveResult.error);
           return;
         }
 
-        if (serializeState(stateToSave) !== serializeState(state)) {
-          setState(stateToSave);
+        if (serializeState(saveResult.state) !== serializeState(state)) {
+          setState(saveResult.state);
         }
       })();
     }, 500);
