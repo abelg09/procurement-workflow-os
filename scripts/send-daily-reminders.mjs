@@ -25,8 +25,12 @@ const supabaseUrl = required("NEXT_PUBLIC_SUPABASE_URL").replace(/\/$/, "");
 const serviceRoleKey = required("SUPABASE_SERVICE_ROLE_KEY");
 const resendApiKey = optional("RESEND_API_KEY");
 const reminderFrom = optional("REMINDER_EMAIL_FROM");
+const slackBotToken = optional("SLACK_BOT_TOKEN");
 const slackWebhookUrl = optional("SLACK_WEBHOOK_URL");
-const dashboardUrl = process.env.PROCUREMENT_DASHBOARD_URL || DEFAULT_DASHBOARD_URL;
+const dashboardUrl =
+  process.env.APP_BASE_URL ||
+  process.env.PROCUREMENT_DASHBOARD_URL ||
+  DEFAULT_DASHBOARD_URL;
 
 const headers = {
   apikey: serviceRoleKey,
@@ -71,14 +75,24 @@ function isOverdue(request, referenceDate = new Date()) {
 
 function activeAssignedRequests(state, user) {
   return state.requests.filter(
-    (request) => request.assigneeId === user.id && !isClosed(request.status),
+    (request) =>
+      !isClosed(request.status) &&
+      (request.assigneeId === user.id ||
+        (user.role === "Aileen" &&
+          Array.isArray(request.invoices) &&
+          request.invoices.some((invoice) => !invoice.clearedAt))),
   );
 }
 
 function reminderRecipients(state) {
   return DAILY_REMINDER_ROLES.map((role) =>
     state.users.find((user) => user.role === role && user.active),
-  ).filter(Boolean);
+  ).filter(
+    (user) =>
+      user &&
+      user.notificationsEnabled !== false &&
+      user.reminderNotificationsEnabled !== false,
+  );
 }
 
 function htmlEscape(value) {
@@ -155,6 +169,7 @@ function buildEmail(summary, overrides) {
   ].join("");
 
   return {
+    user,
     email: recipientEmail(user, overrides),
     name: user.name,
     subject,
@@ -182,15 +197,20 @@ function slackEscape(value) {
 }
 
 function buildSlackMessage(summaries, mentionOverrides) {
-  const totalActive = summaries.reduce(
+  const slackSummaries = summaries.filter(
+    (summary) =>
+      summary.user?.notificationsEnabled !== false &&
+      summary.user?.slackNotificationsEnabled !== false,
+  );
+  const totalActive = slackSummaries.reduce(
     (total, summary) => total + summary.activeRequests.length,
     0,
   );
-  const totalOverdue = summaries.reduce(
+  const totalOverdue = slackSummaries.reduce(
     (total, summary) => total + summary.overdueRequests.length,
     0,
   );
-  const fields = summaries.map((summary) => {
+  const fields = slackSummaries.map((summary) => {
     const recipient = slackRecipient(summary, mentionOverrides);
     const activeText =
       summary.activeIds.length > 0 ? summary.activeIds.join(", ") : "none";
@@ -265,6 +285,15 @@ async function fetchState() {
 }
 
 async function sendEmail(email) {
+  if (email.user?.emailNotificationsEnabled === false || email.user?.notificationsEnabled === false) {
+    return {
+      email: email.email,
+      name: email.name,
+      status: "skipped",
+      message: "Recipient email notifications are disabled.",
+    };
+  }
+
   if (!resendApiKey || !reminderFrom) {
     return {
       email: email.email,
@@ -347,17 +376,109 @@ async function sendSlackReminder(message) {
   };
 }
 
+async function sendSlackDm(summary) {
+  if (
+    summary.user?.slackNotificationsEnabled === false ||
+    summary.user?.notificationsEnabled === false
+  ) {
+    return {
+      channel: "slack",
+      name: summary.user?.name,
+      status: "skipped",
+      message: "Recipient Slack notifications are disabled.",
+    };
+  }
+
+  if (!slackBotToken) {
+    return {
+      channel: "slack",
+      name: summary.user?.name,
+      status: "skipped",
+      message: "SLACK_BOT_TOKEN is not configured.",
+    };
+  }
+
+  if (!summary.user?.slackUserId) {
+    return {
+      channel: "slack",
+      name: summary.user?.name,
+      status: "skipped",
+      message: "Recipient Slack user ID is not configured.",
+    };
+  }
+
+  const overdueText = summary.overdueIds.length > 0 ? summary.overdueIds.join(", ") : "none";
+  const activeText = summary.activeIds.length > 0 ? summary.activeIds.join(", ") : "none";
+  const response = await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${slackBotToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      channel: summary.user.slackUserId,
+      text: `Procurement reminder | Active: ${summary.activeRequests.length} | Over 24h: ${summary.overdueRequests.length} | ${dashboardUrl}`,
+      blocks: [
+        {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text:
+              summary.overdueRequests.length > 0
+                ? `Procurement reminder: ${summary.overdueRequests.length} overdue task(s)`
+                : "Procurement dashboard reminder",
+            emoji: false,
+          },
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: [
+              `Role queue: *${slackEscape(summary.roleLabel)}*`,
+              `Active assigned tasks: *${summary.activeRequests.length}* (${slackEscape(activeText)})`,
+              `Over 24 hours: *${summary.overdueRequests.length}* (${slackEscape(overdueText)})`,
+              `<${dashboardUrl}|Open Procurement Workflow OS>`,
+            ].join("\n"),
+          },
+        },
+      ],
+    }),
+  });
+  const responseJson = await response.json().catch(() => ({}));
+
+  if (!response.ok || responseJson.ok === false) {
+    return {
+      channel: "slack",
+      name: summary.user.name,
+      status: "failed",
+      message: responseJson.error ?? `Slack returned HTTP ${response.status}.`,
+    };
+  }
+
+  return {
+    channel: "slack",
+    name: summary.user.name,
+    status: "sent",
+    message: "Slack DM sent.",
+  };
+}
+
 const state = await fetchState();
 const emailOverrides = parseOverrides("REMINDER_EMAIL_OVERRIDES");
 const slackMentionOverrides = parseOverrides("SLACK_MENTION_OVERRIDES");
 const summaries = reminderRecipients(state).map((user) => buildReminderSummary(state, user));
 const emails = summaries.map((summary) => buildEmail(summary, emailOverrides));
 const emailResults = await Promise.all(emails.map(sendEmail));
-const slackResult = await sendSlackReminder(
-  buildSlackMessage(summaries, slackMentionOverrides),
-);
-const results = { emailResults, slackResult };
-const failed = [...emailResults, slackResult].filter((result) => result.status === "failed");
+const slackResults = slackBotToken
+  ? await Promise.all(summaries.map(sendSlackDm))
+  : [
+      await sendSlackReminder(
+        buildSlackMessage(summaries, slackMentionOverrides),
+      ),
+    ];
+const results = { emailResults, slackResults };
+const failed = [...emailResults, ...slackResults].filter((result) => result.status === "failed");
 
 console.log(JSON.stringify({ results }, null, 2));
 

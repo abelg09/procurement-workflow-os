@@ -62,8 +62,10 @@ SUPABASE_SERVICE_ROLE_KEY=
 RESEND_API_KEY=
 REMINDER_EMAIL_FROM=
 REMINDER_EMAIL_OVERRIDES=
+SLACK_BOT_TOKEN=
 SLACK_WEBHOOK_URL=
 SLACK_MENTION_OVERRIDES=
+APP_BASE_URL=https://procurement.sulmi.ai/
 PROCUREMENT_DASHBOARD_URL=
 ```
 
@@ -79,10 +81,27 @@ Daily reminder notifications run from `.github/workflows/daily-reminders.yml` at
 - `REMINDER_EMAIL_FROM`, optional for email reminders, for example `Procurement Workflow <procurement@sulmi.ai>`
 - `PROCUREMENT_DASHBOARD_URL`, optional. Defaults to `https://procurement.sulmi.ai/`.
 - `REMINDER_EMAIL_OVERRIDES`, optional comma-separated role or name mappings such as `Mona:mona@sulmi.ai,Rashid:rashid@sulmi.ai,Dr. Majed:dr.majed@sulmi.ai`
+- `SLACK_BOT_TOKEN`, optional Slack bot token for direct Slack DM reminders and immediate approval alerts.
 - `SLACK_WEBHOOK_URL`, optional incoming webhook URL for the Slack reminder channel.
 - `SLACK_MENTION_OVERRIDES`, optional comma-separated role or name mappings such as `Mona:<@U012ABCDEF>,Rashid:<@U045ABCDEF>,Dr. Majed:<@U078ABCDEF>,Procure:<@U091ABCDEF>,Finance:<@U092ABCDEF>`
+- `APP_BASE_URL`, optional. Defaults to `https://procurement.sulmi.ai/` and is used inside Slack/email open-request links.
 
-The reminder job checks Mona, Rashid, Dr. Majed, Amro, Procure, and Finance. Email is sent when Resend settings are present. Slack posts one channel digest when `SLACK_WEBHOOK_URL` is present, with optional user mentions from `SLACK_MENTION_OVERRIDES`.
+The reminder job checks Mona, Rashid, Dr. Majed, Amro, Procure, and Finance. Email is sent when Resend settings are present. Slack sends direct messages when `SLACK_BOT_TOKEN` and each user's Slack user ID are configured in Admin. If no bot token is configured, Slack posts one channel digest when `SLACK_WEBHOOK_URL` is present, with optional user mentions from `SLACK_MENTION_OVERRIDES`.
+
+## Immediate Slack and email alerts
+
+Workflow actions create internal notifications plus outbound delivery records. After the shared Supabase state is saved, the browser calls the `procurement-notifications` Supabase Edge Function to deliver queued email and Slack alerts. Deploy the function and set these Supabase secrets:
+
+```bash
+supabase functions deploy procurement-notifications
+supabase secrets set RESEND_API_KEY=... REMINDER_EMAIL_FROM="Procurement Workflow <procurement@sulmi.ai>"
+supabase secrets set SUPABASE_SERVICE_ROLE_KEY=...
+supabase secrets set SLACK_BOT_TOKEN=xoxb-... APP_BASE_URL=https://procurement.sulmi.ai/
+```
+
+The repository also includes a manual `.github/workflows/supabase-functions.yml` workflow. Add `SUPABASE_ACCESS_TOKEN` as a GitHub secret and `SUPABASE_PROJECT_REF` as a GitHub variable or secret, then run **Deploy Supabase Functions** from GitHub Actions to deploy the function and sync the notification secrets.
+
+Create a Slack app with the `chat:write` bot scope, install it to the Sulmi workspace, and add each approval user's Slack member ID in Admin under `Slack user ID`. Immediate Slack messages include the requester, item, AED amount, current stage, pending action, and an `Open request` button that opens the task inside the app.
 
 ## Custom domain
 

@@ -25,7 +25,9 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           REMINDER_EMAIL_FROM: ${{ vars.REMINDER_EMAIL_FROM || secrets.REMINDER_EMAIL_FROM }}
           REMINDER_EMAIL_OVERRIDES: ${{ vars.REMINDER_EMAIL_OVERRIDES || secrets.REMINDER_EMAIL_OVERRIDES }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_MENTION_OVERRIDES: ${{ vars.SLACK_MENTION_OVERRIDES || secrets.SLACK_MENTION_OVERRIDES }}
+          APP_BASE_URL: ${{ vars.APP_BASE_URL || vars.PROCUREMENT_DASHBOARD_URL || 'https://procurement.sulmi.ai/' }}
           PROCUREMENT_DASHBOARD_URL: ${{ vars.PROCUREMENT_DASHBOARD_URL || 'https://procurement.sulmi.ai/' }}
         run: node scripts/send-daily-reminders.mjs

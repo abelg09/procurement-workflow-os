@@ -78,6 +78,7 @@ import {
   getRequestItemCount,
   getRequestLineItems,
   getRequestTotalAed,
+  getQueuedOutboundNotificationCount,
   getStageIndex,
   getStuckRequests,
   getUserBlockedTasks,
@@ -140,6 +141,8 @@ const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || "")
   .split(",")
   .map((email) => email.trim().toLowerCase())
   .filter(Boolean);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, "");
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
 const LIVE_STATE_ROW_ID = "default";
 
@@ -235,6 +238,44 @@ async function saveLiveStateWithRetry(
     error: lastError || "The workspace changed while saving. Please try again.",
     state: localState,
   };
+}
+
+async function flushQueuedOutboundNotifications(
+  supabaseClient: SupabaseBrowserClient,
+  authUser: SignedInUser,
+) {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return null;
+  }
+
+  const {
+    data: { session },
+  } = await supabaseClient.auth.getSession();
+
+  if (!session?.access_token || session.user.id !== authUser.id) {
+    return null;
+  }
+
+  const response = await fetch(`${supabaseUrl}/functions/v1/procurement-notifications`, {
+    method: "POST",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${session.access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ stateId: LIVE_STATE_ROW_ID }),
+  });
+
+  if (!response.ok) {
+    console.warn("Outbound procurement notifications were queued but not delivered yet.", {
+      status: response.status,
+      body: await response.text().catch(() => ""),
+    });
+    return null;
+  }
+
+  const payload = (await response.json()) as { state?: unknown };
+  return payload.state ? parseState(JSON.stringify(payload.state)) : null;
 }
 
 type FxRateResult = {
@@ -4528,7 +4569,7 @@ function NotificationsCenter({
             <h2 className="text-lg font-bold text-slate-950">Notification center</h2>
           </div>
           <p className="mt-1 text-sm text-slate-500">
-            Internal alerts now, with email and Slack support for 3 PM reminders.
+            Internal alerts with queued email and Slack delivery for task assignments and reminders.
           </p>
         </div>
         <IconButton
@@ -5038,16 +5079,19 @@ function AdminPanel({
             <h3 className="text-base font-bold text-slate-950">Users and roles</h3>
           </div>
           <p className="mt-1 text-sm text-slate-500">
-            Mark approval users on leave to move their pending reviews to the next workflow stage.
+            Mark approval users on leave, manage contact details, and choose who receives email, Slack, and 3 PM reminders.
           </p>
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[640px] text-left text-sm">
+            <table className="w-full min-w-[1180px] text-left text-sm">
               <thead className="text-xs uppercase text-slate-500">
                 <tr>
                   <th className="py-2">User</th>
+                  <th className="py-2">Email</th>
                   <th className="py-2">Role</th>
                   <th className="py-2">Department</th>
                   <th className="py-2">Availability</th>
+                  <th className="py-2">Slack user ID</th>
+                  <th className="py-2">Notifications</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -5056,6 +5100,14 @@ function AdminPanel({
                     <td className="py-3">
                       <p className="font-semibold text-slate-950">{user.name}</p>
                       <p className="text-xs text-slate-500">{user.email}</p>
+                    </td>
+                    <td className="py-3 pr-3">
+                      <TextInput
+                        aria-label={`${user.name} notification email`}
+                        type="email"
+                        value={user.email}
+                        onChange={(event) => updateUser(user.id, { email: event.target.value })}
+                      />
                     </td>
                     <td className="py-3">
                       <SelectInput
@@ -5082,6 +5134,43 @@ function AdminPanel({
                         />
                         {user.active ? "Available" : "On leave"}
                       </label>
+                    </td>
+                    <td className="py-3 pr-3">
+                      <TextInput
+                        aria-label={`${user.name} Slack user ID`}
+                        placeholder="U012ABCDEF"
+                        value={user.slackUserId ?? ""}
+                        onChange={(event) =>
+                          updateUser(user.id, { slackUserId: event.target.value })
+                        }
+                      />
+                    </td>
+                    <td className="py-3">
+                      <div className="grid gap-2 text-xs font-semibold text-slate-600">
+                        {[
+                          ["All", "notificationsEnabled"],
+                          ["Email", "emailNotificationsEnabled"],
+                          ["Slack", "slackNotificationsEnabled"],
+                          ["3 PM", "reminderNotificationsEnabled"],
+                        ].map(([label, key]) => (
+                          <label
+                            className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-1"
+                            key={key}
+                          >
+                            <input
+                              checked={user[key as keyof UserProfile] !== false}
+                              className="h-4 w-4 accent-blue-700"
+                              type="checkbox"
+                              onChange={(event) =>
+                                updateUser(user.id, {
+                                  [key]: event.target.checked,
+                                } as Partial<UserProfile>)
+                              }
+                            />
+                            {label}
+                          </label>
+                        ))}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -5170,6 +5259,59 @@ function AdminPanel({
             >
               Reassign request
             </IconButton>
+          </div>
+        </div>
+
+        <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
+          <div className="flex items-center gap-2">
+            <Bell className="h-5 w-5 text-slate-700" />
+            <h3 className="text-base font-bold text-slate-950">Outbound notification log</h3>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            Latest email and Slack delivery attempts created by workflow notifications.
+          </p>
+          <div className="mt-4 grid gap-2">
+            {(state.outboundNotifications ?? []).length === 0 ? (
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                No outbound notification attempts yet.
+              </div>
+            ) : null}
+            {[...(state.outboundNotifications ?? [])].reverse().slice(0, 12).map((delivery) => (
+              <div
+                className={classNames(insetPanelClass, "grid gap-2 p-3 text-sm")}
+                key={delivery.id}
+              >
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="font-semibold text-slate-950">
+                      {delivery.channel.toUpperCase()} - {delivery.title}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {delivery.requestId ?? "Dashboard"} -{" "}
+                      {getUserById(state.users, delivery.userId)?.name ?? "Unknown"} -{" "}
+                      {formatDateTime(delivery.createdAt)}
+                    </p>
+                  </div>
+                  <span
+                    className={classNames(
+                      "inline-flex rounded-full border px-2 py-1 text-xs font-semibold",
+                      delivery.status === "sent"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                        : delivery.status === "failed"
+                          ? "border-red-200 bg-red-50 text-red-800"
+                          : delivery.status === "skipped"
+                            ? "border-slate-200 bg-slate-50 text-slate-700"
+                            : "border-amber-200 bg-amber-50 text-amber-800",
+                    )}
+                  >
+                    {delivery.status}
+                  </span>
+                </div>
+                {delivery.error ? (
+                  <p className="text-xs font-medium text-red-700">{delivery.error}</p>
+                ) : null}
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -6483,6 +6625,30 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const requestId = params.get("request")?.trim();
+    if (!requestId) return;
+    const requestedView = params.get("view") as View | null;
+    const allowedDeepLinkViews: View[] = [
+      "dashboard",
+      "work-queue",
+      "company-dashboard",
+      "notifications",
+      "trash",
+      "admin",
+    ];
+    window.queueMicrotask(() => {
+      setSelectedRequestId(requestId.toUpperCase());
+      setView(
+        requestedView && allowedDeepLinkViews.includes(requestedView)
+          ? requestedView
+          : "work-queue",
+      );
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     let cancelled = false;
     window.queueMicrotask(() => {
       if (cancelled) return;
@@ -6638,15 +6804,30 @@ export default function Home() {
             authUser,
           );
 
-          if (saveResult.error) {
-            setLiveSyncStatus("error");
-            setLiveSyncError(saveResult.error);
+        if (saveResult.error) {
+          setLiveSyncStatus("error");
+          setLiveSyncError(saveResult.error);
+          return;
+        }
+
+        if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
+          const deliveredState = await flushQueuedOutboundNotifications(
+            supabaseClient,
+            authUser,
+          );
+
+          if (deliveredState && serializeState(deliveredState) !== serializeState(hydratedState)) {
+            setState(deliveredState);
+            if (!cancelled) {
+              setLiveSyncStatus("ready");
+            }
             return;
           }
+        }
 
-          if (serializeState(saveResult.state) !== serializeState(hydratedState)) {
-            setState(saveResult.state);
-          }
+        if (serializeState(saveResult.state) !== serializeState(hydratedState)) {
+          setState(saveResult.state);
+        }
         }
 
         if (!cancelled) {
@@ -6683,6 +6864,18 @@ export default function Home() {
           setLiveSyncStatus("error");
           setLiveSyncError(saveResult.error);
           return;
+        }
+
+        if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
+          const deliveredState = await flushQueuedOutboundNotifications(
+            supabaseClient,
+            authUser,
+          );
+
+          if (deliveredState && serializeState(deliveredState) !== serializeState(state)) {
+            setState(deliveredState);
+            return;
+          }
         }
 
         if (serializeState(saveResult.state) !== serializeState(state)) {

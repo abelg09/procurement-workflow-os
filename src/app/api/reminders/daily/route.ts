@@ -26,6 +26,7 @@ type SlackResult = {
 
 function dashboardUrl() {
   return (
+    process.env.APP_BASE_URL ||
     process.env.PROCUREMENT_DASHBOARD_URL ||
     process.env.NEXT_PUBLIC_DASHBOARD_URL ||
     DEFAULT_DASHBOARD_URL
@@ -82,9 +83,12 @@ function buildSlackMessage(
   payloads: DailyReminderEmail[],
   overrides: Record<string, string>,
 ) {
-  const totalActive = payloads.reduce((total, payload) => total + payload.activeCount, 0);
-  const totalOverdue = payloads.reduce((total, payload) => total + payload.overdueCount, 0);
-  const fields = payloads.map((payload) => {
+  const slackPayloads = payloads.filter(
+    (payload) => payload.notificationsEnabled && payload.slackNotificationsEnabled,
+  );
+  const totalActive = slackPayloads.reduce((total, payload) => total + payload.activeCount, 0);
+  const totalOverdue = slackPayloads.reduce((total, payload) => total + payload.overdueCount, 0);
+  const fields = slackPayloads.map((payload) => {
     const mention = resolvedSlackMention(payload, overrides);
     const activeText =
       payload.activeRequestIds.length > 0
@@ -151,6 +155,15 @@ async function sendReminderEmail(
   const from = process.env.REMINDER_EMAIL_FROM;
   const email = resolvedRecipientEmail(payload, overrides);
 
+  if (!payload.notificationsEnabled || !payload.emailNotificationsEnabled) {
+    return {
+      email,
+      name: payload.name,
+      status: "skipped",
+      message: "Recipient email notifications are disabled.",
+    };
+  }
+
   if (!apiKey || !from) {
     return {
       email,
@@ -199,6 +212,79 @@ async function sendReminderEmail(
     name: payload.name,
     status: "sent",
     message: "Email sent.",
+  };
+}
+
+async function sendSlackDm(payload: DailyReminderEmail): Promise<SlackResult> {
+  const botToken = process.env.SLACK_BOT_TOKEN;
+
+  if (!payload.notificationsEnabled || !payload.slackNotificationsEnabled) {
+    return {
+      channel: "slack",
+      status: "skipped",
+      message: `${payload.name}: Slack notifications are disabled.`,
+    };
+  }
+
+  if (!botToken) {
+    return {
+      channel: "slack",
+      status: "skipped",
+      message: "SLACK_BOT_TOKEN is not configured.",
+    };
+  }
+
+  if (!payload.slackUserId) {
+    return {
+      channel: "slack",
+      status: "skipped",
+      message: `${payload.name}: Slack user ID is not configured.`,
+    };
+  }
+
+  const response = await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${botToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      channel: payload.slackUserId,
+      text: `${payload.subject} | ${dashboardUrl()}`,
+      blocks: [
+        {
+          type: "header",
+          text: { type: "plain_text", text: payload.subject, emoji: false },
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: [
+              `Role queue: *${slackEscape(payload.roleLabel)}*`,
+              `Active assigned tasks: *${payload.activeCount}* (${slackEscape(payload.activeRequestIds.join(", ") || "none")})`,
+              `Over 24 hours: *${payload.overdueCount}* (${slackEscape(payload.overdueRequestIds.join(", ") || "none")})`,
+              `<${dashboardUrl()}|Open Procurement Workflow OS>`,
+            ].join("\n"),
+          },
+        },
+      ],
+    }),
+  });
+  const responseJson = await response.json().catch(() => ({}));
+
+  if (!response.ok || responseJson.ok === false) {
+    return {
+      channel: "slack",
+      status: "failed",
+      message: responseJson.error ?? `Slack returned HTTP ${response.status}.`,
+    };
+  }
+
+  return {
+    channel: "slack",
+    status: "sent",
+    message: "Slack DM sent.",
   };
 }
 
@@ -285,8 +371,10 @@ export async function POST() {
   const emailResults = await Promise.all(
     emailPayloads.map((payload) => sendReminderEmail(payload, overrides)),
   );
-  const slackResult = await sendSlackReminder(emailPayloads, slackMentionOverrides);
-  const failed = [...emailResults, slackResult].filter(
+  const slackResults = process.env.SLACK_BOT_TOKEN
+    ? await Promise.all(emailPayloads.map(sendSlackDm))
+    : [await sendSlackReminder(emailPayloads, slackMentionOverrides)];
+  const failed = [...emailResults, ...slackResults].filter(
     (result) => result.status === "failed",
   );
 
@@ -296,7 +384,7 @@ export async function POST() {
       inserted,
       schedule: "Daily at 3:00 PM Asia/Dubai",
       emailResults,
-      slackResult,
+      slackResults,
     },
     { status: failed.length === 0 ? 200 : 502 },
   );

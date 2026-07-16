@@ -160,6 +160,13 @@ create table if not exists profiles (
   updated_at timestamptz not null default now()
 );
 
+alter table profiles
+  add column if not exists slack_user_id text,
+  add column if not exists notifications_enabled boolean not null default true,
+  add column if not exists email_notifications_enabled boolean not null default true,
+  add column if not exists slack_notifications_enabled boolean not null default true,
+  add column if not exists reminder_notifications_enabled boolean not null default true;
+
 create table if not exists procurement_requests (
   id text primary key,
   employee_name text not null,

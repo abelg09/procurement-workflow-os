@@ -205,6 +205,11 @@ export type UserProfile = {
   role: Role;
   department: string;
   active: boolean;
+  slackUserId?: string;
+  notificationsEnabled?: boolean;
+  emailNotificationsEnabled?: boolean;
+  slackNotificationsEnabled?: boolean;
+  reminderNotificationsEnabled?: boolean;
 };
 
 export type AttachmentReference = {
@@ -366,6 +371,34 @@ export type NotificationRecord = {
   createdAt: string;
 };
 
+export type OutboundNotificationChannel = "email" | "slack";
+export type OutboundNotificationStatus = "queued" | "sent" | "failed" | "skipped";
+
+export type OutboundNotificationLog = {
+  id: string;
+  notificationId: string;
+  userId: string;
+  requestId?: string | null;
+  channel: OutboundNotificationChannel;
+  eventType: NotificationRecord["type"];
+  title: string;
+  body: string;
+  requesterName?: string;
+  itemName?: string;
+  totalAed?: number;
+  project?: string;
+  department?: string;
+  stageLabel?: string;
+  pendingAction?: string;
+  status: OutboundNotificationStatus;
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+  sentAt?: string;
+  error?: string;
+  providerMessageId?: string;
+};
+
 export type ChatbotMessage = {
   id: string;
   userId: string;
@@ -379,6 +412,7 @@ export type ProcurementState = {
   requests: ProcurementRequest[];
   auditLogs: AuditLog[];
   notifications: NotificationRecord[];
+  outboundNotifications: OutboundNotificationLog[];
   chatbotMessages: ChatbotMessage[];
   projectOptions: string[];
   maintenance?: {
@@ -527,6 +561,10 @@ export function mergeProcurementStates(
     localState.notifications,
     mergedRequests.requestIdRemaps,
   );
+  const localOutboundNotifications = remapRequestReference(
+    localState.outboundNotifications ?? [],
+    mergedRequests.requestIdRemaps,
+  );
 
   return {
     ...remoteState,
@@ -539,6 +577,14 @@ export function mergeProcurementStates(
     notifications: mergeUniqueById(
       remoteState.notifications,
       localNotifications,
+    ).sort(compareByDateDesc((notification) => notification.createdAt)),
+    outboundNotifications: mergeUniqueById(
+      remoteState.outboundNotifications ?? [],
+      localOutboundNotifications,
+      (remoteItem, localItem) =>
+        latestTimestampValue(localItem.updatedAt) >= latestTimestampValue(remoteItem.updatedAt)
+          ? localItem
+          : remoteItem,
     ).sort(compareByDateDesc((notification) => notification.createdAt)),
     chatbotMessages: mergeUniqueById(
       remoteState.chatbotMessages,
@@ -582,6 +628,10 @@ export type DailyReminderEmail = {
   role: Role;
   roleLabel: string;
   email: string;
+  slackUserId?: string;
+  notificationsEnabled: boolean;
+  emailNotificationsEnabled: boolean;
+  slackNotificationsEnabled: boolean;
   activeCount: number;
   overdueCount: number;
   activeRequestIds: string[];
@@ -1420,6 +1470,7 @@ export const initialState: ProcurementState = {
   requests: [],
   auditLogs: [],
   notifications: [],
+  outboundNotifications: [],
   chatbotMessages: [],
   projectOptions: [...DEFAULT_PROJECT_OPTIONS],
 };
@@ -1585,6 +1636,130 @@ export function makeId(prefix: string) {
 
 export function nowIso() {
   return new Date().toISOString();
+}
+
+export function isUserNotificationEnabled(user: UserProfile) {
+  return user.notificationsEnabled !== false;
+}
+
+export function isUserEmailNotificationEnabled(user: UserProfile) {
+  return isUserNotificationEnabled(user) && user.emailNotificationsEnabled !== false;
+}
+
+export function isUserSlackNotificationEnabled(user: UserProfile) {
+  return isUserNotificationEnabled(user) && user.slackNotificationsEnabled !== false;
+}
+
+export function isUserReminderNotificationEnabled(user: UserProfile) {
+  return isUserNotificationEnabled(user) && user.reminderNotificationsEnabled !== false;
+}
+
+function getStageLabel(stage: WorkflowStage) {
+  return WORKFLOW_STAGES.find((candidate) => candidate.key === stage)?.label ?? stage;
+}
+
+function shouldQueueExternalNotification(notification: NotificationRecord) {
+  return notification.type !== "reminder";
+}
+
+function outboundBodyForNotification(
+  notification: NotificationRecord,
+  request: ProcurementRequest | undefined,
+) {
+  if (!request) {
+    return notification.body;
+  }
+
+  const details = [
+    notification.body,
+    "",
+    `Requested by: ${request.employeeName}`,
+    `Item: ${request.itemName}`,
+    `Amount: AED ${getRequestTotalAed(request).toLocaleString(undefined, {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+    })}`,
+    `Project: ${request.project}`,
+    `Department: ${request.department}`,
+    `Stage: ${getStageLabel(request.stage)}`,
+    `Pending action: ${getPendingAction(request)}`,
+  ];
+
+  return details.join("\n");
+}
+
+function queueOutboundNotificationsForNewInternalNotifications(
+  state: ProcurementState,
+  existingNotificationIds: Set<string>,
+  dateTime: string,
+) {
+  const existingDeliveryKeys = new Set(
+    (state.outboundNotifications ?? []).map((delivery) => `${delivery.notificationId}:${delivery.channel}`),
+  );
+  const queuedDeliveries = [...(state.outboundNotifications ?? [])];
+
+  state.notifications
+    .filter(
+      (notification) =>
+        !existingNotificationIds.has(notification.id) &&
+        shouldQueueExternalNotification(notification),
+    )
+    .forEach((notification) => {
+      const user = getUserById(state.users, notification.userId);
+      const request = notification.requestId
+        ? state.requests.find((candidate) => candidate.id === notification.requestId)
+        : undefined;
+
+      if (!user || !isUserNotificationEnabled(user)) {
+        return;
+      }
+
+      const channels: OutboundNotificationChannel[] = [];
+      if (isUserEmailNotificationEnabled(user)) {
+        channels.push("email");
+      }
+      if (isUserSlackNotificationEnabled(user)) {
+        channels.push("slack");
+      }
+
+      channels.forEach((channel) => {
+        const deliveryKey = `${notification.id}:${channel}`;
+        if (existingDeliveryKeys.has(deliveryKey)) {
+          return;
+        }
+
+        existingDeliveryKeys.add(deliveryKey);
+        queuedDeliveries.push({
+          id: makeId(`outbound-${channel}`),
+          notificationId: notification.id,
+          userId: user.id,
+          requestId: notification.requestId,
+          channel,
+          eventType: notification.type,
+          title: notification.title,
+          body: outboundBodyForNotification(notification, request),
+          requesterName: request?.employeeName,
+          itemName: request?.itemName,
+          totalAed: request ? getRequestTotalAed(request) : undefined,
+          project: request?.project,
+          department: request?.department,
+          stageLabel: request ? getStageLabel(request.stage) : undefined,
+          pendingAction: request ? getPendingAction(request) : undefined,
+          status: "queued",
+          attempts: 0,
+          createdAt: dateTime,
+          updatedAt: dateTime,
+        });
+      });
+    });
+
+  state.outboundNotifications = queuedDeliveries;
+}
+
+export function getQueuedOutboundNotificationCount(state: ProcurementState) {
+  return (state.outboundNotifications ?? []).filter(
+    (delivery) => delivery.status === "queued",
+  ).length;
 }
 
 function mergeLogistics(
@@ -1916,8 +2091,10 @@ export function submitProcurementRequest(
     requests: [request, ...state.requests],
     auditLogs: [...state.auditLogs],
     notifications: [...state.notifications],
+    outboundNotifications: [...(state.outboundNotifications ?? [])],
     chatbotMessages: state.chatbotMessages,
   };
+  const existingNotificationIds = new Set(state.notifications.map((notification) => notification.id));
 
   addAudit(nextState.auditLogs, request, actor, "Draft", "Submitted request", dateTime, {
     assignedPerson: monaUser.name,
@@ -1978,6 +2155,11 @@ export function submitProcurementRequest(
 
     const routed = applyRoute(route);
     if (!routed) {
+      queueOutboundNotificationsForNewInternalNotifications(
+        nextState,
+        existingNotificationIds,
+        dateTime,
+      );
       return nextState;
     }
     const skipComment = skippedRolesComment([
@@ -2009,6 +2191,12 @@ export function submitProcurementRequest(
       dateTime,
     );
   }
+
+  queueOutboundNotificationsForNewInternalNotifications(
+    nextState,
+    existingNotificationIds,
+    dateTime,
+  );
 
   return nextState;
 }
@@ -2044,8 +2232,10 @@ export function transitionRequest(
     requests: nextRequests,
     auditLogs: [...state.auditLogs],
     notifications: [...state.notifications],
+    outboundNotifications: [...(state.outboundNotifications ?? [])],
     chatbotMessages: state.chatbotMessages,
   };
+  const existingNotificationIds = new Set(state.notifications.map((notification) => notification.id));
 
   const previousStatus = editable.status;
   let actionLabel = "Updated request";
@@ -3043,6 +3233,12 @@ export function transitionRequest(
     assignedPerson: getAssigneeName(editable, state.users),
   });
 
+  queueOutboundNotificationsForNewInternalNotifications(
+    nextState,
+    existingNotificationIds,
+    dateTime,
+  );
+
   return nextState;
 }
 
@@ -3108,7 +3304,9 @@ export function updateUserAvailability(
     })),
     auditLogs: [...state.auditLogs],
     notifications: [...state.notifications],
+    outboundNotifications: [...(state.outboundNotifications ?? [])],
   };
+  const existingNotificationIds = new Set(state.notifications.map((notification) => notification.id));
 
   if (active || !isSkippableReviewRole(targetUser.role)) {
     return nextState;
@@ -3168,6 +3366,12 @@ export function updateUserAvailability(
       },
     );
   });
+
+  queueOutboundNotificationsForNewInternalNotifications(
+    nextState,
+    existingNotificationIds,
+    dateTime,
+  );
 
   return nextState;
 }
@@ -3253,7 +3457,13 @@ export function getUserBlockedTasks(
 export function getDailyReminderRecipients(users: UserProfile[]) {
   return DAILY_REMINDER_ROLES.map((role) =>
     users.find((user) => user.role === role && user.active),
-  ).filter((user): user is UserProfile => Boolean(user));
+  ).filter((user): user is UserProfile => {
+    if (!user) {
+      return false;
+    }
+
+    return isUserReminderNotificationEnabled(user);
+  });
 }
 
 export function getActiveAssignedRequests(
@@ -3326,6 +3536,10 @@ export function getDailyReminderEmailPayloads(
       role: user.role,
       roleLabel,
       email: user.email,
+      slackUserId: user.slackUserId,
+      notificationsEnabled: isUserNotificationEnabled(user),
+      emailNotificationsEnabled: isUserEmailNotificationEnabled(user),
+      slackNotificationsEnabled: isUserSlackNotificationEnabled(user),
       activeCount: activeRequests.length,
       overdueCount: overdueRequests.length,
       activeRequestIds,
@@ -3634,6 +3848,14 @@ export function parseState(serialized: string | null) {
     );
     return deduped.length > 0 ? deduped : [...DEFAULT_PROJECT_OPTIONS];
   };
+  const normalizeUserNotificationPreferences = (user: UserProfile): UserProfile => ({
+    ...user,
+    slackUserId: textValue(user.slackUserId),
+    notificationsEnabled: user.notificationsEnabled !== false,
+    emailNotificationsEnabled: user.emailNotificationsEnabled !== false,
+    slackNotificationsEnabled: user.slackNotificationsEnabled !== false,
+    reminderNotificationsEnabled: user.reminderNotificationsEnabled !== false,
+  });
   const normalizeApprovalUser = (user: UserProfile): UserProfile => {
     const migratedUser = {
       ...user,
@@ -3656,14 +3878,14 @@ export function parseState(serialized: string | null) {
       email === "edlyn@example.com" ||
       email === PROCURE_APPROVAL_EMAIL.toLowerCase()
     ) {
-      return {
+      return normalizeUserNotificationPreferences({
         ...migratedUser,
         name: "Procure",
         email: PROCURE_APPROVAL_EMAIL,
         role: "Edlyn",
         department: "Procurement",
         active: true,
-      };
+      });
     }
 
     if (
@@ -3671,24 +3893,24 @@ export function parseState(serialized: string | null) {
       email === "aileen@example.com" ||
       email === FINANCE_APPROVAL_EMAIL.toLowerCase()
     ) {
-      return {
+      return normalizeUserNotificationPreferences({
         ...migratedUser,
         name: "Finance",
         email: FINANCE_APPROVAL_EMAIL,
         role: "Aileen",
         department: "Finance",
         active: true,
-      };
+      });
     }
 
     if (personalRequesterEmails.has(email)) {
-      return {
+      return normalizeUserNotificationPreferences({
         ...migratedUser,
         role: "Employee",
-      };
+      });
     }
 
-    return migratedUser;
+    return normalizeUserNotificationPreferences(migratedUser);
   };
 
   const migrateState = (
@@ -3731,6 +3953,55 @@ export function parseState(serialized: string | null) {
         notification.title !== "Task assigned" ||
         !specificNotificationKeys.has(notificationKey(notification)),
     );
+    const normalizeOutboundNotification = (
+      delivery: Partial<OutboundNotificationLog>,
+    ): OutboundNotificationLog | null => {
+      const id = textValue(delivery.id).trim();
+      const notificationId = textValue(delivery.notificationId).trim();
+      const userId = migrateUserId(delivery.userId);
+      const channel = delivery.channel === "slack" ? "slack" : "email";
+      const status = ["queued", "sent", "failed", "skipped"].includes(
+        String(delivery.status),
+      )
+        ? (delivery.status as OutboundNotificationStatus)
+        : "queued";
+
+      if (!id || !notificationId || !userId) {
+        return null;
+      }
+
+      return {
+        id,
+        notificationId,
+        userId,
+        requestId: delivery.requestId ? migrateText(String(delivery.requestId)) : null,
+        channel,
+        eventType:
+          delivery.eventType && delivery.eventType !== "reminder"
+            ? delivery.eventType
+            : "system",
+        title: migrateApprovalDisplayText(delivery.title),
+        body: migrateApprovalDisplayText(delivery.body),
+        requesterName: delivery.requesterName
+          ? migrateApprovalDisplayText(delivery.requesterName)
+          : undefined,
+        itemName: delivery.itemName ? migrateApprovalDisplayText(delivery.itemName) : undefined,
+        totalAed: finiteNumberValue(delivery.totalAed, 0) || undefined,
+        project: delivery.project ? String(delivery.project) : undefined,
+        department: delivery.department ? migrateDepartment(String(delivery.department)) : undefined,
+        stageLabel: delivery.stageLabel ? migrateApprovalDisplayText(delivery.stageLabel) : undefined,
+        pendingAction: delivery.pendingAction
+          ? migrateApprovalDisplayText(delivery.pendingAction)
+          : undefined,
+        status,
+        attempts: finiteNumberValue(delivery.attempts, 0),
+        createdAt: textValue(delivery.createdAt, nowIso()),
+        updatedAt: textValue(delivery.updatedAt, delivery.createdAt ?? nowIso()),
+        sentAt: textValue(delivery.sentAt) || undefined,
+        error: textValue(delivery.error) || undefined,
+        providerMessageId: textValue(delivery.providerMessageId) || undefined,
+      };
+    };
 
     return {
       ...state,
@@ -3833,6 +4104,11 @@ export function parseState(serialized: string | null) {
           : log.assignedPerson,
       })),
       notifications,
+      outboundNotifications: Array.isArray(state.outboundNotifications)
+        ? state.outboundNotifications
+            .map(normalizeOutboundNotification)
+            .filter((delivery): delivery is OutboundNotificationLog => Boolean(delivery))
+        : [],
       chatbotMessages: state.chatbotMessages.map((message) => ({
         ...message,
         userId: migrateUserId(message.userId),
