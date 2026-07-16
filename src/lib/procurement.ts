@@ -427,25 +427,118 @@ function chooseLatestRequest(
   return localUpdatedAt >= remoteUpdatedAt ? localRequest : remoteRequest;
 }
 
+function isSameRequestIdentity(
+  remoteRequest: ProcurementRequest,
+  localRequest: ProcurementRequest,
+) {
+  return (
+    remoteRequest.createdAt === localRequest.createdAt &&
+    remoteRequest.submittedById === localRequest.submittedById
+  );
+}
+
+function nextAvailableRequestId(usedIds: Set<string>) {
+  let highest = 100;
+  usedIds.forEach((id) => {
+    const numeric = Number(id.replace("PR-", ""));
+    if (Number.isFinite(numeric)) {
+      highest = Math.max(highest, numeric);
+    }
+  });
+
+  let next = highest + 1;
+  let candidate = `PR-${next}`;
+  while (usedIds.has(candidate)) {
+    next += 1;
+    candidate = `PR-${next}`;
+  }
+  usedIds.add(candidate);
+  return candidate;
+}
+
+function mergeRequestsWithCollisionRecovery(
+  remoteRequests: ProcurementRequest[],
+  localRequests: ProcurementRequest[],
+) {
+  const merged = new Map<string, ProcurementRequest>();
+  const usedIds = new Set<string>();
+  const requestIdRemaps = new Map<string, string>();
+
+  remoteRequests.forEach((request) => {
+    merged.set(request.id, request);
+    usedIds.add(request.id);
+  });
+
+  localRequests.forEach((request) => {
+    const existing = merged.get(request.id);
+
+    if (!existing) {
+      merged.set(request.id, request);
+      usedIds.add(request.id);
+      return;
+    }
+
+    if (isSameRequestIdentity(existing, request)) {
+      merged.set(request.id, chooseLatestRequest(existing, request));
+      return;
+    }
+
+    const recoveredId = nextAvailableRequestId(usedIds);
+    requestIdRemaps.set(request.id, recoveredId);
+    merged.set(recoveredId, {
+      ...request,
+      id: recoveredId,
+    });
+  });
+
+  return {
+    requests: Array.from(merged.values()).sort(compareByDateDesc((request) => request.createdAt)),
+    requestIdRemaps,
+  };
+}
+
+function remapRequestReference<T extends { requestId?: string | null }>(
+  items: T[],
+  requestIdRemaps: Map<string, string>,
+) {
+  if (requestIdRemaps.size === 0) {
+    return items;
+  }
+
+  return items.map((item) => {
+    const requestId = item.requestId ? requestIdRemaps.get(item.requestId) : undefined;
+    return requestId ? { ...item, requestId } : item;
+  });
+}
+
 export function mergeProcurementStates(
   remoteState: ProcurementState,
   localState: ProcurementState,
 ): ProcurementState {
+  const mergedRequests = mergeRequestsWithCollisionRecovery(
+    remoteState.requests,
+    localState.requests,
+  );
+  const localAuditLogs = remapRequestReference(
+    localState.auditLogs,
+    mergedRequests.requestIdRemaps,
+  );
+  const localNotifications = remapRequestReference(
+    localState.notifications,
+    mergedRequests.requestIdRemaps,
+  );
+
   return {
     ...remoteState,
     ...localState,
-    users: localState.users,
-    requests: mergeUniqueById(
-      remoteState.requests,
-      localState.requests,
-      chooseLatestRequest,
-    ).sort(compareByDateDesc((request) => request.createdAt)),
-    auditLogs: mergeUniqueById(remoteState.auditLogs, localState.auditLogs).sort(
+    users: mergeUniqueById(remoteState.users, localState.users),
+    requests: mergedRequests.requests,
+    auditLogs: mergeUniqueById(remoteState.auditLogs, localAuditLogs).sort(
       compareByDateDesc((auditLog) => auditLog.dateTime),
     ),
     notifications: mergeUniqueById(
       remoteState.notifications,
-      localState.notifications,
+      localNotifications,
     ).sort(compareByDateDesc((notification) => notification.createdAt)),
     chatbotMessages: mergeUniqueById(
       remoteState.chatbotMessages,
