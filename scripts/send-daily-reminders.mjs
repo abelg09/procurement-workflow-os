@@ -73,11 +73,24 @@ function isOverdue(request, referenceDate = new Date()) {
   );
 }
 
+function isWorkflowQueueRole(role) {
+  return !["Employee", "Admin"].includes(role);
+}
+
+function isRequestAssignedToRole(state, request, user) {
+  if (!isWorkflowQueueRole(user.role)) {
+    return false;
+  }
+
+  return state.users.find((candidate) => candidate.id === request.assigneeId)?.role === user.role;
+}
+
 function activeAssignedRequests(state, user) {
   return state.requests.filter(
     (request) =>
       !isClosed(request.status) &&
       (request.assigneeId === user.id ||
+        isRequestAssignedToRole(state, request, user) ||
         (user.role === "Aileen" &&
           Array.isArray(request.invoices) &&
           request.invoices.some((invoice) => !invoice.clearedAt))),

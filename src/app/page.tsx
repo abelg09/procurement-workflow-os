@@ -554,7 +554,9 @@ const roleFromSignedInUser = (user: SignedInUser): Role => {
 
   if (identity.includes("mona")) return "Mona";
   if (identity.includes("rashid")) return "Rashid";
-  if (identity.includes("majed") || identity.includes("masjid")) return "Dr. Majed";
+  if (identity.includes("majed") || identity.includes("masjid") || identity.includes("boujelben")) {
+    return "Dr. Majed";
+  }
   if (identity.includes("amro") || identity.includes("aamro") || identity.includes("mandil")) {
     return "Amro";
   }
@@ -567,13 +569,30 @@ const getSignedInProfile = (
   user: SignedInUser,
 ): UserProfile => {
   const inferredRole = roleFromSignedInUser(user);
+  const existing = state.users.find(
+    (profile) => profile.email.toLowerCase() === user.email,
+  );
+  const effectiveRole =
+    inferredRole === "Employee" && existing && existing.role !== "Employee"
+      ? existing.role
+      : inferredRole;
   const displayName =
-    inferredRole === "Edlyn" || inferredRole === "Aileen"
-      ? getRoleDisplayName(inferredRole)
+    effectiveRole === "Edlyn" || effectiveRole === "Aileen"
+      ? getRoleDisplayName(effectiveRole)
       : user.name;
+
+  if (existing) {
+    return {
+      ...existing,
+      name: displayName,
+      email: user.email,
+      role: effectiveRole,
+    };
+  }
+
   const roleProfile =
-    inferredRole !== "Employee"
-      ? state.users.find((profile) => profile.role === inferredRole)
+    effectiveRole !== "Employee"
+      ? state.users.find((profile) => profile.role === effectiveRole)
       : null;
 
   if (roleProfile) {
@@ -581,31 +600,15 @@ const getSignedInProfile = (
       ...roleProfile,
       name: displayName,
       email: user.email,
-      role: inferredRole,
+      role: effectiveRole,
     };
-  }
-
-  const existing = state.users.find(
-    (profile) => profile.email.toLowerCase() === user.email,
-  );
-
-  if (existing) {
-    if (existing.role !== inferredRole) {
-      return {
-        ...existing,
-        name: displayName,
-        role: inferredRole,
-      };
-    }
-
-    return existing;
   }
 
   return {
     id: profileIdForSignedInUser(user),
     name: displayName,
     email: user.email,
-    role: inferredRole,
+    role: effectiveRole,
     department: "Operations",
     active: true,
   };
@@ -2427,7 +2430,7 @@ function RequestsTable({
           </div>
         ) : (
           filtered.map((request) => {
-            const blocked = currentUser ? isUserBlockedTask(request, currentUser) : false;
+            const blocked = currentUser ? isUserBlockedTask(request, currentUser, users) : false;
             const overdue = isRequestOverdue(request);
             const needsAttention = blocked || overdue;
 
@@ -2533,7 +2536,7 @@ function RequestsTable({
               </tr>
             ) : (
               filtered.map((request) => {
-                const blocked = currentUser ? isUserBlockedTask(request, currentUser) : false;
+                const blocked = currentUser ? isUserBlockedTask(request, currentUser, users) : false;
                 const overdue = isRequestOverdue(request);
                 const needsAttention = blocked || overdue;
 
@@ -6477,7 +6480,7 @@ function Dashboard({
     visibleRequests.find((request) => request.id === selectedRequestId) ??
     visibleRequests[0];
   const metrics = getMetrics(visibleRequests);
-  const blockedTasks = getUserBlockedTasks(state.requests, currentUser);
+  const blockedTasks = getUserBlockedTasks(state.requests, currentUser, state.users);
   const watchlistRequests = blockedTasks.length > 0 ? blockedTasks : getStuckRequests(state.requests);
   const showingPersonalBlockages = blockedTasks.length > 0;
 

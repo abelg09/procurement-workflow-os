@@ -3403,6 +3403,7 @@ export function getVisibleRequests(state: ProcurementState, user: UserProfile) {
     (request) =>
       request.status !== "Cancelled" &&
       (request.assigneeId === user.id ||
+        isRequestAssignedToRole(request, user, state.users) ||
         request.submittedById === user.id ||
         (user.role === "Aileen" && isInvoiceFinancePending(request))),
   );
@@ -3434,14 +3435,31 @@ export function getStuckRequests(
   return requests.filter((request) => isRequestOverdue(request, referenceDate));
 }
 
+function isWorkflowQueueRole(role: Role) {
+  return !["Employee", "Admin"].includes(role);
+}
+
+function isRequestAssignedToRole(
+  request: ProcurementRequest,
+  user: UserProfile,
+  users: UserProfile[],
+) {
+  if (!isWorkflowQueueRole(user.role)) {
+    return false;
+  }
+
+  return getUserById(users, request.assigneeId)?.role === user.role;
+}
+
 export function isUserBlockedTask(
   request: ProcurementRequest,
   user: UserProfile,
+  users: UserProfile[] = [],
   referenceDate = new Date(),
 ) {
   return (
     !isClosed(request.status) &&
-    request.assigneeId === user.id &&
+    (request.assigneeId === user.id || isRequestAssignedToRole(request, user, users)) &&
     getStuckRequests([request], referenceDate).length > 0
   );
 }
@@ -3449,9 +3467,10 @@ export function isUserBlockedTask(
 export function getUserBlockedTasks(
   requests: ProcurementRequest[],
   user: UserProfile,
+  users: UserProfile[] = [],
   referenceDate = new Date(),
 ) {
-  return requests.filter((request) => isUserBlockedTask(request, user, referenceDate));
+  return requests.filter((request) => isUserBlockedTask(request, user, users, referenceDate));
 }
 
 export function getDailyReminderRecipients(users: UserProfile[]) {
@@ -3469,11 +3488,13 @@ export function getDailyReminderRecipients(users: UserProfile[]) {
 export function getActiveAssignedRequests(
   requests: ProcurementRequest[],
   user: UserProfile,
+  users: UserProfile[] = [],
 ) {
   return requests.filter(
     (request) =>
       !isClosed(request.status) &&
       (request.assigneeId === user.id ||
+        isRequestAssignedToRole(request, user, users) ||
         (user.role === "Aileen" && isInvoiceFinancePending(request))),
   );
 }
@@ -3494,7 +3515,7 @@ export function getDailyReminderEmailPayloads(
   const dashboardLink = dashboardUrl || "https://procurement.sulmi.ai/";
 
   return getDailyReminderRecipients(state.users).map((user) => {
-    const activeRequests = getActiveAssignedRequests(state.requests, user);
+    const activeRequests = getActiveAssignedRequests(state.requests, user, state.users);
     const overdueRequests = activeRequests.filter((request) =>
       isRequestOverdue(request, referenceDate),
     );
@@ -3596,7 +3617,7 @@ export function createDailyReminderNotifications(state: ProcurementState) {
   const nextNotifications = [...state.notifications];
 
   recipients.forEach((user) => {
-    const activeRequests = getActiveAssignedRequests(state.requests, user);
+    const activeRequests = getActiveAssignedRequests(state.requests, user, state.users);
     const overdueRequests = activeRequests.filter((request) =>
       isRequestOverdue(request),
     );
