@@ -77,12 +77,93 @@ function isWorkflowQueueRole(role) {
   return !["Employee", "Admin"].includes(role);
 }
 
+function getDepartmentReviewRole(department) {
+  if (["Operations", "Engineering"].includes(department)) {
+    return "Dr. Majed";
+  }
+
+  if (department === "Marketing") {
+    return "Mona";
+  }
+
+  if (department === "Sales") {
+    return "Amro";
+  }
+
+  return null;
+}
+
+function isRequestInRoleWorkflowStep(request, role) {
+  if (!isWorkflowQueueRole(role) || isClosed(request.status)) {
+    return false;
+  }
+
+  if (role === "Mona") {
+    return (
+      (request.stage === "mona" && request.status === "Mona Review") ||
+      (request.stage === "dr-majed" &&
+        getDepartmentReviewRole(request.department) === "Mona" &&
+        ["Mona Review", "Rashid Auto Approved"].includes(request.status))
+    );
+  }
+
+  if (role === "Dr. Majed") {
+    return (
+      request.stage === "dr-majed" &&
+      getDepartmentReviewRole(request.department) === "Dr. Majed" &&
+      ["Dr. Majed Review", "Rashid Auto Approved"].includes(request.status)
+    );
+  }
+
+  if (role === "Amro") {
+    return (
+      request.stage === "dr-majed" &&
+      getDepartmentReviewRole(request.department) === "Amro" &&
+      ["Amro Review", "Rashid Auto Approved"].includes(request.status)
+    );
+  }
+
+  if (role === "Rashid") {
+    return request.stage === "rashid" && request.status === "Rashid Review";
+  }
+
+  if (role === "Edlyn") {
+    return (
+      request.stage === "edlyn" &&
+      [
+        "Edlyn Confirmation",
+        "Rashid Auto Approved",
+        "Purchase in Progress",
+        "Invoice Uploaded",
+        "Aileen Finance Review",
+        "Invoice Cleared",
+        "Edlyn Order Confirmation",
+        "Delivery Tracking",
+        "Order Confirmed",
+        "Cancellation Requested",
+      ].includes(request.status)
+    );
+  }
+
+  if (role === "Aileen") {
+    return (
+      request.stage === "aileen" &&
+      ["Invoice Uploaded", "Aileen Finance Review", "Item Received"].includes(request.status)
+    );
+  }
+
+  return false;
+}
+
 function isRequestAssignedToRole(state, request, user) {
   if (!isWorkflowQueueRole(user.role)) {
     return false;
   }
 
-  return state.users.find((candidate) => candidate.id === request.assigneeId)?.role === user.role;
+  return (
+    state.users.find((candidate) => candidate.id === request.assigneeId)?.role === user.role ||
+    isRequestInRoleWorkflowStep(request, user.role)
+  );
 }
 
 function activeAssignedRequests(state, user) {

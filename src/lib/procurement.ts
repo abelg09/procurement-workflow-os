@@ -2249,7 +2249,9 @@ export function transitionRequest(
     return (
       statuses.includes(editable.status) &&
       actor.role === role &&
-      (editable.assigneeId === actor.id || assignee?.role === role)
+      (editable.assigneeId === actor.id ||
+        assignee?.role === role ||
+        isRequestInRoleWorkflowStep(editable, role))
     );
   };
   const canProcureWorkOnPurchase = () =>
@@ -3439,6 +3441,68 @@ function isWorkflowQueueRole(role: Role) {
   return !["Employee", "Admin"].includes(role);
 }
 
+function isRequestInRoleWorkflowStep(request: ProcurementRequest, role: Role) {
+  if (!isWorkflowQueueRole(role) || isClosed(request.status)) {
+    return false;
+  }
+
+  if (role === "Mona") {
+    return (
+      (request.stage === "mona" && request.status === "Mona Review") ||
+      (request.stage === "dr-majed" &&
+        getDepartmentReviewRole(request.department) === "Mona" &&
+        ["Mona Review", "Rashid Auto Approved"].includes(request.status))
+    );
+  }
+
+  if (role === "Dr. Majed") {
+    return (
+      request.stage === "dr-majed" &&
+      getDepartmentReviewRole(request.department) === "Dr. Majed" &&
+      ["Dr. Majed Review", "Rashid Auto Approved"].includes(request.status)
+    );
+  }
+
+  if (role === "Amro") {
+    return (
+      request.stage === "dr-majed" &&
+      getDepartmentReviewRole(request.department) === "Amro" &&
+      ["Amro Review", "Rashid Auto Approved"].includes(request.status)
+    );
+  }
+
+  if (role === "Rashid") {
+    return request.stage === "rashid" && request.status === "Rashid Review";
+  }
+
+  if (role === "Edlyn") {
+    return (
+      request.stage === "edlyn" &&
+      [
+        "Edlyn Confirmation",
+        "Rashid Auto Approved",
+        "Purchase in Progress",
+        "Invoice Uploaded",
+        "Aileen Finance Review",
+        "Invoice Cleared",
+        "Edlyn Order Confirmation",
+        "Delivery Tracking",
+        "Order Confirmed",
+        "Cancellation Requested",
+      ].includes(request.status)
+    );
+  }
+
+  if (role === "Aileen") {
+    return (
+      request.stage === "aileen" &&
+      ["Invoice Uploaded", "Aileen Finance Review", "Item Received"].includes(request.status)
+    );
+  }
+
+  return false;
+}
+
 function isRequestAssignedToRole(
   request: ProcurementRequest,
   user: UserProfile,
@@ -3448,7 +3512,10 @@ function isRequestAssignedToRole(
     return false;
   }
 
-  return getUserById(users, request.assigneeId)?.role === user.role;
+  return (
+    getUserById(users, request.assigneeId)?.role === user.role ||
+    isRequestInRoleWorkflowStep(request, user.role)
+  );
 }
 
 export function isUserBlockedTask(
