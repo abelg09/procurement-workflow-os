@@ -134,6 +134,7 @@ export const DEPARTMENTS = [
 export type Department = (typeof DEPARTMENTS)[number];
 
 export const DEFAULT_PROJECT_OPTIONS = ["Beta", "Alpha", "Sira"] as const;
+const RETIRED_PROJECT_OPTIONS = ["Both (Factory and General)"];
 
 export const CURRENCIES = ["AED", "USD", "EUR", "GBP", "SAR", "INR", "Other"] as const;
 export type Currency = (typeof CURRENCIES)[number];
@@ -419,6 +420,7 @@ export type ProcurementState = {
     launchCleanupVersion?: string;
     launchCleanupAt?: string;
     launchCleanupRemovedRequests?: number;
+    projectOptionsRemoved?: string[];
   };
 };
 
@@ -449,6 +451,57 @@ function mergeUniqueById<T extends { id: string }>(
 function compareByDateDesc<T>(getDate: (item: T) => string | undefined) {
   return (left: T, right: T) =>
     latestTimestampValue(getDate(right)) - latestTimestampValue(getDate(left));
+}
+
+function normalizeProjectOptionName(option: string) {
+  return option.trim();
+}
+
+function projectOptionKey(option: string) {
+  return normalizeProjectOptionName(option).toLowerCase();
+}
+
+function uniqueProjectOptions(options: string[]) {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  options.forEach((option) => {
+    const name = normalizeProjectOptionName(String(option));
+    const key = projectOptionKey(name);
+
+    if (!name || seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    normalized.push(name);
+  });
+
+  return normalized;
+}
+
+function removedProjectOptionsForState(state: ProcurementState) {
+  return uniqueProjectOptions([
+    ...RETIRED_PROJECT_OPTIONS,
+    ...(state.maintenance?.projectOptionsRemoved ?? []),
+  ]);
+}
+
+function mergeProjectOptions(remoteState: ProcurementState, localState: ProcurementState) {
+  const removedProjectOptions = uniqueProjectOptions([
+    ...removedProjectOptionsForState(remoteState),
+    ...removedProjectOptionsForState(localState),
+  ]);
+  const removedKeys = new Set(removedProjectOptions.map(projectOptionKey));
+  const mergedOptions = uniqueProjectOptions([
+    ...remoteState.projectOptions,
+    ...localState.projectOptions,
+  ]).filter((option) => !removedKeys.has(projectOptionKey(option)));
+
+  return {
+    options: mergedOptions.length > 0 ? mergedOptions : [...DEFAULT_PROJECT_OPTIONS],
+    removed: removedProjectOptions,
+  };
 }
 
 function chooseLatestRequest(
@@ -565,6 +618,7 @@ export function mergeProcurementStates(
     localState.outboundNotifications ?? [],
     mergedRequests.requestIdRemaps,
   );
+  const mergedProjectOptions = mergeProjectOptions(remoteState, localState);
 
   return {
     ...remoteState,
@@ -590,16 +644,11 @@ export function mergeProcurementStates(
       remoteState.chatbotMessages,
       localState.chatbotMessages,
     ).sort(compareByDateDesc((message) => message.createdAt)),
-    projectOptions: Array.from(
-      new Set([
-        ...localState.projectOptions,
-        ...remoteState.projectOptions,
-        ...DEFAULT_PROJECT_OPTIONS,
-      ]),
-    ),
+    projectOptions: mergedProjectOptions.options,
     maintenance: {
       ...remoteState.maintenance,
       ...localState.maintenance,
+      projectOptionsRemoved: mergedProjectOptions.removed,
     },
   };
 }
@@ -3929,10 +3978,13 @@ export function parseState(serialized: string | null) {
       : department === "Facilities"
         ? "Operations"
         : department;
-  const normalizeProjectOptions = (options?: string[]) => {
+  const normalizeProjectOptions = (options?: string[], removedOptions: string[] = []) => {
     const source = Array.isArray(options) ? options : [...DEFAULT_PROJECT_OPTIONS];
-    const deduped = Array.from(
-      new Set(source.map((option) => String(option).trim()).filter(Boolean)),
+    const removedKeys = new Set(
+      uniqueProjectOptions([...RETIRED_PROJECT_OPTIONS, ...removedOptions]).map(projectOptionKey),
+    );
+    const deduped = uniqueProjectOptions(source).filter(
+      (option) => !removedKeys.has(projectOptionKey(option)),
     );
     return deduped.length > 0 ? deduped : [...DEFAULT_PROJECT_OPTIONS];
   };
@@ -4014,7 +4066,14 @@ export function parseState(serialized: string | null) {
     const drMajedUser = migratedUsers.find((user) => user.role === "Dr. Majed");
     const amroUser = migratedUsers.find((user) => user.role === "Amro");
     const edlynUser = migratedUsers.find((user) => user.role === "Edlyn");
-    const projectOptions = normalizeProjectOptions(state.projectOptions);
+    const removedProjectOptions = uniqueProjectOptions([
+      ...RETIRED_PROJECT_OPTIONS,
+      ...(state.maintenance?.projectOptionsRemoved ?? []),
+    ]);
+    const projectOptions = normalizeProjectOptions(
+      state.projectOptions,
+      removedProjectOptions,
+    );
     const migratedNotifications = state.notifications.map((notification) => {
       const migratedBody = migrateApprovalDisplayText(notification.body);
 
@@ -4094,6 +4153,10 @@ export function parseState(serialized: string | null) {
     return {
       ...state,
       projectOptions,
+      maintenance: {
+        ...state.maintenance,
+        projectOptionsRemoved: removedProjectOptions,
+      },
       users: migratedUsers,
       requests: state.requests.map((request) => {
         const statusText = migrateText(String(request.status));

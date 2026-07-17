@@ -5010,6 +5010,7 @@ function AdminPanel({
   };
   const addProjectOption = () => {
     const projectName = newProjectName.trim();
+    const projectKey = projectName.toLowerCase();
 
     if (!projectName) {
       return;
@@ -5027,21 +5028,40 @@ function AdminPanel({
       return {
         ...current,
         projectOptions: [...current.projectOptions, projectName],
+        maintenance: {
+          ...current.maintenance,
+          projectOptionsRemoved: (current.maintenance?.projectOptionsRemoved ?? []).filter(
+            (option) => option.trim().toLowerCase() !== projectKey,
+          ),
+        },
       };
     });
     setNewProjectName("");
   };
   const removeProjectOption = (projectName: string) => {
+    const projectKey = projectName.trim().toLowerCase();
+
     setState((current) => {
       if (current.projectOptions.length <= 1) {
         return current;
       }
 
+      const removedProjectOptions = current.maintenance?.projectOptionsRemoved ?? [];
+      const hasRemovedMarker = removedProjectOptions.some(
+        (option) => option.trim().toLowerCase() === projectKey,
+      );
+
       return {
         ...current,
         projectOptions: current.projectOptions.filter(
-          (option) => option !== projectName,
+          (option) => option.trim().toLowerCase() !== projectKey,
         ),
+        maintenance: {
+          ...current.maintenance,
+          projectOptionsRemoved: hasRemovedMarker
+            ? removedProjectOptions
+            : [...removedProjectOptions, projectName.trim()],
+        },
       };
     });
   };
