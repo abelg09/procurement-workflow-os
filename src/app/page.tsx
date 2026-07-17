@@ -145,6 +145,7 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, "");
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
 const LIVE_STATE_ROW_ID = "default";
+const LIVE_DATABASE_TIMEOUT_MS = 20000;
 
 type View =
   | "dashboard"
@@ -170,6 +171,28 @@ type LiveStateRow = {
   updated_at?: string | null;
 } | null;
 
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+async function withDatabaseTimeout<T>(
+  operation: PromiseLike<T>,
+  message = "The live database did not respond. Refresh the page and try again.",
+) {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), LIVE_DATABASE_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([Promise.resolve(operation), timeout]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 async function saveLiveStateWithRetry(
   supabaseClient: SupabaseBrowserClient,
   localState: ProcurementState,
@@ -179,11 +202,17 @@ async function saveLiveStateWithRetry(
   let lastError = "";
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const { data, error: fetchError } = await supabaseClient
-      .from("procurement_app_state")
-      .select("state,updated_at")
-      .eq("id", LIVE_STATE_ROW_ID)
-      .maybeSingle();
+    const { data, error: fetchError } = await withDatabaseTimeout(
+      supabaseClient
+        .from("procurement_app_state")
+        .select("state,updated_at")
+        .eq("id", LIVE_STATE_ROW_ID)
+        .maybeSingle(),
+      "The live database did not respond while saving. Refresh the page and try again.",
+    ).catch((error) => ({
+      data: null,
+      error: { message: errorMessage(error, "The live database did not respond while saving.") },
+    }));
 
     if (fetchError) {
       return { error: fetchError.message, state: localState };
@@ -204,9 +233,14 @@ async function saveLiveStateWithRetry(
     };
 
     if (!remoteRow?.state) {
-      const { error: insertError } = await supabaseClient
-        .from("procurement_app_state")
-        .insert(payload);
+      const { error: insertError } = await withDatabaseTimeout(
+        supabaseClient
+          .from("procurement_app_state")
+          .insert(payload),
+        "The live database did not respond while creating the workspace row. Refresh the page and try again.",
+      ).catch((error) => ({
+        error: { message: errorMessage(error, "The live database did not respond while saving.") },
+      }));
 
       if (!insertError) {
         return { state: stateToSave };
@@ -216,12 +250,18 @@ async function saveLiveStateWithRetry(
       continue;
     }
 
-    const { data: updatedRows, error: updateError } = await supabaseClient
-      .from("procurement_app_state")
-      .update(payload)
-      .eq("id", LIVE_STATE_ROW_ID)
-      .eq("updated_at", remoteRow.updated_at ?? "")
-      .select("updated_at");
+    const { data: updatedRows, error: updateError } = await withDatabaseTimeout(
+      supabaseClient
+        .from("procurement_app_state")
+        .update(payload)
+        .eq("id", LIVE_STATE_ROW_ID)
+        .eq("updated_at", remoteRow.updated_at ?? "")
+        .select("updated_at"),
+      "The live database did not respond while saving. Refresh the page and try again.",
+    ).catch((error) => ({
+      data: null,
+      error: { message: errorMessage(error, "The live database did not respond while saving.") },
+    }));
 
     if (updateError) {
       return { error: updateError.message, state: stateToSave };
@@ -6785,19 +6825,28 @@ export default function Home() {
       setLiveSyncError("");
 
       void (async () => {
-        const { data, error } = await supabaseClient
-          .from("procurement_app_state")
-          .select("state,updated_at")
-          .eq("id", LIVE_STATE_ROW_ID)
-          .maybeSingle();
+        const { data, error } = await withDatabaseTimeout(
+          supabaseClient
+            .from("procurement_app_state")
+            .select("state,updated_at")
+            .eq("id", LIVE_STATE_ROW_ID)
+            .maybeSingle(),
+          "The live Supabase workspace did not respond. Refresh the page, or sign out and sign back in.",
+        ).catch((syncError) => ({
+          data: null,
+          error: {
+            message: errorMessage(
+              syncError,
+              "The live Supabase workspace did not respond.",
+            ),
+          },
+        }));
 
         if (cancelled) return;
 
         if (error) {
           setLiveSyncStatus("error");
-          setLiveSyncError(
-            "Supabase workspace table is not ready. Apply supabase/schema.sql and refresh.",
-          );
+          setLiveSyncError(error.message);
           return;
         }
 
