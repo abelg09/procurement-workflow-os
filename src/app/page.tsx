@@ -146,6 +146,7 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
 const LIVE_STATE_ROW_ID = "default";
 const LIVE_DATABASE_TIMEOUT_MS = 20000;
+const LIVE_NOTIFICATION_TIMEOUT_MS = 8000;
 
 type View =
   | "dashboard"
@@ -178,10 +179,11 @@ function errorMessage(error: unknown, fallback: string) {
 async function withDatabaseTimeout<T>(
   operation: PromiseLike<T>,
   message = "The live database did not respond. Refresh the page and try again.",
+  timeoutMs = LIVE_DATABASE_TIMEOUT_MS,
 ) {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(message)), LIVE_DATABASE_TIMEOUT_MS);
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
   });
 
   try {
@@ -284,38 +286,53 @@ async function flushQueuedOutboundNotifications(
   supabaseClient: SupabaseBrowserClient,
   authUser: SignedInUser,
 ) {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return null;
-  }
+  try {
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return null;
+    }
 
-  const {
-    data: { session },
-  } = await supabaseClient.auth.getSession();
+    const {
+      data: { session },
+    } = await withDatabaseTimeout(
+      supabaseClient.auth.getSession(),
+      "The live Supabase session did not respond while preparing notifications.",
+      LIVE_NOTIFICATION_TIMEOUT_MS,
+    );
 
-  if (!session?.access_token || session.user.id !== authUser.id) {
-    return null;
-  }
+    if (!session?.access_token || session.user.id !== authUser.id) {
+      return null;
+    }
 
-  const response = await fetch(`${supabaseUrl}/functions/v1/procurement-notifications`, {
-    method: "POST",
-    headers: {
-      apikey: supabaseAnonKey,
-      Authorization: `Bearer ${session.access_token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ stateId: LIVE_STATE_ROW_ID }),
-  });
+    const response = await withDatabaseTimeout(
+      fetch(`${supabaseUrl}/functions/v1/procurement-notifications`, {
+        method: "POST",
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ stateId: LIVE_STATE_ROW_ID }),
+      }),
+      "Outbound procurement notifications did not respond quickly; they will retry later.",
+      LIVE_NOTIFICATION_TIMEOUT_MS,
+    );
 
-  if (!response.ok) {
+    if (!response.ok) {
+      console.warn("Outbound procurement notifications were queued but not delivered yet.", {
+        status: response.status,
+        body: await response.text().catch(() => ""),
+      });
+      return null;
+    }
+
+    const payload = (await response.json()) as { state?: unknown };
+    return payload.state ? parseState(JSON.stringify(payload.state)) : null;
+  } catch (error) {
     console.warn("Outbound procurement notifications were queued but not delivered yet.", {
-      status: response.status,
-      body: await response.text().catch(() => ""),
+      message: errorMessage(error, "Notification delivery timed out."),
     });
     return null;
   }
-
-  const payload = (await response.json()) as { state?: unknown };
-  return payload.state ? parseState(JSON.stringify(payload.state)) : null;
 }
 
 type FxRateResult = {
@@ -6883,18 +6900,16 @@ export default function Home() {
         }
 
         if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
-          const deliveredState = await flushQueuedOutboundNotifications(
-            supabaseClient,
-            authUser,
-          );
-
-          if (deliveredState && serializeState(deliveredState) !== serializeState(hydratedState)) {
-            setState(deliveredState);
-            if (!cancelled) {
-              setLiveSyncStatus("ready");
+          void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
+            (deliveredState) => {
+              if (!deliveredState || cancelled) return;
+              setState((current) =>
+                serializeState(deliveredState) !== serializeState(current)
+                  ? deliveredState
+                  : current,
+              );
             }
-            return;
-          }
+          );
         }
 
         if (serializeState(saveResult.state) !== serializeState(hydratedState)) {
