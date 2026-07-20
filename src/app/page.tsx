@@ -7194,6 +7194,7 @@ export default function Home() {
   const [recoveringLocalRequests, setRecoveringLocalRequests] = useState(false);
   const latestStateRef = useRef(state);
   const recoverableLocalStateRef = useRef<ProcurementState | null>(null);
+  const lastLivePersistedStateRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -7383,6 +7384,7 @@ export default function Home() {
           setRecoveryMessage("");
         }
 
+        lastLivePersistedStateRef.current = serializeState(hydratedState);
         setState(hydratedState);
 
         if (!liveStateRow?.state || cleanupApplied) {
@@ -7398,10 +7400,13 @@ export default function Home() {
           return;
         }
 
+        lastLivePersistedStateRef.current = serializeState(saveResult.state);
+
         if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
           void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
             (deliveredState) => {
               if (!deliveredState || cancelled) return;
+              lastLivePersistedStateRef.current = serializeState(deliveredState);
               setState((current) =>
                 serializeState(deliveredState) !== serializeState(current)
                   ? deliveredState
@@ -7458,6 +7463,25 @@ export default function Home() {
     const timeoutId = window.setTimeout(() => {
       void (async () => {
         const localState = applyLaunchCleanup(state);
+        const serializedLocalState = serializeState(localState);
+
+        if (serializedLocalState === lastLivePersistedStateRef.current) {
+          if (getQueuedOutboundNotificationCount(localState) > 0) {
+            const deliveredState = await flushQueuedOutboundNotifications(
+              supabaseClient,
+              authUser,
+            );
+
+            if (deliveredState) {
+              lastLivePersistedStateRef.current = serializeState(deliveredState);
+              if (serializeState(deliveredState) !== serializeState(state)) {
+                setState(deliveredState);
+              }
+            }
+          }
+          return;
+        }
+
         const saveResult = await saveLiveStateWithRetry(
           supabaseClient,
           localState,
@@ -7470,6 +7494,8 @@ export default function Home() {
           return;
         }
 
+        lastLivePersistedStateRef.current = serializeState(saveResult.state);
+
         if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
           const deliveredState = await flushQueuedOutboundNotifications(
             supabaseClient,
@@ -7477,6 +7503,7 @@ export default function Home() {
           );
 
           if (deliveredState && serializeState(deliveredState) !== serializeState(state)) {
+            lastLivePersistedStateRef.current = serializeState(deliveredState);
             setState(deliveredState);
             return;
           }
@@ -7664,6 +7691,7 @@ export default function Home() {
     ) {
       return;
     }
+    lastLivePersistedStateRef.current = null;
     setState(initialState);
     setSelectedRequestId("PR-102");
     window.localStorage.removeItem(STORAGE_KEY);
@@ -7696,6 +7724,7 @@ export default function Home() {
         throw new Error(message);
       }
 
+      lastLivePersistedStateRef.current = serializeState(saveResult.state);
       setState(saveResult.state);
       setSelectedRequestId(saveResult.requestId);
       setView("dashboard");
@@ -7704,6 +7733,7 @@ export default function Home() {
         void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
           (deliveredState) => {
             if (!deliveredState) return;
+            lastLivePersistedStateRef.current = serializeState(deliveredState);
             setState((current) =>
               serializeState(deliveredState) !== serializeState(current)
                 ? deliveredState
@@ -7756,6 +7786,7 @@ export default function Home() {
       return;
     }
 
+    lastLivePersistedStateRef.current = serializeState(saveResult.state);
     setState(saveResult.state);
     setRecoverableLocalRequestIds([]);
     recoverableLocalStateRef.current = null;
