@@ -11,6 +11,11 @@ import { getSupabaseServiceClient } from "@/lib/supabase";
 const LIVE_STATE_ROW_ID = "default";
 const DEFAULT_DASHBOARD_URL = "https://procurement.sulmi.ai/";
 
+type LiveStateRow = {
+  state?: ProcurementState;
+  updated_at?: string | null;
+} | null;
+
 type SlackResult = {
   channel: "slack";
   status: "sent" | "skipped" | "failed";
@@ -253,7 +258,7 @@ export async function POST() {
 
   const { data, error } = await supabase
     .from("procurement_app_state")
-    .select("state")
+    .select("state,updated_at")
     .eq("id", LIVE_STATE_ROW_ID)
     .maybeSingle();
 
@@ -261,19 +266,34 @@ export async function POST() {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  const currentState = (data?.state ?? initialState) as ProcurementState;
+  const liveStateRow = data as LiveStateRow;
+  const currentState = (liveStateRow?.state ?? initialState) as ProcurementState;
   const nextState = createDailyReminderNotifications(currentState);
   const inserted = nextState.notifications.length - currentState.notifications.length;
-  const { error: upsertError } = await supabase.from("procurement_app_state").upsert({
-    id: LIVE_STATE_ROW_ID,
-    state: nextState,
-    updated_at: nowIso(),
-  });
+  const { data: updatedRows, error: upsertError } = await supabase
+    .from("procurement_app_state")
+    .update({
+      state: nextState,
+      updated_at: nowIso(),
+    })
+    .eq("id", LIVE_STATE_ROW_ID)
+    .eq("updated_at", liveStateRow?.updated_at ?? "")
+    .select("updated_at");
 
   if (upsertError) {
     return NextResponse.json(
       { ok: false, error: upsertError.message },
       { status: 500 },
+    );
+  }
+
+  if (!Array.isArray(updatedRows) || updatedRows.length === 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Workspace state changed while creating reminders. Retry the reminder job.",
+      },
+      { status: 409 },
     );
   }
 

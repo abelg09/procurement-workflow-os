@@ -236,6 +236,10 @@ async function saveLiveStateWithRetry(
     const remoteState = remoteRow?.state
       ? parseState(JSON.stringify(remoteRow.state))
       : null;
+    if (remoteState && highestRequestIdNumber(remoteState) > highestRequestIdNumber(localState)) {
+      return { state: remoteState, stale: true };
+    }
+
     const stateToSave = remoteState
       ? mergeProcurementStates(remoteState, localState)
       : localState;
@@ -778,15 +782,19 @@ const requestIdNumber = (requestId: string) => {
   return Number.isFinite(numeric) ? numeric : 0;
 };
 
+function highestRequestIdNumber(state: ProcurementState) {
+  return state.requests.reduce(
+    (max, request) => Math.max(max, requestIdNumber(request.id)),
+    0,
+  );
+}
+
 function getRecoverableLocalRequestIds(
   remoteState: ProcurementState,
   localState: ProcurementState,
 ) {
   const remoteIds = new Set(remoteState.requests.map((request) => request.id));
-  const remoteMaxId = remoteState.requests.reduce(
-    (max, request) => Math.max(max, requestIdNumber(request.id)),
-    100,
-  );
+  const remoteMaxId = highestRequestIdNumber(remoteState);
 
   return localState.requests
     .filter(

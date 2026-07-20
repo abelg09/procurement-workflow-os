@@ -42,6 +42,11 @@ type ProcurementState = {
   outboundNotifications?: OutboundNotificationLog[];
 };
 
+type LiveStateRow = {
+  state?: ProcurementState;
+  updated_at?: string | null;
+} | null;
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -226,7 +231,7 @@ Deno.serve(async (request) => {
     const rowId = typeof body.stateId === "string" ? body.stateId : stateRowId;
     const { data, error } = await supabase
       .from("procurement_app_state")
-      .select("state")
+      .select("state,updated_at")
       .eq("id", rowId)
       .maybeSingle();
 
@@ -240,7 +245,8 @@ Deno.serve(async (request) => {
       );
     }
 
-    const state = data.state as ProcurementState;
+    const liveStateRow = data as LiveStateRow;
+    const state = liveStateRow?.state as ProcurementState;
     const deliveries = [...(state.outboundNotifications ?? [])];
     const queued = deliveries
       .filter((delivery) => delivery.status === "queued")
@@ -285,17 +291,34 @@ Deno.serve(async (request) => {
     }
 
     state.outboundNotifications = deliveries;
-    const { error: updateError } = await supabase.from("procurement_app_state").upsert({
-      id: rowId,
-      state,
-      updated_at: new Date().toISOString(),
-    });
+    const { data: updatedRows, error: updateError } = await supabase
+      .from("procurement_app_state")
+      .update({
+        state,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", rowId)
+      .eq("updated_at", liveStateRow?.updated_at ?? "")
+      .select("updated_at");
 
     if (updateError) {
       return new Response(JSON.stringify({ ok: false, error: updateError.message }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
         status: 500,
       });
+    }
+
+    if (!Array.isArray(updatedRows) || updatedRows.length === 0) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: "Workspace state changed while sending notifications. Retry the notification job.",
+        }),
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 409,
+        },
+      );
     }
 
     return new Response(JSON.stringify({ ok: true, processed: results.length, results, state }), {
