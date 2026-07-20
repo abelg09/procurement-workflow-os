@@ -120,6 +120,7 @@ import {
 import { getSupabaseBrowserClient } from "@/lib/supabase";
 
 const STORAGE_KEY = "procurement-workflow-state-v1";
+const LIVE_STATE_METADATA_KEY = "procurement-live-state-meta-v1";
 const FX_CACHE_KEY = "procurement-fx-rates-v1";
 const FX_RATE_SOURCE = "Frankfurter v2";
 const FX_RATE_ENDPOINT = "https://api.frankfurter.dev/v2/rates";
@@ -183,6 +184,11 @@ type LiveStateRow = {
   state?: unknown;
   updated_at?: string | null;
 } | null;
+type LiveStateMetadata = {
+  updatedAt: string | null;
+  cachedAt: string;
+  fingerprint: string;
+};
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -237,17 +243,18 @@ async function saveLiveStateWithRetry(
       ? parseState(JSON.stringify(remoteRow.state))
       : null;
     if (remoteState && highestRequestIdNumber(remoteState) > highestRequestIdNumber(localState)) {
-      return { state: remoteState, stale: true };
+      return { state: remoteState, stale: true, updatedAt: remoteRow?.updated_at ?? null };
     }
 
     const stateToSave = remoteState
       ? mergeProcurementStates(remoteState, localState)
       : localState;
+    const updatedAt = nowIso();
     const payload = {
       id: LIVE_STATE_ROW_ID,
       state: stateToSave,
       updated_by: authUser.id,
-      updated_at: nowIso(),
+      updated_at: updatedAt,
     };
 
     if (!remoteRow?.state) {
@@ -261,7 +268,7 @@ async function saveLiveStateWithRetry(
       }));
 
       if (!insertError) {
-        return { state: stateToSave };
+        return { state: stateToSave, updatedAt };
       }
 
       lastError = insertError.message;
@@ -286,7 +293,10 @@ async function saveLiveStateWithRetry(
     }
 
     if (Array.isArray(updatedRows) && updatedRows.length > 0) {
-      return { state: stateToSave };
+      return {
+        state: stateToSave,
+        updatedAt: updatedRows[0]?.updated_at ?? updatedAt,
+      };
     }
 
     lastError = "The workspace changed while saving; retrying with the latest data.";
@@ -341,11 +351,12 @@ async function submitDraftToLiveState(
       draft,
       submitterId,
     );
+    const updatedAt = nowIso();
     const payload = {
       id: LIVE_STATE_ROW_ID,
       state: submittedState,
       updated_by: authUser.id,
-      updated_at: nowIso(),
+      updated_at: updatedAt,
     };
 
     if (!remoteRow?.state) {
@@ -357,7 +368,7 @@ async function submitDraftToLiveState(
       }));
 
       if (!insertError) {
-        return { state: submittedState, requestId };
+        return { state: submittedState, requestId, updatedAt };
       }
 
       lastError = insertError.message;
@@ -382,7 +393,11 @@ async function submitDraftToLiveState(
     }
 
     if (Array.isArray(updatedRows) && updatedRows.length > 0) {
-      return { state: submittedState, requestId };
+      return {
+        state: submittedState,
+        requestId,
+        updatedAt: updatedRows[0]?.updated_at ?? updatedAt,
+      };
     }
 
     lastError = "The workspace changed while submitting; retrying with the latest data.";
@@ -433,7 +448,11 @@ async function recoverLocalRequestsToLiveState(
     ).filter((requestId) => requestIds.includes(requestId));
 
     if (recoverableIds.length === 0) {
-      return { state: hydratedState, requestIds: [] };
+      return {
+        state: hydratedState,
+        requestIds: [],
+        updatedAt: remoteRow?.updated_at ?? null,
+      };
     }
 
     const recoveredState = buildRecoverableLocalState(
@@ -441,11 +460,12 @@ async function recoverLocalRequestsToLiveState(
       localState,
       recoverableIds,
     );
+    const updatedAt = nowIso();
     const payload = {
       id: LIVE_STATE_ROW_ID,
       state: recoveredState,
       updated_by: authUser.id,
-      updated_at: nowIso(),
+      updated_at: updatedAt,
     };
 
     if (!remoteRow?.state) {
@@ -457,7 +477,7 @@ async function recoverLocalRequestsToLiveState(
       }));
 
       if (!insertError) {
-        return { state: recoveredState, requestIds: recoverableIds };
+        return { state: recoveredState, requestIds: recoverableIds, updatedAt };
       }
 
       lastError = insertError.message;
@@ -482,7 +502,11 @@ async function recoverLocalRequestsToLiveState(
     }
 
     if (Array.isArray(updatedRows) && updatedRows.length > 0) {
-      return { state: recoveredState, requestIds: recoverableIds };
+      return {
+        state: recoveredState,
+        requestIds: recoverableIds,
+        updatedAt: updatedRows[0]?.updated_at ?? updatedAt,
+      };
     }
 
     lastError = "The workspace changed while recovering; retrying with the latest data.";
@@ -536,8 +560,16 @@ async function flushQueuedOutboundNotifications(
       return null;
     }
 
-    const payload = (await response.json()) as { state?: unknown };
-    return payload.state ? parseState(JSON.stringify(payload.state)) : null;
+    const payload = (await response.json()) as {
+      state?: unknown;
+      updatedAt?: string | null;
+    };
+    return payload.state
+      ? {
+          state: parseState(JSON.stringify(payload.state)),
+          updatedAt: payload.updatedAt ?? null,
+        }
+      : null;
   } catch (error) {
     console.warn("Outbound procurement notifications were queued but not delivered yet.", {
       message: errorMessage(error, "Notification delivery timed out."),
@@ -775,6 +807,91 @@ function writeBrowserStateSafely(state: ProcurementState) {
       error,
     );
   }
+}
+
+function stateCacheFingerprint(serializedState: string) {
+  let hash = 2166136261;
+
+  for (let index = 0; index < serializedState.length; index += 1) {
+    hash ^= serializedState.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return `${serializedState.length}:${(hash >>> 0).toString(36)}`;
+}
+
+function readLiveStateMetadata() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(LIVE_STATE_METADATA_KEY) ?? "null",
+    ) as Partial<LiveStateMetadata> | null;
+
+    if (
+      !parsed ||
+      typeof parsed.updatedAt !== "string" ||
+      typeof parsed.cachedAt !== "string" ||
+      typeof parsed.fingerprint !== "string"
+    ) {
+      return null;
+    }
+
+    return parsed as LiveStateMetadata;
+  } catch {
+    return null;
+  }
+}
+
+function writeLiveStateMetadata(
+  updatedAt: string | null | undefined,
+  state: ProcurementState,
+) {
+  if (typeof window === "undefined" || !updatedAt) {
+    return;
+  }
+
+  try {
+    const serializedState = serializeState(state);
+    const metadata: LiveStateMetadata = {
+      updatedAt,
+      cachedAt: nowIso(),
+      fingerprint: stateCacheFingerprint(serializedState),
+    };
+
+    window.localStorage.setItem(
+      LIVE_STATE_METADATA_KEY,
+      JSON.stringify(metadata),
+    );
+  } catch (error) {
+    console.warn(
+      "Procurement live cache metadata could not be updated.",
+      error,
+    );
+  }
+}
+
+function clearLiveStateMetadata() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.removeItem(LIVE_STATE_METADATA_KEY);
+}
+
+function isLocalLiveStateCacheFresh(
+  metadata: LiveStateMetadata | null,
+  remoteUpdatedAt: string | null,
+  serializedState: string,
+) {
+  return Boolean(
+    metadata &&
+      remoteUpdatedAt &&
+      metadata.updatedAt === remoteUpdatedAt &&
+      metadata.fingerprint === stateCacheFingerprint(serializedState),
+  );
 }
 
 const requestIdNumber = (requestId: string) => {
@@ -7335,94 +7452,183 @@ export default function Home() {
       setLiveSyncError("");
 
       void (async () => {
-        const { data, error } = await withDatabaseTimeout(
-          supabaseClient
-            .from("procurement_app_state")
-            .select("state,updated_at")
-            .eq("id", LIVE_STATE_ROW_ID)
-            .maybeSingle(),
-          "The live Supabase workspace did not respond. Refresh the page, or sign out and sign back in.",
-        ).catch((syncError) => ({
-          data: null,
-          error: {
-            message: errorMessage(
-              syncError,
-              "The live Supabase workspace did not respond.",
-            ),
-          },
-        }));
+        try {
+          const localSnapshot = applyLaunchCleanup(latestStateRef.current);
+          const serializedLocalSnapshot = serializeState(localSnapshot);
+          const cachedMetadata = readLiveStateMetadata();
 
-        if (cancelled) return;
+          const { data: metadataData, error: metadataError } =
+            await withDatabaseTimeout(
+              supabaseClient
+                .from("procurement_app_state")
+                .select("updated_at")
+                .eq("id", LIVE_STATE_ROW_ID)
+                .maybeSingle(),
+              "The live Supabase workspace did not respond while checking for updates.",
+              7000,
+            ).catch((syncError) => ({
+              data: null,
+              error: {
+                message: errorMessage(
+                  syncError,
+                  "The live Supabase workspace did not respond while checking for updates.",
+                ),
+              },
+            }));
 
-        if (error) {
-          setLiveSyncStatus("error");
-          setLiveSyncError(error.message);
-          return;
-        }
+          if (cancelled) return;
 
-        const liveStateRow = data as LiveStateRow;
-        const localSnapshot = applyLaunchCleanup(latestStateRef.current);
-        const remoteState = liveStateRow?.state
-          ? parseState(JSON.stringify(liveStateRow.state))
-          : localSnapshot;
-        const localOnlyRequestIds = liveStateRow?.state
-          ? getRecoverableLocalRequestIds(remoteState, localSnapshot)
-          : [];
-        const profileHydratedState = stateWithSignedInProfile(remoteState, authUser);
-        const hydratedState = applyLaunchCleanup(profileHydratedState);
-        const cleanupApplied =
-          hydratedState.maintenance?.launchCleanupVersion !==
-          profileHydratedState.maintenance?.launchCleanupVersion;
+          const remoteUpdatedAt =
+            (metadataData as { updated_at?: string | null } | null)?.updated_at ??
+            null;
 
-        if (localOnlyRequestIds.length > 0) {
-          recoverableLocalStateRef.current = localSnapshot;
-          setRecoverableLocalRequestIds(localOnlyRequestIds);
-          setRecoveryMessage("");
-        } else {
-          recoverableLocalStateRef.current = null;
-          setRecoverableLocalRequestIds([]);
-          setRecoveryMessage("");
-        }
+          if (
+            !metadataError &&
+            isLocalLiveStateCacheFresh(
+              cachedMetadata,
+              remoteUpdatedAt,
+              serializedLocalSnapshot,
+            )
+          ) {
+            const profileHydratedState = stateWithSignedInProfile(
+              localSnapshot,
+              authUser,
+            );
+            const hydratedState = applyLaunchCleanup(profileHydratedState);
 
-        lastLivePersistedStateRef.current = serializeState(hydratedState);
-        setState(hydratedState);
+            recoverableLocalStateRef.current = null;
+            setRecoverableLocalRequestIds([]);
+            setRecoveryMessage("");
+            lastLivePersistedStateRef.current = serializeState(hydratedState);
+            writeLiveStateMetadata(remoteUpdatedAt, hydratedState);
 
-        if (!liveStateRow?.state || cleanupApplied) {
-          const saveResult = await saveLiveStateWithRetry(
-            supabaseClient,
-            hydratedState,
-            authUser,
-          );
+            if (serializeState(hydratedState) !== serializedLocalSnapshot) {
+              setState(hydratedState);
+            }
 
-        if (saveResult.error) {
-          setLiveSyncStatus("error");
-          setLiveSyncError(saveResult.error);
-          return;
-        }
+            setLiveSyncStatus("ready");
 
-        lastLivePersistedStateRef.current = serializeState(saveResult.state);
-
-        if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
-          void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
-            (deliveredState) => {
-              if (!deliveredState || cancelled) return;
-              lastLivePersistedStateRef.current = serializeState(deliveredState);
-              setState((current) =>
-                serializeState(deliveredState) !== serializeState(current)
-                  ? deliveredState
-                  : current,
+            if (getQueuedOutboundNotificationCount(hydratedState) > 0) {
+              void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
+                (delivery) => {
+                  if (!delivery || cancelled) return;
+                  lastLivePersistedStateRef.current = serializeState(delivery.state);
+                  writeLiveStateMetadata(delivery.updatedAt, delivery.state);
+                  setState((current) =>
+                    serializeState(delivery.state) !== serializeState(current)
+                      ? delivery.state
+                      : current,
+                  );
+                },
               );
             }
+
+            return;
+          }
+
+          const { data, error } = await withDatabaseTimeout(
+            supabaseClient
+              .from("procurement_app_state")
+              .select("state,updated_at")
+              .eq("id", LIVE_STATE_ROW_ID)
+              .maybeSingle(),
+            "The live Supabase workspace did not respond. Refresh the page, or sign out and sign back in.",
+          ).catch((syncError) => ({
+            data: null,
+            error: {
+              message: errorMessage(
+                syncError,
+                "The live Supabase workspace did not respond.",
+              ),
+            },
+          }));
+
+          if (cancelled) return;
+
+          if (error) {
+            setLiveSyncStatus("error");
+            setLiveSyncError(error.message);
+            return;
+          }
+
+          const liveStateRow = data as LiveStateRow;
+          const remoteState = liveStateRow?.state
+            ? parseState(JSON.stringify(liveStateRow.state))
+            : localSnapshot;
+          const localOnlyRequestIds = liveStateRow?.state
+            ? getRecoverableLocalRequestIds(remoteState, localSnapshot)
+            : [];
+          const profileHydratedState = stateWithSignedInProfile(
+            remoteState,
+            authUser,
           );
-        }
+          const hydratedState = applyLaunchCleanup(profileHydratedState);
+          const cleanupApplied =
+            hydratedState.maintenance?.launchCleanupVersion !==
+            profileHydratedState.maintenance?.launchCleanupVersion;
 
-        if (serializeState(saveResult.state) !== serializeState(hydratedState)) {
-          setState(saveResult.state);
-        }
-        }
+          if (localOnlyRequestIds.length > 0) {
+            recoverableLocalStateRef.current = localSnapshot;
+            setRecoverableLocalRequestIds(localOnlyRequestIds);
+            setRecoveryMessage("");
+          } else {
+            recoverableLocalStateRef.current = null;
+            setRecoverableLocalRequestIds([]);
+            setRecoveryMessage("");
+          }
 
-        if (!cancelled) {
-          setLiveSyncStatus("ready");
+          lastLivePersistedStateRef.current = serializeState(hydratedState);
+          writeLiveStateMetadata(liveStateRow?.updated_at, hydratedState);
+          setState(hydratedState);
+
+          if (!liveStateRow?.state || cleanupApplied) {
+            const saveResult = await saveLiveStateWithRetry(
+              supabaseClient,
+              hydratedState,
+              authUser,
+            );
+
+            if (saveResult.error) {
+              setLiveSyncStatus("error");
+              setLiveSyncError(saveResult.error);
+              return;
+            }
+
+            lastLivePersistedStateRef.current = serializeState(saveResult.state);
+            writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
+
+            if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
+              void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
+                (delivery) => {
+                  if (!delivery || cancelled) return;
+                  lastLivePersistedStateRef.current = serializeState(delivery.state);
+                  writeLiveStateMetadata(delivery.updatedAt, delivery.state);
+                  setState((current) =>
+                    serializeState(delivery.state) !== serializeState(current)
+                      ? delivery.state
+                      : current,
+                  );
+                },
+              );
+            }
+
+            if (serializeState(saveResult.state) !== serializeState(hydratedState)) {
+              setState(saveResult.state);
+            }
+          }
+
+          if (!cancelled) {
+            setLiveSyncStatus("ready");
+          }
+        } catch (syncError) {
+          if (cancelled) return;
+          setLiveSyncStatus("error");
+          setLiveSyncError(
+            errorMessage(
+              syncError,
+              "The live Supabase workspace could not be loaded.",
+            ),
+          );
         }
       })();
     });
@@ -7467,15 +7673,16 @@ export default function Home() {
 
         if (serializedLocalState === lastLivePersistedStateRef.current) {
           if (getQueuedOutboundNotificationCount(localState) > 0) {
-            const deliveredState = await flushQueuedOutboundNotifications(
+            const delivery = await flushQueuedOutboundNotifications(
               supabaseClient,
               authUser,
             );
 
-            if (deliveredState) {
-              lastLivePersistedStateRef.current = serializeState(deliveredState);
-              if (serializeState(deliveredState) !== serializeState(state)) {
-                setState(deliveredState);
+            if (delivery) {
+              lastLivePersistedStateRef.current = serializeState(delivery.state);
+              writeLiveStateMetadata(delivery.updatedAt, delivery.state);
+              if (serializeState(delivery.state) !== serializeState(state)) {
+                setState(delivery.state);
               }
             }
           }
@@ -7495,16 +7702,18 @@ export default function Home() {
         }
 
         lastLivePersistedStateRef.current = serializeState(saveResult.state);
+        writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
 
         if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
-          const deliveredState = await flushQueuedOutboundNotifications(
+          const delivery = await flushQueuedOutboundNotifications(
             supabaseClient,
             authUser,
           );
 
-          if (deliveredState && serializeState(deliveredState) !== serializeState(state)) {
-            lastLivePersistedStateRef.current = serializeState(deliveredState);
-            setState(deliveredState);
+          if (delivery && serializeState(delivery.state) !== serializeState(state)) {
+            lastLivePersistedStateRef.current = serializeState(delivery.state);
+            writeLiveStateMetadata(delivery.updatedAt, delivery.state);
+            setState(delivery.state);
             return;
           }
         }
@@ -7695,6 +7904,7 @@ export default function Home() {
     setState(initialState);
     setSelectedRequestId("PR-102");
     window.localStorage.removeItem(STORAGE_KEY);
+    clearLiveStateMetadata();
   };
 
   const retryLiveSync = () => {
@@ -7725,18 +7935,20 @@ export default function Home() {
       }
 
       lastLivePersistedStateRef.current = serializeState(saveResult.state);
+      writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
       setState(saveResult.state);
       setSelectedRequestId(saveResult.requestId);
       setView("dashboard");
 
       if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
         void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
-          (deliveredState) => {
-            if (!deliveredState) return;
-            lastLivePersistedStateRef.current = serializeState(deliveredState);
+          (delivery) => {
+            if (!delivery) return;
+            lastLivePersistedStateRef.current = serializeState(delivery.state);
+            writeLiveStateMetadata(delivery.updatedAt, delivery.state);
             setState((current) =>
-              serializeState(deliveredState) !== serializeState(current)
-                ? deliveredState
+              serializeState(delivery.state) !== serializeState(current)
+                ? delivery.state
                 : current,
             );
           },
@@ -7787,6 +7999,7 @@ export default function Home() {
     }
 
     lastLivePersistedStateRef.current = serializeState(saveResult.state);
+    writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
     setState(saveResult.state);
     setRecoverableLocalRequestIds([]);
     recoverableLocalStateRef.current = null;

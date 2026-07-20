@@ -321,10 +321,19 @@ Deno.serve(async (request) => {
       );
     }
 
-    return new Response(JSON.stringify({ ok: true, processed: results.length, results, state }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-      status: 200,
-    });
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        processed: results.length,
+        results,
+        state,
+        updatedAt: updatedRows[0]?.updated_at ?? null,
+      }),
+      {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 200,
+      },
+    );
   } catch (error) {
     return new Response(
       JSON.stringify({
