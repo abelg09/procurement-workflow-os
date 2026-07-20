@@ -34,7 +34,19 @@ import {
   UserCog,
   XCircle,
 } from "lucide-react";
-import { Fragment, FormEvent, MouseEventHandler, ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  FormEvent,
+  MouseEventHandler,
+  ReactNode,
+  RefObject,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
 import {
   AuditLog,
@@ -193,6 +205,13 @@ async function withDatabaseTimeout<T>(
       clearTimeout(timeoutId);
     }
   }
+}
+
+function revealSelectedRequest(detailsRef: RefObject<HTMLElement | null>) {
+  if (typeof window === "undefined") return;
+  window.requestAnimationFrame(() => {
+    detailsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 async function saveLiveStateWithRetry(
@@ -4109,15 +4128,20 @@ function RequestDetails({
   state,
   currentUser,
   onTransition,
+  detailsRef,
 }: {
   request?: ProcurementRequest;
   state: ProcurementState;
   currentUser: UserProfile;
   onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
+  detailsRef?: RefObject<HTMLElement | null>;
 }) {
   if (!request) {
     return (
-      <section className={classNames(panelClass, "min-w-0 p-8 text-center text-slate-500")}>
+      <section
+        className={classNames(panelClass, "min-w-0 scroll-mt-24 p-8 text-center text-slate-500")}
+        ref={detailsRef}
+      >
         Select a request to see workflow details.
       </section>
     );
@@ -4131,7 +4155,7 @@ function RequestDetails({
   );
 
   return (
-    <section className="grid min-w-0 gap-5">
+    <section className="grid min-w-0 scroll-mt-24 gap-5" ref={detailsRef}>
       <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
@@ -6424,17 +6448,22 @@ function EmployeeRequestStatus({
   state,
   currentUser,
   onTransition,
+  detailsRef,
 }: {
   request?: ProcurementRequest;
   state: ProcurementState;
   currentUser: UserProfile;
   onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
+  detailsRef?: RefObject<HTMLElement | null>;
 }) {
   const [cancellationReason, setCancellationReason] = useState("");
 
   if (!request) {
     return (
-      <section className={classNames(panelClass, "min-w-0 p-6 text-sm text-slate-500")}>
+      <section
+        className={classNames(panelClass, "min-w-0 scroll-mt-24 p-6 text-sm text-slate-500")}
+        ref={detailsRef}
+      >
         Select a request to view its current status.
       </section>
     );
@@ -6476,7 +6505,7 @@ function EmployeeRequestStatus({
     .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
 
   return (
-    <section className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
+    <section className={classNames(panelClass, "min-w-0 scroll-mt-24 p-4 sm:p-5")} ref={detailsRef}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -6624,6 +6653,14 @@ function EmployeePortal({
   const selectedRequest =
     employeeRequests.find((request) => request.id === selectedRequestId) ??
     employeeRequests[0];
+  const requestDetailsRef = useRef<HTMLElement | null>(null);
+  const selectAndRevealRequest = useCallback(
+    (id: string) => {
+      setSelectedRequestId(id);
+      revealSelectedRequest(requestDetailsRef);
+    },
+    [setSelectedRequestId],
+  );
 
   return (
     <div className="grid min-w-0 gap-5">
@@ -6658,7 +6695,7 @@ function EmployeePortal({
         currentUser={currentUser}
         description="Private status view for requests submitted from your employee account."
         hideFinancials
-        onSelect={setSelectedRequestId}
+        onSelect={selectAndRevealRequest}
         requests={employeeRequests}
         selectedRequestId={selectedRequest?.id}
         showAssigneeFilter={false}
@@ -6668,6 +6705,7 @@ function EmployeePortal({
 
       <EmployeeRequestStatus
         currentUser={currentUser}
+        detailsRef={requestDetailsRef}
         onTransition={(requestId, action) =>
           setState((current) => transitionRequest(current, requestId, currentUser.id, action))
         }
@@ -6703,6 +6741,14 @@ function Dashboard({
   const selectedRequest =
     visibleRequests.find((request) => request.id === selectedRequestId) ??
     visibleRequests[0];
+  const requestDetailsRef = useRef<HTMLElement | null>(null);
+  const selectAndRevealRequest = useCallback(
+    (id: string) => {
+      setSelectedRequestId(id);
+      revealSelectedRequest(requestDetailsRef);
+    },
+    [setSelectedRequestId],
+  );
   const metrics = getMetrics(visibleRequests);
   const blockedTasks = getUserBlockedTasks(state.requests, currentUser, state.users);
   const watchlistRequests = blockedTasks.length > 0 ? blockedTasks : getStuckRequests(state.requests);
@@ -6776,13 +6822,14 @@ function Dashboard({
       <div className="grid min-w-0 gap-5">
         <RequestsTable
           currentUser={currentUser}
-          onSelect={setSelectedRequestId}
+          onSelect={selectAndRevealRequest}
           requests={visibleRequests}
           selectedRequestId={selectedRequest?.id}
           users={state.users}
         />
         <RequestDetails
           currentUser={currentUser}
+          detailsRef={requestDetailsRef}
           onTransition={(requestId, action) =>
             setState((current) => transitionRequest(current, requestId, currentUser.id, action))
           }
@@ -6815,7 +6862,7 @@ function Dashboard({
                     : "border-orange-200 bg-orange-50 text-orange-900",
                 )}
                 key={request.id}
-                onClick={() => setSelectedRequestId(request.id)}
+                onClick={() => selectAndRevealRequest(request.id)}
                 type="button"
               >
                 <strong>{request.id}</strong> has been over {OVERDUE_REQUEST_HOURS}h since{" "}
