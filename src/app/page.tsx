@@ -35,10 +35,12 @@ import {
   XCircle,
 } from "lucide-react";
 import {
+  Dispatch,
   Fragment,
   FormEvent,
   MouseEventHandler,
   ReactNode,
+  SetStateAction,
   useEffect,
   useId,
   useMemo,
@@ -6648,16 +6650,13 @@ function EmployeePortal({
   state: ProcurementState;
   currentUser: UserProfile;
   selectedRequestId?: string;
-  setSelectedRequestId: (id: string) => void;
+  setSelectedRequestId: Dispatch<SetStateAction<string | undefined>>;
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
 }) {
   const employeeRequests = useMemo(
     () => getPersonalRequests(state, currentUser),
     [state, currentUser],
   );
-  const selectedRequest =
-    employeeRequests.find((request) => request.id === selectedRequestId) ??
-    employeeRequests[0];
 
   return (
     <div className="grid min-w-0 gap-5">
@@ -6692,7 +6691,9 @@ function EmployeePortal({
         currentUser={currentUser}
         description="Private status view for requests submitted from your employee account."
         hideFinancials
-        onSelect={setSelectedRequestId}
+        onSelect={(id) =>
+          setSelectedRequestId((current) => (current === id ? undefined : id))
+        }
         renderSelectedDetails={(request) => (
           <EmployeeRequestStatus
             currentUser={currentUser}
@@ -6704,7 +6705,7 @@ function EmployeePortal({
           />
         )}
         requests={employeeRequests}
-        selectedRequestId={selectedRequest?.id}
+        selectedRequestId={selectedRequestId}
         showAssigneeFilter={false}
         title="My procurement status"
         users={state.users}
@@ -6724,7 +6725,7 @@ function Dashboard({
   state: ProcurementState;
   currentUser: UserProfile;
   selectedRequestId?: string;
-  setSelectedRequestId: (id: string) => void;
+  setSelectedRequestId: Dispatch<SetStateAction<string | undefined>>;
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
   requestScope?: "visible" | "company";
 }) {
@@ -6735,9 +6736,6 @@ function Dashboard({
         : getVisibleRequests(state, currentUser),
     [currentUser, requestScope, state],
   );
-  const selectedRequest =
-    visibleRequests.find((request) => request.id === selectedRequestId) ??
-    visibleRequests[0];
   const metrics = getMetrics(visibleRequests);
   const blockedTasks = getUserBlockedTasks(state.requests, currentUser, state.users);
   const watchlistRequests = blockedTasks.length > 0 ? blockedTasks : getStuckRequests(state.requests);
@@ -6811,7 +6809,9 @@ function Dashboard({
       <div className="grid min-w-0 gap-5">
         <RequestsTable
           currentUser={currentUser}
-          onSelect={setSelectedRequestId}
+          onSelect={(id) =>
+            setSelectedRequestId((current) => (current === id ? undefined : id))
+          }
           renderSelectedDetails={(request) => (
             <RequestDetails
               currentUser={currentUser}
@@ -6823,7 +6823,7 @@ function Dashboard({
             />
           )}
           requests={visibleRequests}
-          selectedRequestId={selectedRequest?.id}
+          selectedRequestId={selectedRequestId}
           users={state.users}
         />
         <div className="grid min-w-0 gap-5 xl:grid-cols-2">
@@ -6877,7 +6877,7 @@ export default function Home() {
   const [browserStateLoaded, setBrowserStateLoaded] = useState(false);
   const [currentUserId, setCurrentUserId] = useState("user-admin");
   const [view, setView] = useState<View>("dashboard");
-  const [selectedRequestId, setSelectedRequestId] = useState("PR-102");
+  const [selectedRequestId, setSelectedRequestId] = useState<string | undefined>("PR-102");
   const [authStatus, setAuthStatus] = useState<AuthStatus>(
     hasSupabaseClientConfig ? "checking" : "missing-config",
   );
