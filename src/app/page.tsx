@@ -294,6 +294,201 @@ async function saveLiveStateWithRetry(
   };
 }
 
+async function submitDraftToLiveState(
+  supabaseClient: SupabaseBrowserClient,
+  draft: ProcurementRequestDraft,
+  submittedById: string,
+  authUser: SignedInUser,
+  fallbackState: ProcurementState,
+  maxAttempts = 4,
+) {
+  let lastError = "";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const { data, error: fetchError } = await withDatabaseTimeout(
+      supabaseClient
+        .from("procurement_app_state")
+        .select("state,updated_at")
+        .eq("id", LIVE_STATE_ROW_ID)
+        .maybeSingle(),
+      "The live database did not respond while submitting. Refresh the page and try again.",
+    ).catch((error) => ({
+      data: null,
+      error: { message: errorMessage(error, "The live database did not respond while submitting.") },
+    }));
+
+    if (fetchError) {
+      return { error: fetchError.message };
+    }
+
+    const remoteRow = data as LiveStateRow;
+    const remoteState = remoteRow?.state
+      ? parseState(JSON.stringify(remoteRow.state))
+      : fallbackState;
+    const hydratedState = applyLaunchCleanup(
+      stateWithSignedInProfile(remoteState, authUser),
+    );
+    const submitterId = hydratedState.users.some((user) => user.id === submittedById)
+      ? submittedById
+      : getSignedInProfile(hydratedState, authUser).id;
+    const requestId = nextRequestId(hydratedState.requests);
+    const submittedState = submitProcurementRequest(
+      hydratedState,
+      draft,
+      submitterId,
+    );
+    const payload = {
+      id: LIVE_STATE_ROW_ID,
+      state: submittedState,
+      updated_by: authUser.id,
+      updated_at: nowIso(),
+    };
+
+    if (!remoteRow?.state) {
+      const { error: insertError } = await withDatabaseTimeout(
+        supabaseClient.from("procurement_app_state").insert(payload),
+        "The live database did not respond while submitting. Refresh the page and try again.",
+      ).catch((error) => ({
+        error: { message: errorMessage(error, "The live database did not respond while submitting.") },
+      }));
+
+      if (!insertError) {
+        return { state: submittedState, requestId };
+      }
+
+      lastError = insertError.message;
+      continue;
+    }
+
+    const { data: updatedRows, error: updateError } = await withDatabaseTimeout(
+      supabaseClient
+        .from("procurement_app_state")
+        .update(payload)
+        .eq("id", LIVE_STATE_ROW_ID)
+        .eq("updated_at", remoteRow.updated_at ?? "")
+        .select("updated_at"),
+      "The live database did not respond while submitting. Refresh the page and try again.",
+    ).catch((error) => ({
+      data: null,
+      error: { message: errorMessage(error, "The live database did not respond while submitting.") },
+    }));
+
+    if (updateError) {
+      return { error: updateError.message };
+    }
+
+    if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+      return { state: submittedState, requestId };
+    }
+
+    lastError = "The workspace changed while submitting; retrying with the latest data.";
+  }
+
+  return {
+    error: lastError || "The workspace changed while submitting. Please try again.",
+  };
+}
+
+async function recoverLocalRequestsToLiveState(
+  supabaseClient: SupabaseBrowserClient,
+  localState: ProcurementState,
+  requestIds: string[],
+  authUser: SignedInUser,
+  fallbackState: ProcurementState,
+  maxAttempts = 4,
+) {
+  let lastError = "";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const { data, error: fetchError } = await withDatabaseTimeout(
+      supabaseClient
+        .from("procurement_app_state")
+        .select("state,updated_at")
+        .eq("id", LIVE_STATE_ROW_ID)
+        .maybeSingle(),
+      "The live database did not respond while recovering local requests. Refresh the page and try again.",
+    ).catch((error) => ({
+      data: null,
+      error: { message: errorMessage(error, "The live database did not respond while recovering local requests.") },
+    }));
+
+    if (fetchError) {
+      return { error: fetchError.message };
+    }
+
+    const remoteRow = data as LiveStateRow;
+    const remoteState = remoteRow?.state
+      ? parseState(JSON.stringify(remoteRow.state))
+      : fallbackState;
+    const hydratedState = applyLaunchCleanup(
+      stateWithSignedInProfile(remoteState, authUser),
+    );
+    const recoverableIds = getRecoverableLocalRequestIds(
+      hydratedState,
+      localState,
+    ).filter((requestId) => requestIds.includes(requestId));
+
+    if (recoverableIds.length === 0) {
+      return { state: hydratedState, requestIds: [] };
+    }
+
+    const recoveredState = buildRecoverableLocalState(
+      hydratedState,
+      localState,
+      recoverableIds,
+    );
+    const payload = {
+      id: LIVE_STATE_ROW_ID,
+      state: recoveredState,
+      updated_by: authUser.id,
+      updated_at: nowIso(),
+    };
+
+    if (!remoteRow?.state) {
+      const { error: insertError } = await withDatabaseTimeout(
+        supabaseClient.from("procurement_app_state").insert(payload),
+        "The live database did not respond while recovering local requests. Refresh the page and try again.",
+      ).catch((error) => ({
+        error: { message: errorMessage(error, "The live database did not respond while recovering local requests.") },
+      }));
+
+      if (!insertError) {
+        return { state: recoveredState, requestIds: recoverableIds };
+      }
+
+      lastError = insertError.message;
+      continue;
+    }
+
+    const { data: updatedRows, error: updateError } = await withDatabaseTimeout(
+      supabaseClient
+        .from("procurement_app_state")
+        .update(payload)
+        .eq("id", LIVE_STATE_ROW_ID)
+        .eq("updated_at", remoteRow.updated_at ?? "")
+        .select("updated_at"),
+      "The live database did not respond while recovering local requests. Refresh the page and try again.",
+    ).catch((error) => ({
+      data: null,
+      error: { message: errorMessage(error, "The live database did not respond while recovering local requests.") },
+    }));
+
+    if (updateError) {
+      return { error: updateError.message };
+    }
+
+    if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+      return { state: recoveredState, requestIds: recoverableIds };
+    }
+
+    lastError = "The workspace changed while recovering; retrying with the latest data.";
+  }
+
+  return {
+    error: lastError || "The workspace changed while recovering. Please try again.",
+  };
+}
+
 async function flushQueuedOutboundNotifications(
   supabaseClient: SupabaseBrowserClient,
   authUser: SignedInUser,
@@ -576,6 +771,86 @@ function writeBrowserStateSafely(state: ProcurementState) {
       error,
     );
   }
+}
+
+const requestIdNumber = (requestId: string) => {
+  const numeric = Number(requestId.replace(/^PR-/i, ""));
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
+function getRecoverableLocalRequestIds(
+  remoteState: ProcurementState,
+  localState: ProcurementState,
+) {
+  const remoteIds = new Set(remoteState.requests.map((request) => request.id));
+  const remoteMaxId = remoteState.requests.reduce(
+    (max, request) => Math.max(max, requestIdNumber(request.id)),
+    100,
+  );
+
+  return localState.requests
+    .filter(
+      (request) =>
+        !remoteIds.has(request.id) && requestIdNumber(request.id) > remoteMaxId,
+    )
+    .sort((a, b) => requestIdNumber(b.id) - requestIdNumber(a.id))
+    .map((request) => request.id);
+}
+
+function buildRecoverableLocalState(
+  remoteState: ProcurementState,
+  localState: ProcurementState,
+  requestIds: string[],
+) {
+  const requestIdSet = new Set(requestIds);
+  const localRequests = localState.requests.filter((request) =>
+    requestIdSet.has(request.id),
+  );
+  const userIds = new Set<string>();
+
+  localRequests.forEach((request) => {
+    userIds.add(request.submittedById);
+    userIds.add(request.assigneeId);
+    if (request.previousResponsibleId) {
+      userIds.add(request.previousResponsibleId);
+    }
+  });
+
+  const localAuditLogs = localState.auditLogs.filter((log) => {
+    if (!requestIdSet.has(log.requestId)) {
+      return false;
+    }
+    userIds.add(log.userId);
+    return true;
+  });
+  const localNotifications = localState.notifications.filter((notification) => {
+    if (!notification.requestId || !requestIdSet.has(notification.requestId)) {
+      return false;
+    }
+    userIds.add(notification.userId);
+    return true;
+  });
+  const localOutboundNotifications = (localState.outboundNotifications ?? []).filter(
+    (notification) =>
+      Boolean(notification.requestId && requestIdSet.has(notification.requestId)),
+  );
+  const localUsers = localState.users.filter(
+    (user) =>
+      userIds.has(user.id) &&
+      !remoteState.users.some((remoteUser) => remoteUser.id === user.id),
+  );
+
+  return mergeProcurementStates(remoteState, {
+    ...remoteState,
+    users: [...remoteState.users, ...localUsers],
+    requests: localRequests,
+    auditLogs: localAuditLogs,
+    notifications: localNotifications,
+    outboundNotifications: localOutboundNotifications,
+    chatbotMessages: [],
+    projectOptions: remoteState.projectOptions,
+    maintenance: remoteState.maintenance,
+  });
 }
 
 const isAllowedEmail = (email: string) => {
@@ -1445,12 +1720,16 @@ function buildAttachmentReferences(files: FileList | null, type: AttachmentRefer
 
 function RequestForm({
   currentUser,
+  hasSupabaseConfig,
+  liveSyncStatus,
   projectOptions,
   onSubmit,
 }: {
   currentUser: UserProfile;
+  hasSupabaseConfig: boolean;
+  liveSyncStatus: LiveSyncStatus;
   projectOptions: string[];
-  onSubmit: (draft: ProcurementRequestDraft) => string | void;
+  onSubmit: (draft: ProcurementRequestDraft) => Promise<string | void> | string | void;
 }) {
   const availableProjects =
     projectOptions.length > 0 ? projectOptions : [...DEFAULT_PROJECT_OPTIONS];
@@ -1497,6 +1776,13 @@ function RequestForm({
 
   const isBulkMode = entryMode === "bulk";
   const hasBulkLineItems = isBulkMode && bulkLineItems.length > 0;
+  const liveSubmitBlocked = hasSupabaseConfig && liveSyncStatus !== "ready";
+  const liveSubmitBlockedMessage =
+    liveSyncStatus === "loading"
+      ? "Please wait until the live Supabase workspace finishes connecting before submitting."
+      : liveSyncStatus === "error"
+        ? "Live Supabase sync failed. Retry live sync before submitting the request."
+        : "The live Supabase workspace is not ready yet. Please wait before submitting.";
   const selectedProject = availableProjects.includes(project)
     ? project
     : availableProjects[0] ?? "Beta";
@@ -1703,6 +1989,9 @@ function RequestForm({
     try {
       setSubmitting(true);
 
+      if (liveSubmitBlocked) {
+        throw new Error(liveSubmitBlockedMessage);
+      }
       if (!employeeName.trim()) {
         throw new Error("Employee name is required.");
       }
@@ -1760,7 +2049,7 @@ function RequestForm({
         lineItems.reduce((total, item) => total + item.aedTotal, 0),
       );
       const totalQuantity = lineItems.reduce((total, item) => total + item.quantity, 0);
-      const requestId = onSubmit({
+      const requestId = await onSubmit({
         employeeName,
         department,
         project: selectedProject,
@@ -1842,6 +2131,11 @@ function RequestForm({
 
   return (
     <form className="grid min-w-0 gap-5 sm:gap-6" onSubmit={handleSubmit}>
+      {liveSubmitBlocked ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-900">
+          {liveSubmitBlockedMessage}
+        </div>
+      ) : null}
       {formError ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
           {formError}
@@ -2307,7 +2601,7 @@ function RequestForm({
 
       <div className="flex justify-stretch sm:justify-end">
         <IconButton
-          disabled={bulkImporting || submitting}
+          disabled={bulkImporting || submitting || liveSubmitBlocked}
           icon={<Plus className="h-4 w-4" />}
           type="submit"
         >
@@ -6643,12 +6937,18 @@ function EmployeeRequestStatus({
 function EmployeePortal({
   state,
   currentUser,
+  hasSupabaseConfig,
+  liveSyncStatus,
+  onSubmitRequest,
   selectedRequestId,
   setSelectedRequestId,
   setState,
 }: {
   state: ProcurementState;
   currentUser: UserProfile;
+  hasSupabaseConfig: boolean;
+  liveSyncStatus: LiveSyncStatus;
+  onSubmitRequest: (draft: ProcurementRequestDraft, submitter: UserProfile) => Promise<string | void> | string | void;
   selectedRequestId?: string;
   setSelectedRequestId: Dispatch<SetStateAction<string | undefined>>;
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
@@ -6676,15 +6976,10 @@ function EmployeePortal({
 
       <RequestForm
         currentUser={currentUser}
+        hasSupabaseConfig={hasSupabaseConfig}
+        liveSyncStatus={liveSyncStatus}
         projectOptions={state.projectOptions}
-        onSubmit={(draft) => {
-          const nextId = nextRequestId(state.requests);
-          setState((current) =>
-            submitProcurementRequest(current, draft, currentUser.id),
-          );
-          setSelectedRequestId(nextId);
-          return nextId;
-        }}
+        onSubmit={(draft) => onSubmitRequest(draft, currentUser)}
       />
 
       <RequestsTable
@@ -6886,7 +7181,11 @@ export default function Home() {
   const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>("idle");
   const [liveSyncError, setLiveSyncError] = useState("");
   const [liveSyncAttempt, setLiveSyncAttempt] = useState(0);
+  const [recoverableLocalRequestIds, setRecoverableLocalRequestIds] = useState<string[]>([]);
+  const [recoveryMessage, setRecoveryMessage] = useState("");
+  const [recoveringLocalRequests, setRecoveringLocalRequests] = useState(false);
   const latestStateRef = useRef(state);
+  const recoverableLocalStateRef = useRef<ProcurementState | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -7053,15 +7352,28 @@ export default function Home() {
         }
 
         const liveStateRow = data as LiveStateRow;
-        const fallbackState = applyLaunchCleanup(latestStateRef.current);
+        const localSnapshot = applyLaunchCleanup(latestStateRef.current);
         const remoteState = liveStateRow?.state
           ? parseState(JSON.stringify(liveStateRow.state))
-          : fallbackState;
+          : localSnapshot;
+        const localOnlyRequestIds = liveStateRow?.state
+          ? getRecoverableLocalRequestIds(remoteState, localSnapshot)
+          : [];
         const profileHydratedState = stateWithSignedInProfile(remoteState, authUser);
         const hydratedState = applyLaunchCleanup(profileHydratedState);
         const cleanupApplied =
           hydratedState.maintenance?.launchCleanupVersion !==
           profileHydratedState.maintenance?.launchCleanupVersion;
+
+        if (localOnlyRequestIds.length > 0) {
+          recoverableLocalStateRef.current = localSnapshot;
+          setRecoverableLocalRequestIds(localOnlyRequestIds);
+          setRecoveryMessage("");
+        } else {
+          recoverableLocalStateRef.current = null;
+          setRecoverableLocalRequestIds([]);
+          setRecoveryMessage("");
+        }
 
         setState(hydratedState);
 
@@ -7355,6 +7667,103 @@ export default function Home() {
     setLiveSyncAttempt((attempt) => attempt + 1);
   };
 
+  const submitNewRequest = async (
+    draft: ProcurementRequestDraft,
+    submitter: UserProfile,
+  ) => {
+    if (supabaseClient && authUser && liveSyncStatus === "ready") {
+      const saveResult = await submitDraftToLiveState(
+        supabaseClient,
+        draft,
+        submitter.id,
+        authUser,
+        latestStateRef.current,
+      );
+
+      if (saveResult.error || !saveResult.state || !saveResult.requestId) {
+        const message =
+          saveResult.error || "The request could not be saved to the live database.";
+        setLiveSyncStatus("error");
+        setLiveSyncError(message);
+        throw new Error(message);
+      }
+
+      setState(saveResult.state);
+      setSelectedRequestId(saveResult.requestId);
+      setView("dashboard");
+
+      if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
+        void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
+          (deliveredState) => {
+            if (!deliveredState) return;
+            setState((current) =>
+              serializeState(deliveredState) !== serializeState(current)
+                ? deliveredState
+                : current,
+            );
+          },
+        );
+      }
+
+      return saveResult.requestId;
+    }
+
+    const nextId = nextRequestId(state.requests);
+    setState((current) =>
+      submitProcurementRequest(current, draft, submitter.id),
+    );
+    setSelectedRequestId(nextId);
+    setView("dashboard");
+    return nextId;
+  };
+
+  const recoverUnsyncedLocalRequests = async () => {
+    if (
+      !supabaseClient ||
+      !authUser ||
+      recoverableLocalRequestIds.length === 0 ||
+      !recoverableLocalStateRef.current
+    ) {
+      return;
+    }
+
+    setRecoveringLocalRequests(true);
+    setRecoveryMessage("");
+
+    const saveResult = await recoverLocalRequestsToLiveState(
+      supabaseClient,
+      recoverableLocalStateRef.current,
+      recoverableLocalRequestIds,
+      authUser,
+      latestStateRef.current,
+    );
+
+    setRecoveringLocalRequests(false);
+
+    if (saveResult.error || !saveResult.state) {
+      const message =
+        saveResult.error || "The local request recovery could not be saved.";
+      setLiveSyncStatus("error");
+      setLiveSyncError(message);
+      return;
+    }
+
+    setState(saveResult.state);
+    setRecoverableLocalRequestIds([]);
+    recoverableLocalStateRef.current = null;
+
+    if (saveResult.requestIds && saveResult.requestIds.length > 0) {
+      setSelectedRequestId(saveResult.requestIds[0]);
+      setView("dashboard");
+      setRecoveryMessage(
+        `Recovered ${saveResult.requestIds.join(", ")} to the live workspace.`,
+      );
+      return;
+    }
+
+    setRecoveryMessage("No local-only requests needed recovery.");
+  };
+
   if (!isSignedIn) {
     return (
       <SignInScreen
@@ -7629,10 +8038,40 @@ export default function Home() {
               Live Supabase sync failed: {liveSyncError || "check Supabase schema and permissions."}
             </div>
           ) : null}
+          {authStatus === "signed-in" && recoverableLocalRequestIds.length > 0 ? (
+            <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-semibold">
+                  Unsynced local request found: {recoverableLocalRequestIds.join(", ")}
+                </p>
+                <p className="mt-1">
+                  This browser has request data that is newer than the live Supabase workspace. Recover it to make it visible to everyone.
+                </p>
+              </div>
+              <button
+                className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg bg-amber-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-amber-300"
+                disabled={recoveringLocalRequests}
+                onClick={() => {
+                  void recoverUnsyncedLocalRequests();
+                }}
+                type="button"
+              >
+                {recoveringLocalRequests ? "Recovering..." : "Recover to live"}
+              </button>
+            </div>
+          ) : null}
+          {recoveryMessage ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium text-emerald-800">
+              {recoveryMessage}
+            </div>
+          ) : null}
           {activeView === "dashboard" ? (
             usesPersonalDashboard ? (
               <EmployeePortal
                 currentUser={currentUser}
+                hasSupabaseConfig={hasSupabaseClientConfig}
+                liveSyncStatus={liveSyncStatus}
+                onSubmitRequest={submitNewRequest}
                 selectedRequestId={selectedRequestId}
                 setSelectedRequestId={setSelectedRequestId}
                 setState={setState}
@@ -7673,16 +8112,10 @@ export default function Home() {
         {activeView === "new-request" ? (
           <RequestForm
             currentUser={currentUser}
+            hasSupabaseConfig={hasSupabaseClientConfig}
+            liveSyncStatus={liveSyncStatus}
             projectOptions={state.projectOptions}
-            onSubmit={(draft) => {
-              const nextId = nextRequestId(state.requests);
-              setState((current) =>
-                submitProcurementRequest(current, draft, currentUser.id),
-              );
-              setSelectedRequestId(nextId);
-              setView("dashboard");
-              return nextId;
-            }}
+            onSubmit={(draft) => submitNewRequest(draft, currentUser)}
           />
         ) : null}
 
