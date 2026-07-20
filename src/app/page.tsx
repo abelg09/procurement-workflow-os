@@ -7053,25 +7053,19 @@ export default function Home() {
         }
 
         const liveStateRow = data as LiveStateRow;
-        const localState = applyLaunchCleanup(latestStateRef.current);
+        const fallbackState = applyLaunchCleanup(latestStateRef.current);
         const remoteState = liveStateRow?.state
           ? parseState(JSON.stringify(liveStateRow.state))
-          : localState;
-        const mergedState = liveStateRow?.state
-          ? mergeProcurementStates(remoteState, localState)
-          : localState;
-        const profileHydratedState = stateWithSignedInProfile(mergedState, authUser);
+          : fallbackState;
+        const profileHydratedState = stateWithSignedInProfile(remoteState, authUser);
         const hydratedState = applyLaunchCleanup(profileHydratedState);
         const cleanupApplied =
           hydratedState.maintenance?.launchCleanupVersion !==
           profileHydratedState.maintenance?.launchCleanupVersion;
-        const mergeApplied =
-          liveStateRow?.state &&
-          serializeState(mergedState) !== serializeState(remoteState);
 
         setState(hydratedState);
 
-        if (!liveStateRow?.state || cleanupApplied || mergeApplied) {
+        if (!liveStateRow?.state || cleanupApplied) {
           const saveResult = await saveLiveStateWithRetry(
             supabaseClient,
             hydratedState,
