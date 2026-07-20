@@ -39,8 +39,6 @@ import {
   FormEvent,
   MouseEventHandler,
   ReactNode,
-  RefObject,
-  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -205,13 +203,6 @@ async function withDatabaseTimeout<T>(
       clearTimeout(timeoutId);
     }
   }
-}
-
-function revealSelectedRequest(detailsRef: RefObject<HTMLElement | null>) {
-  if (typeof window === "undefined") return;
-  window.requestAnimationFrame(() => {
-    detailsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  });
 }
 
 async function saveLiveStateWithRetry(
@@ -2330,6 +2321,7 @@ function RequestsTable({
   users,
   selectedRequestId,
   onSelect,
+  renderSelectedDetails,
   currentUser,
   title = "All procurement requests",
   description = "Search, filter, and open requests to view stage actions.",
@@ -2340,6 +2332,7 @@ function RequestsTable({
   users: UserProfile[];
   selectedRequestId?: string;
   onSelect: (id: string) => void;
+  renderSelectedDetails?: (request: ProcurementRequest) => ReactNode;
   currentUser?: UserProfile;
   title?: string;
   description?: string;
@@ -2509,80 +2502,90 @@ function RequestsTable({
             const blocked = currentUser ? isUserBlockedTask(request, currentUser, users) : false;
             const overdue = isRequestOverdue(request);
             const needsAttention = blocked || overdue;
+            const isSelected = selectedRequestId === request.id;
 
             return (
-              <button
-                className={classNames(
-                  "box-border min-w-0 w-full rounded-xl border p-3 text-left transition",
-                  needsAttention
-                    ? selectedRequestId === request.id
-                      ? "border-red-300 bg-red-100"
-                      : "border-red-200 bg-red-50"
-                    : selectedRequestId === request.id
-                      ? "border-blue-200 bg-blue-50"
-                      : "border-slate-200 bg-white",
-                )}
-                key={`mobile-${request.id}`}
-                onClick={() => onSelect(request.id)}
-                type="button"
-              >
-                <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-start min-[420px]:justify-between">
-                  <div className="min-w-0">
-                    <p className="font-bold text-slate-950">{request.id}</p>
-                    <p className="mt-1 truncate text-sm text-slate-500">
-                      {request.employeeName} - {request.itemName}
-                    </p>
-                  </div>
-                  <span className="min-w-0 min-[420px]:shrink-0">
-                    <StatusBadge status={request.status} />
-                  </span>
-                </div>
-                {overdue ? (
-                  <div className="mt-2 inline-flex rounded-md border border-red-200 bg-white/70 px-2 py-1 text-xs font-semibold text-red-800">
-                    Over {OVERDUE_REQUEST_HOURS}h without update
-                  </div>
-                ) : null}
-                <div className="mt-3 grid gap-2 text-sm text-slate-600">
-                  <div className="flex justify-between gap-3">
-                    <span className="text-slate-500">Stage</span>
-                    <span className="min-w-0 break-words text-right font-medium text-slate-800">
-                      {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
+              <Fragment key={`mobile-${request.id}`}>
+                <button
+                  className={classNames(
+                    "box-border min-w-0 w-full rounded-xl border p-3 text-left transition",
+                    needsAttention
+                      ? isSelected
+                        ? "border-red-300 bg-red-100"
+                        : "border-red-200 bg-red-50"
+                      : isSelected
+                        ? "border-blue-200 bg-blue-50"
+                        : "border-slate-200 bg-white",
+                  )}
+                  onClick={() => onSelect(request.id)}
+                  type="button"
+                >
+                  <div className="flex flex-col gap-2 min-[420px]:flex-row min-[420px]:items-start min-[420px]:justify-between">
+                    <div className="min-w-0">
+                      <p className="font-bold text-slate-950">{request.id}</p>
+                      <p className="mt-1 truncate text-sm text-slate-500">
+                        {request.employeeName} - {request.itemName}
+                      </p>
+                    </div>
+                    <span className="min-w-0 min-[420px]:shrink-0">
+                      <StatusBadge status={request.status} />
                     </span>
                   </div>
-                  <div className="flex justify-between gap-3">
-                    <span className="text-slate-500">Assignee</span>
-                    <span className="min-w-0 break-words text-right font-medium text-slate-800">
-                      {getAssigneeName(request, users)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <span className="text-slate-500">Project</span>
-                    <span className="min-w-0 break-words text-right font-medium text-slate-800">
-                      {request.project}
-                    </span>
-                  </div>
-                  {!hideFinancials ? (
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">Total AED</span>
-                      <span className="min-w-0 break-words text-right font-semibold text-slate-900">
-                        {money(getRequestTotalAed(request), "AED")}
-                      </span>
+                  {overdue ? (
+                    <div className="mt-2 inline-flex rounded-md border border-red-200 bg-white/70 px-2 py-1 text-xs font-semibold text-red-800">
+                      Over {OVERDUE_REQUEST_HOURS}h without update
                     </div>
                   ) : null}
-                  <div className="flex justify-between gap-3">
-                    <span className="text-slate-500">Invoice</span>
-                    <span className="min-w-0 break-words text-right font-medium text-slate-800">
-                      {getInvoiceSummary(request)}
-                    </span>
+                  <div className="mt-3 grid gap-2 text-sm text-slate-600">
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Stage</span>
+                      <span className="min-w-0 break-words text-right font-medium text-slate-800">
+                        {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Assignee</span>
+                      <span className="min-w-0 break-words text-right font-medium text-slate-800">
+                        {getAssigneeName(request, users)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Project</span>
+                      <span className="min-w-0 break-words text-right font-medium text-slate-800">
+                        {request.project}
+                      </span>
+                    </div>
+                    {!hideFinancials ? (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-500">Total AED</span>
+                        <span className="min-w-0 break-words text-right font-semibold text-slate-900">
+                          {money(getRequestTotalAed(request), "AED")}
+                        </span>
+                      </div>
+                    ) : null}
+                    <div className="flex justify-between gap-3">
+                      <span className="text-slate-500">Invoice</span>
+                      <span className="min-w-0 break-words text-right font-medium text-slate-800">
+                        {getInvoiceSummary(request)}
+                      </span>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 p-2 text-slate-700">
+                      {getPendingAction(request)}
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      Last updated {formatDateTime(request.updatedAt)}
+                    </p>
                   </div>
-                  <div className="rounded-lg bg-slate-50 p-2 text-slate-700">
-                    {getPendingAction(request)}
+                </button>
+                {isSelected && renderSelectedDetails ? (
+                  <div
+                    className="min-w-0 rounded-xl border border-blue-100 bg-slate-50 p-2"
+                    key={`mobile-details-${request.id}`}
+                  >
+                    {renderSelectedDetails(request)}
                   </div>
-                  <p className="text-xs text-slate-500">
-                    Last updated {formatDateTime(request.updatedAt)}
-                  </p>
-                </div>
-              </button>
+                ) : null}
+              </Fragment>
             );
           })
         )}
@@ -2615,65 +2618,77 @@ function RequestsTable({
                 const blocked = currentUser ? isUserBlockedTask(request, currentUser, users) : false;
                 const overdue = isRequestOverdue(request);
                 const needsAttention = blocked || overdue;
+                const isSelected = selectedRequestId === request.id;
+                const columnCount = hideFinancials ? 8 : 9;
 
                 return (
-                <tr
-                  className={classNames(
-                    "cursor-pointer transition hover:bg-blue-50/60",
-                    needsAttention
-                      ? selectedRequestId === request.id
-                        ? "bg-red-100 hover:bg-red-100"
-                        : "bg-red-50 hover:bg-red-100"
-                      : selectedRequestId === request.id
-                        ? "bg-blue-50"
-                        : "bg-white",
-                  )}
-                  key={request.id}
-                  onClick={() => onSelect(request.id)}
-                >
-                  <td className="px-4 py-3">
-                    <p className="font-bold text-slate-950">{request.id}</p>
-                    <p className="mt-1 max-w-52 truncate text-slate-500">
-                      {request.employeeName} - {request.itemName}
-                    </p>
-                    {overdue ? (
-                      <p className="mt-1 text-xs font-semibold text-red-700">
-                        Over {OVERDUE_REQUEST_HOURS}h without update
-                      </p>
+                  <Fragment key={request.id}>
+                    <tr
+                      className={classNames(
+                        "cursor-pointer transition hover:bg-blue-50/60",
+                        needsAttention
+                          ? isSelected
+                            ? "bg-red-100 hover:bg-red-100"
+                            : "bg-red-50 hover:bg-red-100"
+                          : isSelected
+                            ? "bg-blue-50"
+                            : "bg-white",
+                      )}
+                      onClick={() => onSelect(request.id)}
+                    >
+                      <td className="px-4 py-3">
+                        <p className="font-bold text-slate-950">{request.id}</p>
+                        <p className="mt-1 max-w-52 truncate text-slate-500">
+                          {request.employeeName} - {request.itemName}
+                        </p>
+                        {overdue ? (
+                          <p className="mt-1 text-xs font-semibold text-red-700">
+                            Over {OVERDUE_REQUEST_HOURS}h without update
+                          </p>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3">{request.project}</td>
+                      <td className="px-4 py-3">
+                        {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
+                      </td>
+                      <td className="px-4 py-3">{getAssigneeName(request, users)}</td>
+                      {!hideFinancials ? (
+                        <td className="px-4 py-3 font-semibold">
+                          {money(getRequestTotalAed(request), "AED")}
+                          <p className="mt-1 text-xs font-normal text-slate-500">
+                            {getRequestItemCount(request)} item(s)
+                          </p>
+                        </td>
+                      ) : null}
+                      <td className="px-4 py-3">
+                        <StatusBadge status={request.status} />
+                      </td>
+                      <td className="px-4 py-3">
+                        {getRequestInvoices(request).length > 0 ? (
+                          <span className="text-emerald-700">{getInvoiceSummary(request)}</span>
+                        ) : (
+                          <span className="text-amber-700">Pending</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={classNames("line-clamp-2 max-w-72", needsAttention ? "font-semibold text-red-800" : "text-slate-600")}>
+                          {getPendingAction(request)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-slate-500">
+                        {formatDateTime(request.updatedAt)}
+                      </td>
+                    </tr>
+                    {isSelected && renderSelectedDetails ? (
+                      <tr className="bg-slate-50" key={`details-${request.id}`}>
+                        <td className="px-4 py-5" colSpan={columnCount}>
+                          <div className="min-w-0 rounded-2xl border border-blue-100 bg-white p-3 shadow-sm">
+                            {renderSelectedDetails(request)}
+                          </div>
+                        </td>
+                      </tr>
                     ) : null}
-                  </td>
-                  <td className="px-4 py-3">{request.project}</td>
-                  <td className="px-4 py-3">
-                    {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
-                  </td>
-                  <td className="px-4 py-3">{getAssigneeName(request, users)}</td>
-                  {!hideFinancials ? (
-                    <td className="px-4 py-3 font-semibold">
-                    {money(getRequestTotalAed(request), "AED")}
-                    <p className="mt-1 text-xs font-normal text-slate-500">
-                      {getRequestItemCount(request)} item(s)
-                    </p>
-                  </td>
-                  ) : null}
-                  <td className="px-4 py-3">
-                    <StatusBadge status={request.status} />
-                  </td>
-                  <td className="px-4 py-3">
-                    {getRequestInvoices(request).length > 0 ? (
-                      <span className="text-emerald-700">{getInvoiceSummary(request)}</span>
-                    ) : (
-                      <span className="text-amber-700">Pending</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={classNames("line-clamp-2 max-w-72", needsAttention ? "font-semibold text-red-800" : "text-slate-600")}>
-                      {getPendingAction(request)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-slate-500">
-                    {formatDateTime(request.updatedAt)}
-                  </td>
-                </tr>
+                  </Fragment>
                 );
               })
             )}
@@ -4128,20 +4143,15 @@ function RequestDetails({
   state,
   currentUser,
   onTransition,
-  detailsRef,
 }: {
   request?: ProcurementRequest;
   state: ProcurementState;
   currentUser: UserProfile;
   onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
-  detailsRef?: RefObject<HTMLElement | null>;
 }) {
   if (!request) {
     return (
-      <section
-        className={classNames(panelClass, "min-w-0 scroll-mt-24 p-8 text-center text-slate-500")}
-        ref={detailsRef}
-      >
+      <section className={classNames(panelClass, "min-w-0 p-8 text-center text-slate-500")}>
         Select a request to see workflow details.
       </section>
     );
@@ -4155,7 +4165,7 @@ function RequestDetails({
   );
 
   return (
-    <section className="grid min-w-0 scroll-mt-24 gap-5" ref={detailsRef}>
+    <section className="grid min-w-0 gap-5">
       <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
@@ -6448,22 +6458,17 @@ function EmployeeRequestStatus({
   state,
   currentUser,
   onTransition,
-  detailsRef,
 }: {
   request?: ProcurementRequest;
   state: ProcurementState;
   currentUser: UserProfile;
   onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
-  detailsRef?: RefObject<HTMLElement | null>;
 }) {
   const [cancellationReason, setCancellationReason] = useState("");
 
   if (!request) {
     return (
-      <section
-        className={classNames(panelClass, "min-w-0 scroll-mt-24 p-6 text-sm text-slate-500")}
-        ref={detailsRef}
-      >
+      <section className={classNames(panelClass, "min-w-0 p-6 text-sm text-slate-500")}>
         Select a request to view its current status.
       </section>
     );
@@ -6505,7 +6510,7 @@ function EmployeeRequestStatus({
     .sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime())[0];
 
   return (
-    <section className={classNames(panelClass, "min-w-0 scroll-mt-24 p-4 sm:p-5")} ref={detailsRef}>
+    <section className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -6653,14 +6658,6 @@ function EmployeePortal({
   const selectedRequest =
     employeeRequests.find((request) => request.id === selectedRequestId) ??
     employeeRequests[0];
-  const requestDetailsRef = useRef<HTMLElement | null>(null);
-  const selectAndRevealRequest = useCallback(
-    (id: string) => {
-      setSelectedRequestId(id);
-      revealSelectedRequest(requestDetailsRef);
-    },
-    [setSelectedRequestId],
-  );
 
   return (
     <div className="grid min-w-0 gap-5">
@@ -6695,22 +6692,22 @@ function EmployeePortal({
         currentUser={currentUser}
         description="Private status view for requests submitted from your employee account."
         hideFinancials
-        onSelect={selectAndRevealRequest}
+        onSelect={setSelectedRequestId}
+        renderSelectedDetails={(request) => (
+          <EmployeeRequestStatus
+            currentUser={currentUser}
+            onTransition={(requestId, action) =>
+              setState((current) => transitionRequest(current, requestId, currentUser.id, action))
+            }
+            request={request}
+            state={state}
+          />
+        )}
         requests={employeeRequests}
         selectedRequestId={selectedRequest?.id}
         showAssigneeFilter={false}
         title="My procurement status"
         users={state.users}
-      />
-
-      <EmployeeRequestStatus
-        currentUser={currentUser}
-        detailsRef={requestDetailsRef}
-        onTransition={(requestId, action) =>
-          setState((current) => transitionRequest(current, requestId, currentUser.id, action))
-        }
-        request={selectedRequest}
-        state={state}
       />
     </div>
   );
@@ -6741,14 +6738,6 @@ function Dashboard({
   const selectedRequest =
     visibleRequests.find((request) => request.id === selectedRequestId) ??
     visibleRequests[0];
-  const requestDetailsRef = useRef<HTMLElement | null>(null);
-  const selectAndRevealRequest = useCallback(
-    (id: string) => {
-      setSelectedRequestId(id);
-      revealSelectedRequest(requestDetailsRef);
-    },
-    [setSelectedRequestId],
-  );
   const metrics = getMetrics(visibleRequests);
   const blockedTasks = getUserBlockedTasks(state.requests, currentUser, state.users);
   const watchlistRequests = blockedTasks.length > 0 ? blockedTasks : getStuckRequests(state.requests);
@@ -6822,19 +6811,20 @@ function Dashboard({
       <div className="grid min-w-0 gap-5">
         <RequestsTable
           currentUser={currentUser}
-          onSelect={selectAndRevealRequest}
+          onSelect={setSelectedRequestId}
+          renderSelectedDetails={(request) => (
+            <RequestDetails
+              currentUser={currentUser}
+              onTransition={(requestId, action) =>
+                setState((current) => transitionRequest(current, requestId, currentUser.id, action))
+              }
+              request={request}
+              state={state}
+            />
+          )}
           requests={visibleRequests}
           selectedRequestId={selectedRequest?.id}
           users={state.users}
-        />
-        <RequestDetails
-          currentUser={currentUser}
-          detailsRef={requestDetailsRef}
-          onTransition={(requestId, action) =>
-            setState((current) => transitionRequest(current, requestId, currentUser.id, action))
-          }
-          request={selectedRequest}
-          state={state}
         />
         <div className="grid min-w-0 gap-5 xl:grid-cols-2">
           <ProcurementAssistant
@@ -6862,7 +6852,7 @@ function Dashboard({
                     : "border-orange-200 bg-orange-50 text-orange-900",
                 )}
                 key={request.id}
-                onClick={() => selectAndRevealRequest(request.id)}
+                onClick={() => setSelectedRequestId(request.id)}
                 type="button"
               >
                 <strong>{request.id}</strong> has been over {OVERDUE_REQUEST_HOURS}h since{" "}
