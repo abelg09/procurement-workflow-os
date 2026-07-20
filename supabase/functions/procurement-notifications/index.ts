@@ -64,18 +64,6 @@ function optionalEnv(name: string) {
   return Deno.env.get(name)?.trim() ?? "";
 }
 
-function isPlaceholderEmail(email: string) {
-  return email.toLowerCase().endsWith("@example.com");
-}
-
-function htmlEscape(value: string) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
 function slackEscape(value: string) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -94,79 +82,6 @@ function requestUrl(appBaseUrl: string, requestId?: string | null) {
     view: "work-queue",
   });
   return `${base}?${params.toString()}`;
-}
-
-function textForDelivery(delivery: OutboundNotificationLog, appBaseUrl: string) {
-  return [
-    delivery.title,
-    "",
-    delivery.body,
-    "",
-    `Open request: ${requestUrl(appBaseUrl, delivery.requestId)}`,
-  ].join("\n");
-}
-
-function htmlForDelivery(delivery: OutboundNotificationLog, appBaseUrl: string) {
-  const paragraphs = delivery.body
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => `<p>${htmlEscape(line)}</p>`)
-    .join("");
-
-  return [
-    `<h2>${htmlEscape(delivery.title)}</h2>`,
-    paragraphs,
-    `<p><a href="${htmlEscape(requestUrl(appBaseUrl, delivery.requestId))}">Open request</a></p>`,
-  ].join("");
-}
-
-async function sendEmail(
-  delivery: OutboundNotificationLog,
-  user: UserProfile,
-  appBaseUrl: string,
-) {
-  const apiKey = optionalEnv("RESEND_API_KEY");
-  const from = optionalEnv("REMINDER_EMAIL_FROM") || optionalEnv("NOTIFICATION_EMAIL_FROM");
-
-  if (!apiKey || !from) {
-    return { status: "skipped" as const, error: "Resend email provider is not configured." };
-  }
-
-  if (!user.email || isPlaceholderEmail(user.email)) {
-    return { status: "skipped" as const, error: "No deliverable email is configured." };
-  }
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from,
-      to: user.email,
-      subject: delivery.title,
-      text: textForDelivery(delivery, appBaseUrl),
-      html: htmlForDelivery(delivery, appBaseUrl),
-    }),
-  });
-  const responseText = await response.text();
-
-  if (!response.ok) {
-    return {
-      status: "failed" as const,
-      error: responseText || `Resend returned HTTP ${response.status}.`,
-    };
-  }
-
-  let providerMessageId = "";
-  try {
-    providerMessageId = JSON.parse(responseText).id ?? "";
-  } catch {
-    providerMessageId = "";
-  }
-
-  return { status: "sent" as const, providerMessageId };
 }
 
 function slackBlocks(delivery: OutboundNotificationLog, appBaseUrl: string) {
@@ -345,9 +260,9 @@ Deno.serve(async (request) => {
         continue;
       }
 
-      if (delivery.channel === "email" && user.emailNotificationsEnabled === false) {
+      if (delivery.channel === "email") {
         delivery.status = "skipped";
-        delivery.error = "Recipient email notifications are disabled.";
+        delivery.error = "Email notifications are disabled. Slack is the active channel.";
         results.push({ id: delivery.id, channel: delivery.channel, status: delivery.status });
         continue;
       }
@@ -359,10 +274,7 @@ Deno.serve(async (request) => {
         continue;
       }
 
-      const result =
-        delivery.channel === "email"
-          ? await sendEmail(delivery, user, appBaseUrl)
-          : await sendSlack(delivery, user, appBaseUrl);
+      const result = await sendSlack(delivery, user, appBaseUrl);
       delivery.status = result.status;
       delivery.error = result.error;
       delivery.providerMessageId = result.providerMessageId;

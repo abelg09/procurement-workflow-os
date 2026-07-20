@@ -23,8 +23,6 @@ const optional = (name) => process.env[name]?.trim() ?? "";
 
 const supabaseUrl = required("NEXT_PUBLIC_SUPABASE_URL").replace(/\/$/, "");
 const serviceRoleKey = required("SUPABASE_SERVICE_ROLE_KEY");
-const resendApiKey = optional("RESEND_API_KEY");
-const reminderFrom = optional("REMINDER_EMAIL_FROM");
 const slackBotToken = optional("SLACK_BOT_TOKEN");
 const slackWebhookUrl = optional("SLACK_WEBHOOK_URL");
 const dashboardUrl =
@@ -189,28 +187,6 @@ function reminderRecipients(state) {
   );
 }
 
-function htmlEscape(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function recipientEmail(user, overrides) {
-  const roleLabel = roleLabelFor(user);
-  return (
-    overrides[String(user.role).toLowerCase()] ||
-    overrides[String(roleLabel).toLowerCase()] ||
-    overrides[String(user.name).toLowerCase()] ||
-    user.email
-  );
-}
-
-function isPlaceholderEmail(email) {
-  return String(email).toLowerCase().endsWith("@example.com");
-}
-
 function roleLabelFor(user) {
   return ROLE_DISPLAY_NAMES[user.role] ?? user.role;
 }
@@ -232,43 +208,6 @@ function buildReminderSummary(state, user) {
     overdueIds,
     activeText,
     overdueText,
-  };
-}
-
-function buildEmail(summary, overrides) {
-  const { user, roleLabel, activeRequests, overdueRequests, activeText, overdueText } = summary;
-  const subject =
-    overdueRequests.length > 0
-      ? `Procurement dashboard reminder: ${overdueRequests.length} overdue task(s)`
-      : "Procurement dashboard reminder";
-  const text = [
-    `Hi ${user.name},`,
-    "",
-    "Please check the Procurement Workflow OS dashboard today.",
-    `Role queue: ${roleLabel}`,
-    `Active assigned tasks: ${activeRequests.length} (${activeText})`,
-    `Over 24 hours: ${overdueRequests.length} (${overdueText})`,
-    "",
-    `Dashboard: ${dashboardUrl}`,
-  ].join("\n");
-  const html = [
-    `<p>Hi ${htmlEscape(user.name)},</p>`,
-    "<p>Please check the Procurement Workflow OS dashboard today.</p>",
-    "<ul>",
-    `<li><strong>Role queue:</strong> ${htmlEscape(roleLabel)}</li>`,
-    `<li><strong>Active assigned tasks:</strong> ${activeRequests.length} (${htmlEscape(activeText)})</li>`,
-    `<li><strong>Over 24 hours:</strong> ${overdueRequests.length} (${htmlEscape(overdueText)})</li>`,
-    "</ul>",
-    `<p><a href="${htmlEscape(dashboardUrl)}">Open Procurement Workflow OS</a></p>`,
-  ].join("");
-
-  return {
-    user,
-    email: recipientEmail(user, overrides),
-    name: user.name,
-    subject,
-    text,
-    html,
   };
 }
 
@@ -376,66 +315,6 @@ async function fetchState() {
   }
 
   return rows[0].state;
-}
-
-async function sendEmail(email) {
-  if (email.user?.emailNotificationsEnabled === false || email.user?.notificationsEnabled === false) {
-    return {
-      email: email.email,
-      name: email.name,
-      status: "skipped",
-      message: "Recipient email notifications are disabled.",
-    };
-  }
-
-  if (!resendApiKey || !reminderFrom) {
-    return {
-      email: email.email,
-      name: email.name,
-      status: "skipped",
-      message: "Email provider is not configured.",
-    };
-  }
-
-  if (!email.email || isPlaceholderEmail(email.email)) {
-    return {
-      email: email.email,
-      name: email.name,
-      status: "skipped",
-      message: "No deliverable email configured.",
-    };
-  }
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${resendApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: reminderFrom,
-      to: email.email,
-      subject: email.subject,
-      text: email.text,
-      html: email.html,
-    }),
-  });
-
-  if (!response.ok) {
-    return {
-      email: email.email,
-      name: email.name,
-      status: "failed",
-      message: await response.text(),
-    };
-  }
-
-  return {
-    email: email.email,
-    name: email.name,
-    status: "sent",
-    message: "Email sent.",
-  };
 }
 
 async function sendSlackReminder(message) {
@@ -559,11 +438,8 @@ async function sendSlackDm(summary) {
 }
 
 const state = await fetchState();
-const emailOverrides = parseOverrides("REMINDER_EMAIL_OVERRIDES");
 const slackMentionOverrides = parseOverrides("SLACK_MENTION_OVERRIDES");
 const summaries = reminderRecipients(state).map((user) => buildReminderSummary(state, user));
-const emails = summaries.map((summary) => buildEmail(summary, emailOverrides));
-const emailResults = await Promise.all(emails.map(sendEmail));
 const slackResults = slackBotToken
   ? await Promise.all(summaries.map(sendSlackDm))
   : [
@@ -571,8 +447,8 @@ const slackResults = slackBotToken
         buildSlackMessage(summaries, slackMentionOverrides),
       ),
     ];
-const results = { emailResults, slackResults };
-const failed = [...emailResults, ...slackResults].filter((result) => result.status === "failed");
+const results = { slackResults };
+const failed = slackResults.filter((result) => result.status === "failed");
 
 console.log(JSON.stringify({ results }, null, 2));
 

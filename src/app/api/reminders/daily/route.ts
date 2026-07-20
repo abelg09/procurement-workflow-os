@@ -11,13 +11,6 @@ import { getSupabaseServiceClient } from "@/lib/supabase";
 const LIVE_STATE_ROW_ID = "default";
 const DEFAULT_DASHBOARD_URL = "https://procurement.sulmi.ai/";
 
-type EmailResult = {
-  email: string;
-  name: string;
-  status: "sent" | "skipped" | "failed";
-  message: string;
-};
-
 type SlackResult = {
   channel: "slack";
   status: "sent" | "skipped" | "failed";
@@ -45,19 +38,6 @@ function parseOverrides(envName: string) {
       })
       .filter(([key, value]) => key && value),
   );
-}
-
-function resolvedRecipientEmail(payload: DailyReminderEmail, overrides: Record<string, string>) {
-  return (
-    overrides[payload.role.toLowerCase()] ||
-    overrides[payload.roleLabel.toLowerCase()] ||
-    overrides[payload.name.toLowerCase()] ||
-    payload.email
-  );
-}
-
-function isPlaceholderEmail(email: string) {
-  return email.toLowerCase().endsWith("@example.com");
 }
 
 function slackEscape(value: string) {
@@ -144,74 +124,6 @@ function buildSlackMessage(
       dashboardUrl(),
     ].join(" | "),
     blocks: messageBlocks,
-  };
-}
-
-async function sendReminderEmail(
-  payload: DailyReminderEmail,
-  overrides: Record<string, string>,
-): Promise<EmailResult> {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.REMINDER_EMAIL_FROM;
-  const email = resolvedRecipientEmail(payload, overrides);
-
-  if (!payload.notificationsEnabled || !payload.emailNotificationsEnabled) {
-    return {
-      email,
-      name: payload.name,
-      status: "skipped",
-      message: "Recipient email notifications are disabled.",
-    };
-  }
-
-  if (!apiKey || !from) {
-    return {
-      email,
-      name: payload.name,
-      status: "skipped",
-      message: "RESEND_API_KEY or REMINDER_EMAIL_FROM is not configured.",
-    };
-  }
-
-  if (!email || isPlaceholderEmail(email)) {
-    return {
-      email,
-      name: payload.name,
-      status: "skipped",
-      message: "No deliverable reminder email is configured for this role.",
-    };
-  }
-
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from,
-      to: email,
-      subject: payload.subject,
-      text: payload.text,
-      html: payload.html,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    return {
-      email,
-      name: payload.name,
-      status: "failed",
-      message: errorText || `Resend returned HTTP ${response.status}.`,
-    };
-  }
-
-  return {
-    email,
-    name: payload.name,
-    status: "sent",
-    message: "Email sent.",
   };
 }
 
@@ -365,25 +277,18 @@ export async function POST() {
     );
   }
 
-  const overrides = parseOverrides("REMINDER_EMAIL_OVERRIDES");
   const slackMentionOverrides = parseOverrides("SLACK_MENTION_OVERRIDES");
-  const emailPayloads = getDailyReminderEmailPayloads(currentState, dashboardUrl());
-  const emailResults = await Promise.all(
-    emailPayloads.map((payload) => sendReminderEmail(payload, overrides)),
-  );
+  const reminderPayloads = getDailyReminderEmailPayloads(currentState, dashboardUrl());
   const slackResults = process.env.SLACK_BOT_TOKEN
-    ? await Promise.all(emailPayloads.map(sendSlackDm))
-    : [await sendSlackReminder(emailPayloads, slackMentionOverrides)];
-  const failed = [...emailResults, ...slackResults].filter(
-    (result) => result.status === "failed",
-  );
+    ? await Promise.all(reminderPayloads.map(sendSlackDm))
+    : [await sendSlackReminder(reminderPayloads, slackMentionOverrides)];
+  const failed = slackResults.filter((result) => result.status === "failed");
 
   return NextResponse.json(
     {
       ok: failed.length === 0,
       inserted,
       schedule: "Daily at 3:00 PM Asia/Dubai",
-      emailResults,
       slackResults,
     },
     { status: failed.length === 0 ? 200 : 502 },

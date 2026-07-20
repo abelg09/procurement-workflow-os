@@ -4629,7 +4629,7 @@ function NotificationsCenter({
             <h2 className="text-lg font-bold text-slate-950">Notification center</h2>
           </div>
           <p className="mt-1 text-sm text-slate-500">
-            Internal alerts with queued email and Slack delivery for task assignments and reminders.
+            Internal alerts with queued Slack delivery for task assignments and reminders.
           </p>
         </div>
         <IconButton
@@ -5372,7 +5372,6 @@ function AdminPanel({
                       <div className="grid gap-2 text-xs font-semibold text-slate-600">
                         {[
                           ["All", "notificationsEnabled"],
-                          ["Email", "emailNotificationsEnabled"],
                           ["Slack", "slackNotificationsEnabled"],
                           ["3 PM", "reminderNotificationsEnabled"],
                         ].map(([label, key]) => (
@@ -5491,15 +5490,20 @@ function AdminPanel({
             <h3 className="text-base font-bold text-slate-950">Outbound notification log</h3>
           </div>
           <p className="mt-1 text-sm text-slate-500">
-            Latest email and Slack delivery attempts created by workflow notifications.
+            Latest Slack delivery attempts created by workflow notifications.
           </p>
           <div className="mt-4 grid gap-2">
-            {(state.outboundNotifications ?? []).length === 0 ? (
+            {(state.outboundNotifications ?? []).filter((delivery) => delivery.channel === "slack")
+              .length === 0 ? (
               <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                No outbound notification attempts yet.
+                No Slack delivery attempts yet.
               </div>
             ) : null}
-            {[...(state.outboundNotifications ?? [])].reverse().slice(0, 12).map((delivery) => (
+            {[...(state.outboundNotifications ?? [])]
+              .filter((delivery) => delivery.channel === "slack")
+              .reverse()
+              .slice(0, 12)
+              .map((delivery) => (
               <div
                 className={classNames(insetPanelClass, "grid gap-2 p-3 text-sm")}
                 key={delivery.id}

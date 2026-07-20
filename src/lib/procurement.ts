@@ -1691,8 +1691,8 @@ export function isUserNotificationEnabled(user: UserProfile) {
   return user.notificationsEnabled !== false;
 }
 
-export function isUserEmailNotificationEnabled(user: UserProfile) {
-  return isUserNotificationEnabled(user) && user.emailNotificationsEnabled !== false;
+export function isUserEmailNotificationEnabled() {
+  return false;
 }
 
 export function isUserSlackNotificationEnabled(user: UserProfile) {
@@ -1764,9 +1764,6 @@ function queueOutboundNotificationsForNewInternalNotifications(
       }
 
       const channels: OutboundNotificationChannel[] = [];
-      if (isUserEmailNotificationEnabled(user)) {
-        channels.push("email");
-      }
       if (isUserSlackNotificationEnabled(user)) {
         channels.push("slack");
       }
@@ -3675,7 +3672,7 @@ export function getDailyReminderEmailPayloads(
       email: user.email,
       slackUserId: user.slackUserId,
       notificationsEnabled: isUserNotificationEnabled(user),
-      emailNotificationsEnabled: isUserEmailNotificationEnabled(user),
+      emailNotificationsEnabled: isUserEmailNotificationEnabled(),
       slackNotificationsEnabled: isUserSlackNotificationEnabled(user),
       activeCount: activeRequests.length,
       overdueCount: overdueRequests.length,

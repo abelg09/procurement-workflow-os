@@ -66,9 +66,6 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF || secrets.SUPABASE_PROJECT_REF }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          REMINDER_EMAIL_FROM: ${{ vars.REMINDER_EMAIL_FROM || secrets.REMINDER_EMAIL_FROM }}
-          NOTIFICATION_EMAIL_FROM: ${{ vars.NOTIFICATION_EMAIL_FROM || secrets.NOTIFICATION_EMAIL_FROM }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           APP_BASE_URL: ${{ vars.APP_BASE_URL || vars.PROCUREMENT_DASHBOARD_URL || 'https://procurement.sulmi.ai/' }}
@@ -76,9 +73,6 @@ jobs:
         run: |
           args=()
           [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] && args+=("SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY")
-          [ -n "$RESEND_API_KEY" ] && args+=("RESEND_API_KEY=$RESEND_API_KEY")
-          [ -n "$REMINDER_EMAIL_FROM" ] && args+=("REMINDER_EMAIL_FROM=$REMINDER_EMAIL_FROM")
-          [ -n "$NOTIFICATION_EMAIL_FROM" ] && args+=("NOTIFICATION_EMAIL_FROM=$NOTIFICATION_EMAIL_FROM")
           [ -n "$SLACK_BOT_TOKEN" ] && args+=("SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN")
           [ -n "$SLACK_WEBHOOK_URL" ] && args+=("SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL")
           [ -n "$APP_BASE_URL" ] && args+=("APP_BASE_URL=$APP_BASE_URL")
