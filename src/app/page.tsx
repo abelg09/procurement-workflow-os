@@ -4932,19 +4932,38 @@ function downloadBlob(content: BlobPart, filename: string, type: string) {
 
 function SystemReadiness({
   hasSupabaseConfig,
+  liveSyncStatus,
+  liveSyncError,
   onClearWorkspace,
+  onRetryLiveSync,
 }: {
   hasSupabaseConfig: boolean;
+  liveSyncStatus: LiveSyncStatus;
+  liveSyncError: string;
   onClearWorkspace: () => void;
+  onRetryLiveSync: () => void;
 }) {
+  const liveDatabaseReady = hasSupabaseConfig && liveSyncStatus === "ready";
+  const liveDatabaseDetail =
+    liveSyncStatus === "ready"
+      ? "Admin edits and workflow changes are saving to the live Supabase workspace."
+      : liveSyncStatus === "loading"
+        ? "Waiting for the live Supabase workspace before admin edits can be trusted."
+        : liveSyncStatus === "error"
+          ? liveSyncError || "Refresh the connection before changing roles or notification settings."
+          : hasSupabaseConfig
+            ? "Sign in and wait for the live workspace connection before changing live settings."
+            : "Requests are stored in this browser until Supabase credentials are connected.";
   const items = [
     {
       label: "Database",
-      value: hasSupabaseConfig ? "Supabase configured" : "Browser workspace active",
-      detail: hasSupabaseConfig
-        ? "Requests can be wired to the Supabase project."
-        : "Requests are stored in this browser until Supabase credentials are connected.",
-      ready: hasSupabaseConfig,
+      value: liveDatabaseReady
+        ? "Live Supabase connected"
+        : hasSupabaseConfig
+          ? "Live Supabase pending"
+          : "Browser workspace active",
+      detail: liveDatabaseDetail,
+      ready: liveDatabaseReady,
     },
     {
       label: "Authentication",
@@ -4974,13 +4993,24 @@ function SystemReadiness({
             Operational checks for moving this workflow from browser storage into a hosted Supabase deployment.
           </p>
         </div>
-        <IconButton
-          icon={<RefreshCcw className="h-4 w-4" />}
-          onClick={onClearWorkspace}
-          variant="secondary"
-        >
-          Clear browser workspace
-        </IconButton>
+        <div className="grid gap-2 sm:flex sm:flex-wrap">
+          {hasSupabaseConfig && liveSyncStatus !== "ready" ? (
+            <IconButton
+              icon={<RefreshCcw className="h-4 w-4" />}
+              onClick={onRetryLiveSync}
+              variant="secondary"
+            >
+              Retry live sync
+            </IconButton>
+          ) : null}
+          <IconButton
+            icon={<RefreshCcw className="h-4 w-4" />}
+            onClick={onClearWorkspace}
+            variant="secondary"
+          >
+            Clear browser workspace
+          </IconButton>
+        </div>
       </div>
       <div className="mt-4 grid gap-3 lg:grid-cols-3">
         {items.map((item) => (
@@ -5012,16 +5042,118 @@ function SystemReadiness({
   );
 }
 
+function SlackReadiness({ users, liveSyncStatus }: { users: UserProfile[]; liveSyncStatus: LiveSyncStatus }) {
+  const reminderRoles: Role[] = ["Mona", "Rashid", "Dr. Majed", "Amro", "Edlyn", "Aileen"];
+  const reminderUsers = users.filter((user) => reminderRoles.includes(user.role));
+  const missingSlackUsers = reminderUsers.filter(
+    (user) =>
+      user.active &&
+      user.notificationsEnabled !== false &&
+      user.slackNotificationsEnabled !== false &&
+      user.reminderNotificationsEnabled !== false &&
+      !user.slackUserId?.trim(),
+  );
+
+  return (
+    <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Bell className="h-5 w-5 text-blue-700" />
+            <h3 className="text-base font-bold text-slate-950">Slack delivery readiness</h3>
+          </div>
+          <p className="mt-1 text-sm text-slate-500">
+            Direct Slack reminders need a saved Slack user ID for each active approval user.
+          </p>
+        </div>
+        <span
+          className={classNames(
+            "inline-flex rounded-full border px-3 py-1 text-xs font-semibold",
+            missingSlackUsers.length === 0 && liveSyncStatus === "ready"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-amber-200 bg-amber-50 text-amber-800",
+          )}
+        >
+          {missingSlackUsers.length === 0 && liveSyncStatus === "ready"
+            ? "Ready for Slack DMs"
+            : `${missingSlackUsers.length} missing Slack ID${missingSlackUsers.length === 1 ? "" : "s"}`}
+        </span>
+      </div>
+      {liveSyncStatus !== "ready" ? (
+        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900">
+          Live sync is not ready yet. Slack IDs typed below will not reach reminders until Supabase sync shows ready.
+        </div>
+      ) : null}
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[760px] text-left text-sm">
+          <thead className="text-xs uppercase text-slate-500">
+            <tr>
+              <th className="py-2">User</th>
+              <th className="py-2">Role</th>
+              <th className="py-2">Slack ID</th>
+              <th className="py-2">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {reminderUsers.map((user) => {
+              const hasSlackId = Boolean(user.slackUserId?.trim());
+              const slackEnabled =
+                user.active &&
+                user.notificationsEnabled !== false &&
+                user.slackNotificationsEnabled !== false &&
+                user.reminderNotificationsEnabled !== false;
+              return (
+                <tr key={user.id}>
+                  <td className="py-3 pr-3">
+                    <p className="font-semibold text-slate-950">{user.name}</p>
+                    <p className="text-xs text-slate-500">{user.email}</p>
+                  </td>
+                  <td className="py-3 pr-3">{getRoleDisplayName(user.role)}</td>
+                  <td className="py-3 pr-3">
+                    <span className="font-mono text-xs text-slate-700">
+                      {hasSlackId ? user.slackUserId : "Missing"}
+                    </span>
+                  </td>
+                  <td className="py-3">
+                    <span
+                      className={classNames(
+                        "inline-flex rounded-full border px-2 py-1 text-xs font-semibold",
+                        !slackEnabled
+                          ? "border-slate-200 bg-slate-50 text-slate-600"
+                          : hasSlackId
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                            : "border-red-200 bg-red-50 text-red-800",
+                      )}
+                    >
+                      {!slackEnabled ? "Disabled / on leave" : hasSlackId ? "Ready" : "Needs Slack ID"}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function AdminPanel({
   state,
   setState,
   hasSupabaseConfig,
+  liveSyncStatus,
+  liveSyncError,
   onClearWorkspace,
+  onRetryLiveSync,
 }: {
   state: ProcurementState;
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
   hasSupabaseConfig: boolean;
+  liveSyncStatus: LiveSyncStatus;
+  liveSyncError: string;
   onClearWorkspace: () => void;
+  onRetryLiveSync: () => void;
 }) {
   const [requestId, setRequestId] = useState(state.requests[0]?.id ?? "");
   const [assigneeId, setAssigneeId] = useState(state.users[0]?.id ?? "");
@@ -5055,10 +5187,16 @@ function AdminPanel({
   };
 
   const updateUser = (userId: string, updates: Partial<UserProfile>) => {
+    const cleanUpdates = {
+      ...updates,
+      ...(typeof updates.slackUserId === "string"
+        ? { slackUserId: updates.slackUserId.trim().toUpperCase() }
+        : {}),
+    };
     setState((current) => ({
       ...current,
       users: current.users.map((user) =>
-        user.id === userId ? { ...user, ...updates } : user,
+        user.id === userId ? { ...user, ...cleanUpdates } : user,
       ),
     }));
   };
@@ -5127,7 +5265,10 @@ function AdminPanel({
     <section className="grid min-w-0 gap-5">
       <SystemReadiness
         hasSupabaseConfig={hasSupabaseConfig}
+        liveSyncStatus={liveSyncStatus}
+        liveSyncError={liveSyncError}
         onClearWorkspace={onClearWorkspace}
+        onRetryLiveSync={onRetryLiveSync}
       />
 
       <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
@@ -5151,6 +5292,8 @@ function AdminPanel({
           </div>
         </div>
       </div>
+
+      <SlackReadiness users={state.users} liveSyncStatus={liveSyncStatus} />
 
       <div className="grid min-w-0 gap-5 xl:grid-cols-2">
         <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
@@ -6701,6 +6844,7 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>("idle");
   const [liveSyncError, setLiveSyncError] = useState("");
+  const [liveSyncAttempt, setLiveSyncAttempt] = useState(0);
   const latestStateRef = useRef(state);
 
   useEffect(() => {
@@ -6926,7 +7070,25 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [authStatus, authUser, browserStateLoaded, supabaseClient]);
+  }, [authStatus, authUser, browserStateLoaded, liveSyncAttempt, supabaseClient]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || liveSyncStatus !== "loading") {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setLiveSyncStatus((current) => (current === "loading" ? "error" : current));
+      setLiveSyncError((current) =>
+        current ||
+        "The live Supabase workspace is taking too long to respond. Retry live sync before editing admin notification settings.",
+      );
+    }, LIVE_DATABASE_TIMEOUT_MS + 5000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [liveSyncStatus]);
 
   useEffect(() => {
     if (
@@ -7150,6 +7312,12 @@ export default function Home() {
     setState(initialState);
     setSelectedRequestId("PR-102");
     window.localStorage.removeItem(STORAGE_KEY);
+  };
+
+  const retryLiveSync = () => {
+    setLiveSyncStatus("idle");
+    setLiveSyncError("");
+    setLiveSyncAttempt((attempt) => attempt + 1);
   };
 
   if (!isSignedIn) {
@@ -7511,7 +7679,10 @@ export default function Home() {
         {activeView === "admin" && currentUser.role === "Admin" ? (
           <AdminPanel
             hasSupabaseConfig={hasSupabaseClientConfig}
+            liveSyncError={liveSyncError}
+            liveSyncStatus={liveSyncStatus}
             onClearWorkspace={clearBrowserWorkspace}
+            onRetryLiveSync={retryLiveSync}
             setState={setState}
             state={state}
           />
