@@ -15,8 +15,13 @@ jobs:
         with:
           node-version: 24
 
+      - name: Setup pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.6.0 --activate
+
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Resolve Supabase service role key
         env:
