@@ -171,6 +171,12 @@ type View =
   | "trash";
 type AuthStatus = "checking" | "signed-out" | "signed-in" | "blocked" | "missing-config" | "local-dev";
 type LiveSyncStatus = "idle" | "loading" | "ready" | "error";
+type WorkflowTransitionAction = Parameters<typeof transitionRequest>[3];
+type WorkflowTransitionHandler = (
+  requestId: string,
+  action: WorkflowTransitionAction,
+  actorId?: string,
+) => void | Promise<void>;
 
 type SignedInUser = {
   id: string;
@@ -405,6 +411,123 @@ async function submitDraftToLiveState(
 
   return {
     error: lastError || "The workspace changed while submitting. Please try again.",
+  };
+}
+
+async function transitionLiveStateWithRetry(
+  supabaseClient: SupabaseBrowserClient,
+  requestId: string,
+  actorId: string,
+  action: WorkflowTransitionAction,
+  authUser: SignedInUser,
+  fallbackState: ProcurementState,
+  maxAttempts = 4,
+) {
+  let lastError = "";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const { data, error: fetchError } = await withDatabaseTimeout(
+      supabaseClient
+        .from("procurement_app_state")
+        .select("state,updated_at")
+        .eq("id", LIVE_STATE_ROW_ID)
+        .maybeSingle(),
+      "The live database did not respond while saving this action. Refresh the page and try again.",
+    ).catch((error) => ({
+      data: null,
+      error: {
+        message: errorMessage(
+          error,
+          "The live database did not respond while saving this action.",
+        ),
+      },
+    }));
+
+    if (fetchError) {
+      return { error: fetchError.message };
+    }
+
+    const remoteRow = data as LiveStateRow;
+    const remoteState = remoteRow?.state
+      ? parseState(JSON.stringify(remoteRow.state))
+      : fallbackState;
+    let baseState = applyLaunchCleanup(
+      stateWithSignedInProfile(remoteState, authUser),
+    );
+
+    if (!baseState.requests.some((request) => request.id === requestId)) {
+      baseState = mergeProcurementStates(baseState, fallbackState);
+    }
+
+    const transitionedState = transitionRequest(
+      baseState,
+      requestId,
+      actorId,
+      action,
+    );
+    const updatedAt = nowIso();
+    const payload = {
+      id: LIVE_STATE_ROW_ID,
+      state: transitionedState,
+      updated_by: authUser.id,
+      updated_at: updatedAt,
+    };
+
+    if (!remoteRow?.state) {
+      const { error: insertError } = await withDatabaseTimeout(
+        supabaseClient.from("procurement_app_state").insert(payload),
+        "The live database did not respond while saving this action. Refresh the page and try again.",
+      ).catch((error) => ({
+        error: {
+          message: errorMessage(
+            error,
+            "The live database did not respond while saving this action.",
+          ),
+        },
+      }));
+
+      if (!insertError) {
+        return { state: transitionedState, updatedAt };
+      }
+
+      lastError = insertError.message;
+      continue;
+    }
+
+    const { data: updatedRows, error: updateError } = await withDatabaseTimeout(
+      supabaseClient
+        .from("procurement_app_state")
+        .update(payload)
+        .eq("id", LIVE_STATE_ROW_ID)
+        .eq("updated_at", remoteRow.updated_at ?? "")
+        .select("updated_at"),
+      "The live database did not respond while saving this action. Refresh the page and try again.",
+    ).catch((error) => ({
+      data: null,
+      error: {
+        message: errorMessage(
+          error,
+          "The live database did not respond while saving this action.",
+        ),
+      },
+    }));
+
+    if (updateError) {
+      return { error: updateError.message, state: transitionedState };
+    }
+
+    if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+      return {
+        state: transitionedState,
+        updatedAt: updatedRows[0]?.updated_at ?? updatedAt,
+      };
+    }
+
+    lastError = "The workspace changed while saving this action; retrying with the latest data.";
+  }
+
+  return {
+    error: lastError || "The workspace changed while saving this action. Please try again.",
   };
 }
 
@@ -1901,13 +2024,13 @@ function RequestForm({
 
   const isBulkMode = entryMode === "bulk";
   const hasBulkLineItems = isBulkMode && bulkLineItems.length > 0;
-  const liveSubmitBlocked = hasSupabaseConfig && liveSyncStatus !== "ready";
-  const liveSubmitBlockedMessage =
+  const liveSubmitReconnecting = hasSupabaseConfig && liveSyncStatus !== "ready";
+  const liveSubmitReconnectingMessage =
     liveSyncStatus === "loading"
-      ? "Please wait until the live Supabase workspace finishes connecting before submitting."
+      ? "Live Supabase is reconnecting. You can submit; the app will save directly to the live database before clearing this form."
       : liveSyncStatus === "error"
-        ? "Live Supabase sync failed. Retry live sync before submitting the request."
-        : "The live Supabase workspace is not ready yet. Please wait before submitting.";
+        ? "Live Supabase sync is retrying. You can submit; the app will only clear this form after the live database accepts the request."
+        : "The live Supabase workspace is reconnecting. You can submit; the app will confirm the live save first.";
   const selectedProject = availableProjects.includes(project)
     ? project
     : availableProjects[0] ?? "Beta";
@@ -2114,9 +2237,6 @@ function RequestForm({
     try {
       setSubmitting(true);
 
-      if (liveSubmitBlocked) {
-        throw new Error(liveSubmitBlockedMessage);
-      }
       if (!employeeName.trim()) {
         throw new Error("Employee name is required.");
       }
@@ -2256,9 +2376,9 @@ function RequestForm({
 
   return (
     <form className="grid min-w-0 gap-5 sm:gap-6" onSubmit={handleSubmit}>
-      {liveSubmitBlocked ? (
+      {liveSubmitReconnecting ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-900">
-          {liveSubmitBlockedMessage}
+          {liveSubmitReconnectingMessage}
         </div>
       ) : null}
       {formError ? (
@@ -2726,7 +2846,7 @@ function RequestForm({
 
       <div className="flex justify-stretch sm:justify-end">
         <IconButton
-          disabled={bulkImporting || submitting || liveSubmitBlocked}
+          disabled={bulkImporting || submitting}
           icon={<Plus className="h-4 w-4" />}
           type="submit"
         >
@@ -3129,7 +3249,7 @@ function ActionPanel({
   request: ProcurementRequest;
   currentUser: UserProfile;
   state: ProcurementState;
-  onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
+  onTransition: WorkflowTransitionHandler;
 }) {
   const fieldPrefix = useId();
   const initialLineItems = useMemo(() => getRequestLineItems(request), [request]);
@@ -3690,7 +3810,7 @@ function ActionPanel({
                     setResearchSaving(true);
                     setResearchError("");
                     const updatedLineItems = await validateAndConvertLineItems(researchLineItems);
-                    onTransition(request.id, {
+                    await onTransition(request.id, {
                       type: "edlyn-update-researched-prices",
                       comment,
                       lineItems: updatedLineItems,
@@ -3717,7 +3837,7 @@ function ActionPanel({
                     setResearchSaving(true);
                     setResearchError("");
                     const updatedLineItems = await validateAndConvertLineItems(researchLineItems);
-                    onTransition(request.id, {
+                    await onTransition(request.id, {
                       type: "edlyn-update-line-items",
                       comment,
                       lineItems: updatedLineItems,
@@ -3744,8 +3864,8 @@ function ActionPanel({
           <div className="grid gap-2 sm:flex sm:flex-wrap">
             <IconButton
               icon={<CheckCircle2 className="h-4 w-4" />}
-              onClick={() => {
-                onTransition(request.id, { type: "mona-approve", comment });
+              onClick={async () => {
+                await onTransition(request.id, { type: "mona-approve", comment });
                 clearText();
               }}
               variant="success"
@@ -3755,8 +3875,8 @@ function ActionPanel({
             <IconButton
               disabled={!comment.trim()}
               icon={<AlertCircle className="h-4 w-4" />}
-              onClick={() => {
-                onTransition(request.id, { type: "mona-clarify", comment });
+              onClick={async () => {
+                await onTransition(request.id, { type: "mona-clarify", comment });
                 clearText();
               }}
               variant="secondary"
@@ -3776,8 +3896,8 @@ function ActionPanel({
             </div>
             <IconButton
               icon={<XCircle className="h-4 w-4" />}
-              onClick={() => {
-                onTransition(request.id, {
+              onClick={async () => {
+                await onTransition(request.id, {
                   type: "edlyn-confirm-cancellation",
                   comment,
                 });
@@ -3803,8 +3923,8 @@ function ActionPanel({
             <div className="grid gap-2 sm:flex sm:flex-wrap">
               <IconButton
                 icon={<CheckCircle2 className="h-4 w-4" />}
-                onClick={() => {
-                  onTransition(request.id, { type: "rashid-approve", comment });
+                onClick={async () => {
+                  await onTransition(request.id, { type: "rashid-approve", comment });
                   clearText();
                 }}
                 variant="success"
@@ -3814,8 +3934,8 @@ function ActionPanel({
               <IconButton
                 disabled={!declineReason.trim()}
                 icon={<XCircle className="h-4 w-4" />}
-                onClick={() => {
-                  onTransition(request.id, {
+                onClick={async () => {
+                  await onTransition(request.id, {
                     type: "rashid-decline",
                     declineReason,
                   });
@@ -4046,7 +4166,7 @@ function ActionPanel({
                         setDrEditSaving(true);
                         setDrEditError("");
                         const updatedLineItems = await validateAndConvertLineItems(drEditLineItems);
-                        onTransition(request.id, {
+                        await onTransition(request.id, {
                           type: "dr-majed-update-request",
                           comment,
                           fields: drEditFields,
@@ -4079,8 +4199,8 @@ function ActionPanel({
             <div className="grid gap-2 sm:flex sm:flex-wrap">
               <IconButton
                 icon={<CheckCircle2 className="h-4 w-4" />}
-                onClick={() => {
-                  onTransition(request.id, { type: "department-review", comment });
+                onClick={async () => {
+                  await onTransition(request.id, { type: "department-review", comment });
                   clearText();
                 }}
                 variant="success"
@@ -4090,8 +4210,8 @@ function ActionPanel({
               <IconButton
                 disabled={!declineReason.trim()}
                 icon={<XCircle className="h-4 w-4" />}
-                onClick={() => {
-                  onTransition(request.id, {
+                onClick={async () => {
+                  await onTransition(request.id, {
                     type: "department-decline",
                     declineReason,
                   });
@@ -4117,7 +4237,7 @@ function ActionPanel({
                   setResearchSaving(true);
                   setResearchError("");
                   const updatedLineItems = await validateAndConvertLineItems(researchLineItems);
-                  onTransition(request.id, {
+                  await onTransition(request.id, {
                     type: "edlyn-confirm",
                     comment,
                     lineItems: updatedLineItems,
@@ -4137,8 +4257,8 @@ function ActionPanel({
             <IconButton
               disabled={!hasProcureClarification}
               icon={<AlertCircle className="h-4 w-4" />}
-              onClick={() => {
-                onTransition(request.id, {
+              onClick={async () => {
+                await onTransition(request.id, {
                   type: "edlyn-request-clarification",
                   comment,
                   lineItemClarifications: lineItemClarificationPayload(),
@@ -4307,7 +4427,7 @@ function ActionPanel({
                     setInvoiceUploading(true);
                     setInvoiceUploadError("");
                     const storage = await uploadInvoiceFile();
-                    onTransition(request.id, {
+                    await onTransition(request.id, {
                       type: "edlyn-upload-invoice",
                       invoice: invoicePayload(storage),
                       comment,
@@ -4333,8 +4453,8 @@ function ActionPanel({
               <IconButton
                 disabled={!hasProcureClarification}
                 icon={<AlertCircle className="h-4 w-4" />}
-                onClick={() => {
-                  onTransition(request.id, {
+                onClick={async () => {
+                  await onTransition(request.id, {
                     type: "edlyn-request-clarification",
                     comment,
                     lineItemClarifications: lineItemClarificationPayload(),
@@ -4351,8 +4471,8 @@ function ActionPanel({
                 {logisticsFields}
                 <IconButton
                   icon={<Send className="h-4 w-4" />}
-                  onClick={() => {
-                    onTransition(request.id, {
+                  onClick={async () => {
+                    await onTransition(request.id, {
                       type: "edlyn-start-delivery-tracking",
                       logistics: logisticsPayload(),
                       comment,
@@ -4397,8 +4517,8 @@ function ActionPanel({
             </Field>
             <IconButton
               icon={<CircleDollarSign className="h-4 w-4" />}
-              onClick={() => {
-                onTransition(request.id, {
+              onClick={async () => {
+                await onTransition(request.id, {
                   type: "aileen-clear-invoice",
                   invoiceId: financeInvoiceId || pendingFinanceInvoices[0]?.id,
                   financeNotes,
@@ -4425,8 +4545,8 @@ function ActionPanel({
             {logisticsFields}
             <IconButton
               icon={<Send className="h-4 w-4" />}
-              onClick={() => {
-                onTransition(request.id, {
+              onClick={async () => {
+                await onTransition(request.id, {
                   type: "edlyn-start-delivery-tracking",
                   logistics: logisticsPayload(),
                   comment,
@@ -4445,20 +4565,22 @@ function ActionPanel({
             <div className="grid gap-2 sm:flex sm:flex-wrap">
               <IconButton
                 icon={<Truck className="h-4 w-4" />}
-                onClick={() =>
-                  onTransition(request.id, {
+                onClick={() => {
+                  void onTransition(request.id, {
                     type: "edlyn-update-logistics",
                     logistics: logisticsPayload(),
                     comment,
-                  })
-                }
+                  });
+                }}
                 variant="secondary"
               >
                 Update logistics
               </IconButton>
               <IconButton
                 icon={<PackageCheck className="h-4 w-4" />}
-                onClick={() => onTransition(request.id, { type: "edlyn-receive-item", comment })}
+                onClick={() => {
+                  void onTransition(request.id, { type: "edlyn-receive-item", comment });
+                }}
                 variant="success"
               >
                 Mark item received
@@ -4470,7 +4592,9 @@ function ActionPanel({
         {request.status === "Order Confirmed" && canUse("Edlyn") ? (
           <IconButton
             icon={<PackageCheck className="h-4 w-4" />}
-            onClick={() => onTransition(request.id, { type: "edlyn-receive-item", comment })}
+            onClick={() => {
+              void onTransition(request.id, { type: "edlyn-receive-item", comment });
+            }}
             variant="success"
           >
             Mark item received
@@ -4480,7 +4604,9 @@ function ActionPanel({
         {request.status === "Item Received" && canUse("Aileen") && !isInvoiceFinancePending(request) ? (
           <IconButton
             icon={<CheckCircle2 className="h-4 w-4" />}
-            onClick={() => onTransition(request.id, { type: "aileen-close", comment })}
+            onClick={() => {
+              void onTransition(request.id, { type: "aileen-close", comment });
+            }}
             variant="success"
           >
             Close case
@@ -4512,8 +4638,8 @@ function ActionPanel({
             <IconButton
               disabled={!staffCancellationReason.trim()}
               icon={<XCircle className="h-4 w-4" />}
-              onClick={() => {
-                onTransition(request.id, {
+              onClick={async () => {
+                await onTransition(request.id, {
                   type: "staff-cancel-request",
                   cancellationReason: staffCancellationReason,
                 });
@@ -4568,7 +4694,7 @@ function RequestDetails({
   request?: ProcurementRequest;
   state: ProcurementState;
   currentUser: UserProfile;
-  onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
+  onTransition: WorkflowTransitionHandler;
 }) {
   if (!request) {
     return (
@@ -5596,6 +5722,7 @@ function SlackReadiness({ users, liveSyncStatus }: { users: UserProfile[]; liveS
 function AdminPanel({
   state,
   setState,
+  onTransition,
   hasSupabaseConfig,
   liveSyncStatus,
   liveSyncError,
@@ -5604,6 +5731,7 @@ function AdminPanel({
 }: {
   state: ProcurementState;
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
+  onTransition: WorkflowTransitionHandler;
   hasSupabaseConfig: boolean;
   liveSyncStatus: LiveSyncStatus;
   liveSyncError: string;
@@ -5923,13 +6051,15 @@ function AdminPanel({
             <TextArea placeholder="Reassignment reason" value={comment} onChange={(event) => setComment(event.target.value)} />
             <IconButton
               icon={<ArrowRightLeft className="h-4 w-4" />}
-              onClick={() => {
-                setState((current) =>
-                  transitionRequest(current, requestId, "user-admin", {
+              onClick={async () => {
+                await onTransition(
+                  requestId,
+                  {
                     type: "admin-reassign",
                     assigneeId,
                     comment,
-                  }),
+                  },
+                  "user-admin",
                 );
                 setComment("");
               }}
@@ -6121,7 +6251,7 @@ function EmployeeMonaClarificationPanel({
 }: {
   request: ProcurementRequest;
   clarificationLog?: AuditLog;
-  onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
+  onTransition: WorkflowTransitionHandler;
 }) {
   const initialLineItems = getRequestLineItems(request).map((item) => ({
     ...item,
@@ -6411,7 +6541,7 @@ function EmployeeMonaClarificationPanel({
             setSaving(true);
             setError("");
             const updatedLineItems = await buildUpdatedLineItems();
-            onTransition(request.id, {
+            await onTransition(request.id, {
               type: "employee-resubmit-mona-clarification",
               comment: response,
               lineItems: updatedLineItems,
@@ -6614,7 +6744,7 @@ function EmployeeProcureClarificationPanel({
 }: {
   request: ProcurementRequest;
   clarificationLog?: AuditLog;
-  onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
+  onTransition: WorkflowTransitionHandler;
 }) {
   const [response, setResponse] = useState("");
   const [lineItems, setLineItems] = useState<ProcurementLineItem[]>(() =>
@@ -6851,7 +6981,7 @@ function EmployeeProcureClarificationPanel({
             setSaving(true);
             setError("");
             const updatedLineItems = await buildUpdatedLineItems();
-            onTransition(request.id, {
+            await onTransition(request.id, {
               type: "employee-submit-edlyn-clarification",
               comment: response,
               lineItems: updatedLineItems,
@@ -6883,7 +7013,7 @@ function EmployeeRequestStatus({
   request?: ProcurementRequest;
   state: ProcurementState;
   currentUser: UserProfile;
-  onTransition: (requestId: string, action: Parameters<typeof transitionRequest>[3]) => void;
+  onTransition: WorkflowTransitionHandler;
 }) {
   const [cancellationReason, setCancellationReason] = useState("");
 
@@ -7008,8 +7138,8 @@ function EmployeeRequestStatus({
           <IconButton
             disabled={!cancellationReason.trim()}
             icon={<XCircle className="h-4 w-4" />}
-            onClick={() => {
-              onTransition(request.id, {
+            onClick={async () => {
+              await onTransition(request.id, {
                 type: "employee-cancel-request",
                 cancellationReason,
               });
@@ -7065,18 +7195,18 @@ function EmployeePortal({
   hasSupabaseConfig,
   liveSyncStatus,
   onSubmitRequest,
+  onTransition,
   selectedRequestId,
   setSelectedRequestId,
-  setState,
 }: {
   state: ProcurementState;
   currentUser: UserProfile;
   hasSupabaseConfig: boolean;
   liveSyncStatus: LiveSyncStatus;
   onSubmitRequest: (draft: ProcurementRequestDraft, submitter: UserProfile) => Promise<string | void> | string | void;
+  onTransition: WorkflowTransitionHandler;
   selectedRequestId?: string;
   setSelectedRequestId: Dispatch<SetStateAction<string | undefined>>;
-  setState: (updater: (state: ProcurementState) => ProcurementState) => void;
 }) {
   const employeeRequests = useMemo(
     () => getPersonalRequests(state, currentUser),
@@ -7117,9 +7247,7 @@ function EmployeePortal({
         renderSelectedDetails={(request) => (
           <EmployeeRequestStatus
             currentUser={currentUser}
-            onTransition={(requestId, action) =>
-              setState((current) => transitionRequest(current, requestId, currentUser.id, action))
-            }
+            onTransition={onTransition}
             request={request}
             state={state}
           />
@@ -7140,6 +7268,7 @@ function Dashboard({
   selectedRequestId,
   setSelectedRequestId,
   setState,
+  onTransition,
   requestScope = "visible",
 }: {
   state: ProcurementState;
@@ -7147,6 +7276,7 @@ function Dashboard({
   selectedRequestId?: string;
   setSelectedRequestId: Dispatch<SetStateAction<string | undefined>>;
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
+  onTransition: WorkflowTransitionHandler;
   requestScope?: "visible" | "company";
 }) {
   const visibleRequests = useMemo(
@@ -7235,9 +7365,7 @@ function Dashboard({
           renderSelectedDetails={(request) => (
             <RequestDetails
               currentUser={currentUser}
-              onTransition={(requestId, action) =>
-                setState((current) => transitionRequest(current, requestId, currentUser.id, action))
-              }
+              onTransition={onTransition}
               request={request}
               state={state}
             />
@@ -7305,6 +7433,7 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>("idle");
   const [liveSyncError, setLiveSyncError] = useState("");
+  const [liveActionError, setLiveActionError] = useState("");
   const [liveSyncAttempt, setLiveSyncAttempt] = useState(0);
   const [recoverableLocalRequestIds, setRecoverableLocalRequestIds] = useState<string[]>([]);
   const [recoveryMessage, setRecoveryMessage] = useState("");
@@ -7670,6 +7799,13 @@ export default function Home() {
       void (async () => {
         const localState = applyLaunchCleanup(state);
         const serializedLocalState = serializeState(localState);
+        const latestSerializedState = serializeState(
+          applyLaunchCleanup(latestStateRef.current),
+        );
+
+        if (latestSerializedState !== serializedLocalState) {
+          return;
+        }
 
         if (serializedLocalState === lastLivePersistedStateRef.current) {
           if (getQueuedOutboundNotificationCount(localState) > 0) {
@@ -7749,6 +7885,61 @@ export default function Home() {
     (notification) => !notification.read && notification.userId === currentUser.id,
   ).length;
 
+  const persistWorkflowTransition: WorkflowTransitionHandler = async (
+    requestId,
+    action,
+    actorId = currentUser.id,
+  ) => {
+    setLiveActionError("");
+
+    if (supabaseClient && authStatus === "signed-in" && authUser) {
+      const saveResult = await transitionLiveStateWithRetry(
+        supabaseClient,
+        requestId,
+        actorId,
+        action,
+        authUser,
+        latestStateRef.current,
+      );
+
+      if (saveResult.error || !saveResult.state) {
+        const message =
+          saveResult.error || "The action could not be saved to the live database.";
+        setLiveSyncStatus("error");
+        setLiveSyncError(message);
+        setLiveActionError(message);
+        throw new Error(message);
+      }
+
+      lastLivePersistedStateRef.current = serializeState(saveResult.state);
+      writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
+      setState(saveResult.state);
+      setLiveSyncStatus("ready");
+      setLiveSyncError("");
+
+      if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
+        const delivery = await flushQueuedOutboundNotifications(
+          supabaseClient,
+          authUser,
+        );
+
+        if (delivery) {
+          lastLivePersistedStateRef.current = serializeState(delivery.state);
+          writeLiveStateMetadata(delivery.updatedAt, delivery.state);
+          setState((current) =>
+            serializeState(delivery.state) !== serializeState(current)
+              ? delivery.state
+              : current,
+          );
+        }
+      }
+
+      return;
+    }
+
+    setState((current) => transitionRequest(current, requestId, actorId, action));
+  };
+
   const signInWithGoogle = async () => {
     setAuthError("");
 
@@ -7786,6 +7977,7 @@ export default function Home() {
     setAuthError("");
     setLiveSyncStatus("idle");
     setLiveSyncError("");
+    setLiveActionError("");
     setCurrentUserId("user-admin");
     setView("dashboard");
   };
@@ -7910,6 +8102,7 @@ export default function Home() {
   const retryLiveSync = () => {
     setLiveSyncStatus("idle");
     setLiveSyncError("");
+    setLiveActionError("");
     setLiveSyncAttempt((attempt) => attempt + 1);
   };
 
@@ -7917,7 +8110,7 @@ export default function Home() {
     draft: ProcurementRequestDraft,
     submitter: UserProfile,
   ) => {
-    if (supabaseClient && authUser && liveSyncStatus === "ready") {
+    if (supabaseClient && authUser && authStatus === "signed-in") {
       const saveResult = await submitDraftToLiveState(
         supabaseClient,
         draft,
@@ -7939,6 +8132,9 @@ export default function Home() {
       setState(saveResult.state);
       setSelectedRequestId(saveResult.requestId);
       setView("dashboard");
+      setLiveSyncStatus("ready");
+      setLiveSyncError("");
+      setLiveActionError("");
 
       if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
         void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
@@ -8290,6 +8486,11 @@ export default function Home() {
               Live Supabase sync failed: {liveSyncError || "check Supabase schema and permissions."}
             </div>
           ) : null}
+          {authStatus === "signed-in" && liveActionError ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
+              Live action save failed: {liveActionError}
+            </div>
+          ) : null}
           {authStatus === "signed-in" && recoverableLocalRequestIds.length > 0 ? (
             <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -8323,15 +8524,16 @@ export default function Home() {
                 currentUser={currentUser}
                 hasSupabaseConfig={hasSupabaseClientConfig}
                 liveSyncStatus={liveSyncStatus}
+                onTransition={persistWorkflowTransition}
                 onSubmitRequest={submitNewRequest}
                 selectedRequestId={selectedRequestId}
                 setSelectedRequestId={setSelectedRequestId}
-                setState={setState}
                 state={state}
               />
             ) : (
               <Dashboard
                 currentUser={currentUser}
+                onTransition={persistWorkflowTransition}
                 selectedRequestId={selectedRequestId}
                 setSelectedRequestId={setSelectedRequestId}
                 setState={setState}
@@ -8343,6 +8545,7 @@ export default function Home() {
           {activeView === "work-queue" && hasWorkflowRole ? (
             <Dashboard
               currentUser={currentUser}
+              onTransition={persistWorkflowTransition}
               selectedRequestId={selectedRequestId}
               setSelectedRequestId={setSelectedRequestId}
               setState={setState}
@@ -8353,6 +8556,7 @@ export default function Home() {
           {activeView === "company-dashboard" && canViewCompanyDashboard ? (
             <Dashboard
               currentUser={currentUser}
+              onTransition={persistWorkflowTransition}
               requestScope="company"
               selectedRequestId={selectedRequestId}
               setSelectedRequestId={setSelectedRequestId}
@@ -8403,6 +8607,7 @@ export default function Home() {
             liveSyncStatus={liveSyncStatus}
             onClearWorkspace={clearBrowserWorkspace}
             onRetryLiveSync={retryLiveSync}
+            onTransition={persistWorkflowTransition}
             setState={setState}
             state={state}
           />
