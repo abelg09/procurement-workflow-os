@@ -60,6 +60,8 @@ import {
   LINE_ITEM_STATUSES,
   LogisticsDetails,
   NotificationRecord,
+  OutboundNotificationLog,
+  OutboundNotificationStatus,
   OVERDUE_REQUEST_HOURS,
   PAYMENT_TERMS,
   PROCURE_APPROVAL_EMAIL,
@@ -160,6 +162,7 @@ const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
 const LIVE_STATE_ROW_ID = "default";
 const LIVE_DATABASE_TIMEOUT_MS = 20000;
 const LIVE_NOTIFICATION_TIMEOUT_MS = 8000;
+const REQUEST_TABLE_PAGE_SIZE = 20;
 
 type View =
   | "dashboard"
@@ -177,6 +180,14 @@ type WorkflowTransitionHandler = (
   action: WorkflowTransitionAction,
   actorId?: string,
 ) => void | Promise<void>;
+type OutboundDeliveryUpdate = Partial<
+  Pick<OutboundNotificationLog, "error" | "providerMessageId" | "sentAt">
+> & {
+  id: string;
+  status?: OutboundNotificationStatus;
+  updatedAt?: string;
+  attempts?: number;
+};
 
 type SignedInUser = {
   id: string;
@@ -223,9 +234,48 @@ async function saveLiveStateWithRetry(
   supabaseClient: SupabaseBrowserClient,
   localState: ProcurementState,
   authUser: SignedInUser,
-  maxAttempts = 4,
+  options: {
+    expectedUpdatedAt?: string | null;
+    maxAttempts?: number;
+  } = {},
 ) {
+  const maxAttempts = options.maxAttempts ?? 4;
   let lastError = "";
+
+  if (options.expectedUpdatedAt) {
+    const updatedAt = nowIso();
+    const payload = {
+      id: LIVE_STATE_ROW_ID,
+      state: localState,
+      updated_by: authUser.id,
+      updated_at: updatedAt,
+    };
+    const { data: updatedRows, error: updateError } = await withDatabaseTimeout(
+      supabaseClient
+        .from("procurement_app_state")
+        .update(payload)
+        .eq("id", LIVE_STATE_ROW_ID)
+        .eq("updated_at", options.expectedUpdatedAt)
+        .select("updated_at"),
+      "The live database did not respond while saving. Refresh the page and try again.",
+    ).catch((error) => ({
+      data: null,
+      error: { message: errorMessage(error, "The live database did not respond while saving.") },
+    }));
+
+    if (updateError) {
+      return { error: updateError.message, state: localState };
+    }
+
+    if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+      return {
+        state: localState,
+        updatedAt: updatedRows[0]?.updated_at ?? updatedAt,
+      };
+    }
+
+    lastError = "The workspace changed while saving; retrying with the latest data.";
+  }
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const { data, error: fetchError } = await withDatabaseTimeout(
@@ -640,9 +690,41 @@ async function recoverLocalRequestsToLiveState(
   };
 }
 
+function applyOutboundDeliveryUpdates(
+  state: ProcurementState,
+  updates: OutboundDeliveryUpdate[],
+) {
+  if (!updates.length || !(state.outboundNotifications ?? []).length) {
+    return state;
+  }
+
+  const updatesById = new Map(updates.map((update) => [update.id, update]));
+  let changed = false;
+  const outboundNotifications = (state.outboundNotifications ?? []).map((delivery) => {
+    const update = updatesById.get(delivery.id);
+    if (!update) {
+      return delivery;
+    }
+
+    changed = true;
+    return {
+      ...delivery,
+      status: update.status ?? delivery.status,
+      attempts: typeof update.attempts === "number" ? update.attempts : delivery.attempts,
+      updatedAt: update.updatedAt ?? delivery.updatedAt,
+      sentAt: update.sentAt ?? delivery.sentAt,
+      error: update.error,
+      providerMessageId: update.providerMessageId ?? delivery.providerMessageId,
+    };
+  });
+
+  return changed ? { ...state, outboundNotifications } : state;
+}
+
 async function flushQueuedOutboundNotifications(
   supabaseClient: SupabaseBrowserClient,
   authUser: SignedInUser,
+  localState: ProcurementState,
 ) {
   try {
     if (!supabaseUrl || !supabaseAnonKey) {
@@ -669,7 +751,10 @@ async function flushQueuedOutboundNotifications(
           Authorization: `Bearer ${session.access_token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ stateId: LIVE_STATE_ROW_ID }),
+        body: JSON.stringify({
+          stateId: LIVE_STATE_ROW_ID,
+          responseMode: "delivery-updates",
+        }),
       }),
       "Outbound procurement notifications did not respond quickly; they will retry later.",
       LIVE_NOTIFICATION_TIMEOUT_MS,
@@ -684,15 +769,25 @@ async function flushQueuedOutboundNotifications(
     }
 
     const payload = (await response.json()) as {
+      deliveries?: OutboundDeliveryUpdate[];
       state?: unknown;
       updatedAt?: string | null;
     };
-    return payload.state
-      ? {
-          state: parseState(JSON.stringify(payload.state)),
-          updatedAt: payload.updatedAt ?? null,
-        }
-      : null;
+    if (payload.state) {
+      return {
+        state: parseState(JSON.stringify(payload.state)),
+        updatedAt: payload.updatedAt ?? null,
+      };
+    }
+
+    if (Array.isArray(payload.deliveries)) {
+      return {
+        state: applyOutboundDeliveryUpdates(localState, payload.deliveries),
+        updatedAt: payload.updatedAt ?? null,
+      };
+    }
+
+    return null;
   } catch (error) {
     console.warn("Outbound procurement notifications were queued but not delivered yet.", {
       message: errorMessage(error, "Notification delivery timed out."),
@@ -2890,39 +2985,95 @@ function RequestsTable({
   const [maxAmount, setMaxAmount] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const filterKey = [
+    search,
+    status,
+    assignee,
+    department,
+    project,
+    stage,
+    minAmount,
+    maxAmount,
+    fromDate,
+    toDate,
+  ].join("\u001f");
+  const [pagination, setPagination] = useState({ key: filterKey, page: 1 });
+  const requestedPage = pagination.key === filterKey ? pagination.page : 1;
 
-  const departments = Array.from(new Set(requests.map((request) => request.department))).sort();
-  const projects = Array.from(new Set(requests.map((request) => request.project))).sort();
+  const departments = useMemo(
+    () => Array.from(new Set(requests.map((request) => request.department))).sort(),
+    [requests],
+  );
+  const projects = useMemo(
+    () => Array.from(new Set(requests.map((request) => request.project))).sort(),
+    [requests],
+  );
 
-  const filtered = requests.filter((request) => {
-    const haystack = [
-      request.id,
-      request.employeeName,
-      request.project,
-      request.itemName,
-      request.vendorName,
-      ...getRequestLineItems(request).flatMap((item) => [
-        item.itemName,
-        item.vendorName,
-        item.productUrl ?? "",
-      ]),
-    ]
-      .join(" ")
-      .toLowerCase();
-    const amount = getRequestTotalAed(request);
-    return (
-      haystack.includes(search.toLowerCase()) &&
-      (status === "All" || request.status === status) &&
-      (assignee === "All" || request.assigneeId === assignee) &&
-      (department === "All" || request.department === department) &&
-      (project === "All" || request.project === project) &&
-      (stage === "All" || request.stage === stage) &&
-      (hideFinancials || !minAmount || amount >= Number(minAmount)) &&
-      (hideFinancials || !maxAmount || amount <= Number(maxAmount)) &&
-      (!fromDate || request.createdAt.slice(0, 10) >= fromDate) &&
-      (!toDate || request.createdAt.slice(0, 10) <= toDate)
-    );
-  });
+  const filtered = useMemo(() => {
+    const searchTerm = search.trim().toLowerCase();
+    const minAmountNumber = Number(minAmount);
+    const maxAmountNumber = Number(maxAmount);
+    const shouldCheckMinAmount =
+      !hideFinancials && minAmount.trim() !== "" && Number.isFinite(minAmountNumber);
+    const shouldCheckMaxAmount =
+      !hideFinancials && maxAmount.trim() !== "" && Number.isFinite(maxAmountNumber);
+
+    return requests.filter((request) => {
+      if (searchTerm) {
+        const haystack = [
+          request.id,
+          request.employeeName,
+          request.project,
+          request.itemName,
+          request.vendorName,
+          ...getRequestLineItems(request).flatMap((item) => [
+            item.itemName,
+            item.vendorName,
+            item.productUrl ?? "",
+          ]),
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        if (!haystack.includes(searchTerm)) {
+          return false;
+        }
+      }
+
+      const amount =
+        shouldCheckMinAmount || shouldCheckMaxAmount ? getRequestTotalAed(request) : 0;
+
+      return (
+        (status === "All" || request.status === status) &&
+        (assignee === "All" || request.assigneeId === assignee) &&
+        (department === "All" || request.department === department) &&
+        (project === "All" || request.project === project) &&
+        (stage === "All" || request.stage === stage) &&
+        (!shouldCheckMinAmount || amount >= minAmountNumber) &&
+        (!shouldCheckMaxAmount || amount <= maxAmountNumber) &&
+        (!fromDate || request.createdAt.slice(0, 10) >= fromDate) &&
+        (!toDate || request.createdAt.slice(0, 10) <= toDate)
+      );
+    });
+  }, [
+    assignee,
+    department,
+    fromDate,
+    hideFinancials,
+    maxAmount,
+    minAmount,
+    project,
+    requests,
+    search,
+    stage,
+    status,
+    toDate,
+  ]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / REQUEST_TABLE_PAGE_SIZE));
+  const currentPage = Math.min(requestedPage, pageCount);
+  const pageStart = filtered.length === 0 ? 0 : (currentPage - 1) * REQUEST_TABLE_PAGE_SIZE;
+  const pageEnd = Math.min(pageStart + REQUEST_TABLE_PAGE_SIZE, filtered.length);
+  const pagedRequests = filtered.slice(pageStart, pageEnd);
 
   const renderFilterControls = () => (
     <>
@@ -3039,7 +3190,7 @@ function RequestsTable({
             No procurement requests match the current filters.
           </div>
         ) : (
-          filtered.map((request) => {
+          pagedRequests.map((request) => {
             const blocked = currentUser ? isUserBlockedTask(request, currentUser, users) : false;
             const overdue = isRequestOverdue(request);
             const needsAttention = blocked || overdue;
@@ -3155,7 +3306,7 @@ function RequestsTable({
                 </td>
               </tr>
             ) : (
-              filtered.map((request) => {
+              pagedRequests.map((request) => {
                 const blocked = currentUser ? isUserBlockedTask(request, currentUser, users) : false;
                 const overdue = isRequestOverdue(request);
                 const needsAttention = blocked || overdue;
@@ -3236,6 +3387,38 @@ function RequestsTable({
           </tbody>
         </table>
       </div>
+      {filtered.length > 0 ? (
+        <div className="flex flex-col gap-3 border-t border-slate-200/80 px-4 py-3 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            Showing {pageStart + 1}-{pageEnd} of {filtered.length} request(s)
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              className="rounded-lg border border-slate-200 px-3 py-2 font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={currentPage <= 1}
+              onClick={() =>
+                setPagination({ key: filterKey, page: Math.max(1, currentPage - 1) })
+              }
+              type="button"
+            >
+              Previous
+            </button>
+            <span className="rounded-lg bg-slate-50 px-3 py-2 font-semibold text-slate-700">
+              {currentPage} / {pageCount}
+            </span>
+            <button
+              className="rounded-lg border border-slate-200 px-3 py-2 font-semibold text-slate-700 transition hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={currentPage >= pageCount}
+              onClick={() =>
+                setPagination({ key: filterKey, page: Math.min(pageCount, currentPage + 1) })
+              }
+              type="button"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -3501,7 +3684,9 @@ function ActionPanel({
       });
 
     if (error) {
-      return { dataUrl: await fileToDataUrl(selectedInvoiceFile) };
+      throw new Error(
+        `Invoice file could not be uploaded to Supabase Storage: ${error.message}`,
+      );
     }
 
     return {
@@ -4983,84 +5168,109 @@ function LineItemLink({
 
 function InvoiceFileLink({ invoice }: { invoice: InvoiceDetails }) {
   const [fileLink, setFileLink] = useState({
-    path: invoice.uploadedInvoiceStoragePath || "",
+    signedPath: "",
     signedUrl: "",
     linkError: "",
+    loading: false,
   });
 
-  useEffect(() => {
-    let cancelled = false;
-    const storageBucket = invoice.uploadedInvoiceStorageBucket || INVOICE_STORAGE_BUCKET;
-    const storagePath = invoice.uploadedInvoiceStoragePath || "";
+  const embeddedUrl = invoice.uploadedInvoiceDataUrl || "";
+  const storageBucket = invoice.uploadedInvoiceStorageBucket || INVOICE_STORAGE_BUCKET;
+  const storagePath = invoice.uploadedInvoiceStoragePath || "";
+  const { linkError, loading } = fileLink;
+  const signedUrl = fileLink.signedPath === storagePath ? fileLink.signedUrl : "";
+  const invoiceUrl = signedUrl || embeddedUrl;
+  const canOpenFile = Boolean(storagePath || embeddedUrl);
 
-    void Promise.resolve().then(async () => {
-      if (!storagePath) {
-        if (cancelled) return;
-        setFileLink({ path: "", signedUrl: "", linkError: "" });
-        return;
-      }
-
-      const supabaseClient = getSupabaseBrowserClient();
-      if (!supabaseClient) {
-        if (cancelled) return;
-        setFileLink({
-          path: storagePath,
-          signedUrl: "",
-          linkError: "Storage link is not configured in this environment.",
-        });
-        return;
-      }
-
-      const { data, error } = await supabaseClient.storage
-        .from(storageBucket)
-        .createSignedUrl(storagePath, 60 * 60);
-
-      if (cancelled) return;
-      if (error || !data?.signedUrl) {
-        setFileLink({
-          path: storagePath,
-          signedUrl: "",
-          linkError: error?.message || "Could not create invoice file link.",
-        });
-        return;
-      }
-
-      setFileLink({
-        path: storagePath,
-        signedUrl: data.signedUrl,
-        linkError: "",
-      });
+  const openInvoiceFile = async () => {
+    setFileLink({
+      signedPath: storagePath,
+      signedUrl: "",
+      linkError: "",
+      loading: true,
     });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [invoice.uploadedInvoiceStorageBucket, invoice.uploadedInvoiceStoragePath]);
+    if (!storagePath) {
+      setFileLink({
+        signedPath: storagePath,
+        signedUrl: "",
+        linkError: "",
+        loading: false,
+      });
+      if (embeddedUrl) {
+        window.open(embeddedUrl, "_blank", "noopener,noreferrer");
+      }
+      return;
+    }
 
-  const embeddedUrl = invoice.uploadedInvoiceDataUrl || "";
-  const { linkError, signedUrl } = fileLink;
-  const invoiceUrl = signedUrl || embeddedUrl;
+    const supabaseClient = getSupabaseBrowserClient();
+    if (!supabaseClient) {
+      setFileLink({
+        signedPath: storagePath,
+        signedUrl: "",
+        loading: false,
+        linkError: "Storage link is not configured in this environment.",
+      });
+      return;
+    }
+
+    const popup = window.open("", "_blank", "noopener,noreferrer");
+    const { data, error } = await supabaseClient.storage
+      .from(storageBucket)
+      .createSignedUrl(storagePath, 60 * 60);
+
+    if (error || !data?.signedUrl) {
+      popup?.close();
+      setFileLink({
+        signedPath: storagePath,
+        loading: false,
+        signedUrl: "",
+        linkError: error?.message || "Could not create invoice file link.",
+      });
+      return;
+    }
+
+    if (popup) {
+      popup.location.href = data.signedUrl;
+    }
+
+    setFileLink({
+      signedPath: storagePath,
+      signedUrl: data.signedUrl,
+      linkError: "",
+      loading: false,
+    });
+  };
 
   return (
     <div>
       <p className="text-xs font-semibold uppercase text-slate-500">Uploaded file</p>
-      {invoiceUrl ? (
-        <a
-          className="mt-1 inline-flex max-w-full items-center gap-1 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-sm font-semibold text-blue-700 hover:border-blue-200 hover:bg-blue-100"
-          download={invoice.uploadedInvoiceFile}
-          href={invoiceUrl}
-          rel="noopener noreferrer"
-          target="_blank"
+      {canOpenFile ? (
+        <button
+          className="mt-1 inline-flex max-w-full items-center gap-1 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-sm font-semibold text-blue-700 transition hover:border-blue-200 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={loading}
+          onClick={openInvoiceFile}
           title={invoice.uploadedInvoiceFile}
+          type="button"
         >
           <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">Open invoice file</span>
-        </a>
+          <span className="truncate">{loading ? "Preparing file..." : "Open invoice file"}</span>
+        </button>
       ) : (
         <p className="mt-1 break-words text-sm text-slate-900">
           {invoice.uploadedInvoiceFile}
         </p>
       )}
+      {signedUrl && storagePath ? (
+        <a
+          className="mt-1 block text-xs font-medium text-blue-700 underline-offset-2 hover:underline"
+          href={invoiceUrl}
+          rel="noopener noreferrer"
+          target="_blank"
+        >
+          Reopen current signed link
+        </a>
+      ) : null}
       {linkError ? (
         <p className="mt-1 text-xs font-medium text-amber-700">{linkError}</p>
       ) : null}
@@ -7638,7 +7848,11 @@ export default function Home() {
             setLiveSyncStatus("ready");
 
             if (getQueuedOutboundNotificationCount(hydratedState) > 0) {
-              void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
+              void flushQueuedOutboundNotifications(
+                supabaseClient,
+                authUser,
+                hydratedState,
+              ).then(
                 (delivery) => {
                   if (!delivery || cancelled) return;
                   lastLivePersistedStateRef.current = serializeState(delivery.state);
@@ -7715,6 +7929,7 @@ export default function Home() {
               supabaseClient,
               hydratedState,
               authUser,
+              { expectedUpdatedAt: liveStateRow?.updated_at },
             );
 
             if (saveResult.error) {
@@ -7727,7 +7942,11 @@ export default function Home() {
             writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
 
             if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
-              void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
+              void flushQueuedOutboundNotifications(
+                supabaseClient,
+                authUser,
+                saveResult.state,
+              ).then(
                 (delivery) => {
                   if (!delivery || cancelled) return;
                   lastLivePersistedStateRef.current = serializeState(delivery.state);
@@ -7812,6 +8031,7 @@ export default function Home() {
             const delivery = await flushQueuedOutboundNotifications(
               supabaseClient,
               authUser,
+              localState,
             );
 
             if (delivery) {
@@ -7829,6 +8049,7 @@ export default function Home() {
           supabaseClient,
           localState,
           authUser,
+          { expectedUpdatedAt: readLiveStateMetadata()?.updatedAt },
         );
 
         if (saveResult.error) {
@@ -7844,6 +8065,7 @@ export default function Home() {
           const delivery = await flushQueuedOutboundNotifications(
             supabaseClient,
             authUser,
+            saveResult.state,
           );
 
           if (delivery && serializeState(delivery.state) !== serializeState(state)) {
@@ -7921,6 +8143,7 @@ export default function Home() {
         const delivery = await flushQueuedOutboundNotifications(
           supabaseClient,
           authUser,
+          saveResult.state,
         );
 
         if (delivery) {
@@ -8137,7 +8360,11 @@ export default function Home() {
       setLiveActionError("");
 
       if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
-        void flushQueuedOutboundNotifications(supabaseClient, authUser).then(
+        void flushQueuedOutboundNotifications(
+          supabaseClient,
+          authUser,
+          saveResult.state,
+        ).then(
           (delivery) => {
             if (!delivery) return;
             lastLivePersistedStateRef.current = serializeState(delivery.state);

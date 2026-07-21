@@ -190,6 +190,19 @@ async function sendSlack(
   return { status: "skipped" as const, error: "Slack provider is not configured." };
 }
 
+function deliveryUpdate(delivery: OutboundNotificationLog) {
+  return {
+    id: delivery.id,
+    channel: delivery.channel,
+    status: delivery.status,
+    attempts: delivery.attempts,
+    updatedAt: delivery.updatedAt,
+    sentAt: delivery.sentAt,
+    error: delivery.error,
+    providerMessageId: delivery.providerMessageId,
+  };
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -229,6 +242,8 @@ Deno.serve(async (request) => {
 
     const body = await request.json().catch(() => ({}));
     const rowId = typeof body.stateId === "string" ? body.stateId : stateRowId;
+    const responseMode =
+      body.responseMode === "delivery-updates" ? "delivery-updates" : "full-state";
     const { data, error } = await supabase
       .from("procurement_app_state")
       .select("state,updated_at")
@@ -262,21 +277,21 @@ Deno.serve(async (request) => {
       if (!user || user.notificationsEnabled === false) {
         delivery.status = "skipped";
         delivery.error = "Recipient notifications are disabled or user was not found.";
-        results.push({ id: delivery.id, channel: delivery.channel, status: delivery.status });
+        results.push(deliveryUpdate(delivery));
         continue;
       }
 
       if (delivery.channel === "email") {
         delivery.status = "skipped";
         delivery.error = "Email notifications are disabled. Slack is the active channel.";
-        results.push({ id: delivery.id, channel: delivery.channel, status: delivery.status });
+        results.push(deliveryUpdate(delivery));
         continue;
       }
 
       if (delivery.channel === "slack" && user.slackNotificationsEnabled === false) {
         delivery.status = "skipped";
         delivery.error = "Recipient Slack notifications are disabled.";
-        results.push({ id: delivery.id, channel: delivery.channel, status: delivery.status });
+        results.push(deliveryUpdate(delivery));
         continue;
       }
 
@@ -287,7 +302,7 @@ Deno.serve(async (request) => {
       if (result.status === "sent") {
         delivery.sentAt = updatedAt;
       }
-      results.push({ id: delivery.id, channel: delivery.channel, status: result.status });
+      results.push(deliveryUpdate(delivery));
     }
 
     state.outboundNotifications = deliveries;
@@ -321,14 +336,24 @@ Deno.serve(async (request) => {
       );
     }
 
+    const updatedAt = updatedRows[0]?.updated_at ?? null;
     return new Response(
-      JSON.stringify({
-        ok: true,
-        processed: results.length,
-        results,
-        state,
-        updatedAt: updatedRows[0]?.updated_at ?? null,
-      }),
+      JSON.stringify(
+        responseMode === "delivery-updates"
+          ? {
+              ok: true,
+              processed: results.length,
+              deliveries: results,
+              updatedAt,
+            }
+          : {
+              ok: true,
+              processed: results.length,
+              results,
+              state,
+              updatedAt,
+            },
+      ),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
         status: 200,
