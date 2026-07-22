@@ -121,6 +121,7 @@ import {
 } from "@/lib/procurement";
 import { getSupabaseBrowserClient } from "@/lib/supabase";
 import { shouldRefreshLiveState } from "@/lib/live-state-sync";
+import { submitAdminReassignment } from "@/lib/admin-actions";
 
 const STORAGE_KEY = "procurement-workflow-state-v1";
 const LIVE_STATE_METADATA_KEY = "procurement-live-state-meta-v1";
@@ -6060,6 +6061,7 @@ function AdminPanel({
   state,
   setState,
   onTransition,
+  actorId,
   hasSupabaseConfig,
   liveSyncStatus,
   liveSyncError,
@@ -6069,6 +6071,7 @@ function AdminPanel({
   state: ProcurementState;
   setState: (updater: (state: ProcurementState) => ProcurementState) => void;
   onTransition: WorkflowTransitionHandler;
+  actorId: string;
   hasSupabaseConfig: boolean;
   liveSyncStatus: LiveSyncStatus;
   liveSyncError: string;
@@ -6121,7 +6124,7 @@ function AdminPanel({
     }));
   };
   const updateAvailability = (userId: string, active: boolean) => {
-    setState((current) => updateUserAvailability(current, userId, active, "user-admin"));
+    setState((current) => updateUserAvailability(current, userId, active, actorId));
   };
   const addProjectOption = () => {
     const projectName = newProjectName.trim();
@@ -6389,15 +6392,12 @@ function AdminPanel({
             <IconButton
               icon={<ArrowRightLeft className="h-4 w-4" />}
               onClick={async () => {
-                await onTransition(
+                await submitAdminReassignment(onTransition, {
                   requestId,
-                  {
-                    type: "admin-reassign",
-                    assigneeId,
-                    comment,
-                  },
-                  "user-admin",
-                );
+                  assigneeId,
+                  actorId,
+                  comment,
+                });
                 setComment("");
               }}
             >
@@ -9175,6 +9175,7 @@ export default function Home() {
 
         {activeView === "admin" && currentUser.role === "Admin" ? (
           <AdminPanel
+            actorId={currentUser.id}
             hasSupabaseConfig={hasSupabaseClientConfig}
             liveSyncError={liveSyncError}
             liveSyncStatus={liveSyncStatus}
