@@ -120,6 +120,7 @@ import {
   updateUserAvailability,
 } from "@/lib/procurement";
 import { getSupabaseBrowserClient } from "@/lib/supabase";
+import { shouldRefreshLiveState } from "@/lib/live-state-sync";
 
 const STORAGE_KEY = "procurement-workflow-state-v1";
 const LIVE_STATE_METADATA_KEY = "procurement-live-state-meta-v1";
@@ -162,6 +163,7 @@ const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
 const LIVE_STATE_ROW_ID = "default";
 const LIVE_DATABASE_TIMEOUT_MS = 45000;
 const LIVE_NOTIFICATION_TIMEOUT_MS = 8000;
+const LIVE_STATE_REFRESH_INTERVAL_MS = 30000;
 const REQUEST_TABLE_PAGE_SIZE = 20;
 
 type View =
@@ -7776,6 +7778,8 @@ export default function Home() {
   const latestStateRef = useRef(state);
   const recoverableLocalStateRef = useRef<ProcurementState | null>(null);
   const lastLivePersistedStateRef = useRef<string | null>(null);
+  const lastLiveUpdatedAtRef = useRef<string | null>(null);
+  const liveRefreshInFlightRef = useRef(false);
   const liveWriteGuardRef = useRef(0);
 
   useEffect(() => {
@@ -7965,6 +7969,7 @@ export default function Home() {
             setRecoverableLocalRequestIds([]);
             setRecoveryMessage("");
             lastLivePersistedStateRef.current = serializeState(hydratedState);
+            lastLiveUpdatedAtRef.current = remoteUpdatedAt ?? null;
             writeLiveStateMetadata(remoteUpdatedAt, hydratedState);
 
             if (serializeState(hydratedState) !== serializedLocalSnapshot) {
@@ -7982,6 +7987,7 @@ export default function Home() {
                 (delivery) => {
                   if (!delivery || cancelled) return;
                   lastLivePersistedStateRef.current = serializeState(delivery.state);
+                  lastLiveUpdatedAtRef.current = delivery.updatedAt ?? null;
                   writeLiveStateMetadata(delivery.updatedAt, delivery.state);
                   setState((current) =>
                     serializeState(delivery.state) !== serializeState(current)
@@ -8047,6 +8053,7 @@ export default function Home() {
           }
 
           lastLivePersistedStateRef.current = serializeState(hydratedState);
+          lastLiveUpdatedAtRef.current = liveStateRow?.updated_at ?? null;
           writeLiveStateMetadata(liveStateRow?.updated_at, hydratedState);
           setState(hydratedState);
 
@@ -8065,6 +8072,7 @@ export default function Home() {
             }
 
             lastLivePersistedStateRef.current = serializeState(saveResult.state);
+            lastLiveUpdatedAtRef.current = saveResult.updatedAt ?? null;
             writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
 
             if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
@@ -8076,6 +8084,7 @@ export default function Home() {
                 (delivery) => {
                   if (!delivery || cancelled) return;
                   lastLivePersistedStateRef.current = serializeState(delivery.state);
+                  lastLiveUpdatedAtRef.current = delivery.updatedAt ?? null;
                   writeLiveStateMetadata(delivery.updatedAt, delivery.state);
                   setState((current) =>
                     serializeState(delivery.state) !== serializeState(current)
@@ -8140,6 +8149,151 @@ export default function Home() {
       return;
     }
 
+    let cancelled = false;
+
+    const refreshLiveState = async () => {
+      if (
+        cancelled ||
+        document.visibilityState === "hidden" ||
+        liveRefreshInFlightRef.current
+      ) {
+        return;
+      }
+
+      liveRefreshInFlightRef.current = true;
+      const writeGuardAtStart = liveWriteGuardRef.current;
+      const localStateAtStart = applyLaunchCleanup(latestStateRef.current);
+      const serializedLocalState = serializeState(localStateAtStart);
+      const hasUnsavedLocalChanges =
+        lastLivePersistedStateRef.current !== null &&
+        serializedLocalState !== lastLivePersistedStateRef.current;
+
+      try {
+        const { data: metadataData, error: metadataError } =
+          await withDatabaseTimeout(
+            supabaseClient
+              .from("procurement_app_state")
+              .select("updated_at")
+              .eq("id", LIVE_STATE_ROW_ID)
+              .maybeSingle(),
+            "The live Supabase workspace did not respond while checking for updates.",
+            7000,
+          ).catch((refreshError) => ({
+            data: null,
+            error: {
+              message: errorMessage(
+                refreshError,
+                "The live Supabase workspace did not respond while checking for updates.",
+              ),
+            },
+          }));
+
+        if (cancelled || metadataError) return;
+
+        const remoteUpdatedAt =
+          (metadataData as { updated_at?: string | null } | null)?.updated_at ??
+          null;
+
+        if (
+          !shouldRefreshLiveState({
+            remoteUpdatedAt,
+            loadedUpdatedAt: lastLiveUpdatedAtRef.current,
+            hasUnsavedLocalChanges,
+            writeInProgress: writeGuardAtStart !== liveWriteGuardRef.current,
+          })
+        ) {
+          return;
+        }
+
+        const { data, error } = await withDatabaseTimeout(
+          supabaseClient
+            .from("procurement_app_state")
+            .select("state,updated_at")
+            .eq("id", LIVE_STATE_ROW_ID)
+            .maybeSingle(),
+          "The live Supabase workspace did not respond while refreshing.",
+          10000,
+        ).catch((refreshError) => ({
+          data: null,
+          error: {
+            message: errorMessage(
+              refreshError,
+              "The live Supabase workspace did not respond while refreshing.",
+            ),
+          },
+        }));
+
+        if (
+          cancelled ||
+          error ||
+          writeGuardAtStart !== liveWriteGuardRef.current
+        ) {
+          return;
+        }
+
+        const currentSerializedState = serializeState(
+          applyLaunchCleanup(latestStateRef.current),
+        );
+        if (currentSerializedState !== serializedLocalState) return;
+
+        const liveStateRow = data as LiveStateRow;
+        if (!liveStateRow?.state) return;
+
+        const hydratedState = applyLaunchCleanup(
+          stateWithSignedInProfile(
+            parseState(JSON.stringify(liveStateRow.state)),
+            authUser,
+          ),
+        );
+        const serializedHydratedState = serializeState(hydratedState);
+        const updatedAt = liveStateRow.updated_at ?? remoteUpdatedAt;
+
+        lastLivePersistedStateRef.current = serializedHydratedState;
+        lastLiveUpdatedAtRef.current = updatedAt ?? null;
+        writeLiveStateMetadata(updatedAt, hydratedState);
+
+        if (serializedHydratedState !== serializedLocalState) {
+          setState(hydratedState);
+        }
+      } catch (refreshError) {
+        console.warn("Live state refresh failed", refreshError);
+      } finally {
+        liveRefreshInFlightRef.current = false;
+      }
+    };
+
+    const handleFocus = () => void refreshLiveState();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void refreshLiveState();
+      }
+    };
+    const intervalId = window.setInterval(() => {
+      void refreshLiveState();
+    }, LIVE_STATE_REFRESH_INTERVAL_MS);
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    void refreshLiveState();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [authStatus, authUser, liveSyncStatus, supabaseClient]);
+
+  useEffect(() => {
+    if (
+      !supabaseClient ||
+      authStatus !== "signed-in" ||
+      !authUser ||
+      liveSyncStatus !== "ready"
+    ) {
+      return;
+    }
+
     const writeGuardAtSchedule = liveWriteGuardRef.current;
 
     const timeoutId = window.setTimeout(() => {
@@ -8172,6 +8326,7 @@ export default function Home() {
 
             if (delivery) {
               lastLivePersistedStateRef.current = serializeState(delivery.state);
+              lastLiveUpdatedAtRef.current = delivery.updatedAt ?? null;
               writeLiveStateMetadata(delivery.updatedAt, delivery.state);
               if (serializeState(delivery.state) !== serializeState(state)) {
                 setState(delivery.state);
@@ -8199,6 +8354,7 @@ export default function Home() {
         }
 
         lastLivePersistedStateRef.current = serializeState(saveResult.state);
+        lastLiveUpdatedAtRef.current = saveResult.updatedAt ?? null;
         writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
 
         if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
@@ -8214,6 +8370,7 @@ export default function Home() {
 
           if (delivery && serializeState(delivery.state) !== serializeState(state)) {
             lastLivePersistedStateRef.current = serializeState(delivery.state);
+            lastLiveUpdatedAtRef.current = delivery.updatedAt ?? null;
             writeLiveStateMetadata(delivery.updatedAt, delivery.state);
             setState(delivery.state);
             return;
@@ -8311,6 +8468,7 @@ export default function Home() {
       }
 
       lastLivePersistedStateRef.current = serializeState(saveResult.state);
+      lastLiveUpdatedAtRef.current = saveResult.updatedAt ?? null;
       writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
       setState(saveResult.state);
       setLiveSyncStatus("ready");
@@ -8329,6 +8487,7 @@ export default function Home() {
 
         if (delivery) {
           lastLivePersistedStateRef.current = serializeState(delivery.state);
+          lastLiveUpdatedAtRef.current = delivery.updatedAt ?? null;
           writeLiveStateMetadata(delivery.updatedAt, delivery.state);
           setState((current) =>
             serializeState(delivery.state) !== serializeState(current)
@@ -8499,6 +8658,7 @@ export default function Home() {
       return;
     }
     lastLivePersistedStateRef.current = null;
+    lastLiveUpdatedAtRef.current = null;
     setState(initialState);
     setSelectedRequestId("PR-102");
     window.localStorage.removeItem(STORAGE_KEY);
@@ -8534,6 +8694,7 @@ export default function Home() {
       }
 
       lastLivePersistedStateRef.current = serializeState(saveResult.state);
+      lastLiveUpdatedAtRef.current = saveResult.updatedAt ?? null;
       writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
       setState(saveResult.state);
       setSelectedRequestId(saveResult.requestId);
@@ -8551,6 +8712,7 @@ export default function Home() {
           (delivery) => {
             if (!delivery) return;
             lastLivePersistedStateRef.current = serializeState(delivery.state);
+            lastLiveUpdatedAtRef.current = delivery.updatedAt ?? null;
             writeLiveStateMetadata(delivery.updatedAt, delivery.state);
             setState((current) =>
               serializeState(delivery.state) !== serializeState(current)
@@ -8605,6 +8767,7 @@ export default function Home() {
     }
 
     lastLivePersistedStateRef.current = serializeState(saveResult.state);
+    lastLiveUpdatedAtRef.current = saveResult.updatedAt ?? null;
     writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
     setState(saveResult.state);
     setRecoverableLocalRequestIds([]);
