@@ -3485,6 +3485,8 @@ function ActionPanel({
   const [deliveryNotes, setDeliveryNotes] = useState(request.logistics?.notes ?? "");
   const [lineItemComments, setLineItemComments] = useState<Record<string, string>>({});
   const [staffCancellationReason, setStaffCancellationReason] = useState("");
+  const [staffCancellationSaving, setStaffCancellationSaving] = useState(false);
+  const [staffCancellationError, setStaffCancellationError] = useState("");
   const [researchLineItems, setResearchLineItems] = useState<ProcurementLineItem[]>(() =>
     getRequestLineItems(request).map((item) => ({ ...item, productUrl: item.productUrl ?? "" })),
   );
@@ -4817,22 +4819,50 @@ function ActionPanel({
                 id={staffCancelReasonId}
                 placeholder="Reason required before cancellation"
                 value={staffCancellationReason}
-                onChange={(event) => setStaffCancellationReason(event.target.value)}
+                onChange={(event) => {
+                  setStaffCancellationReason(event.target.value);
+                  setStaffCancellationError("");
+                }}
               />
             </Field>
+            {staffCancellationError ? (
+              <div className="rounded-lg border border-red-300 bg-white p-3 text-sm font-semibold text-red-800">
+                {staffCancellationError}
+              </div>
+            ) : null}
             <IconButton
-              disabled={!staffCancellationReason.trim()}
+              disabled={!staffCancellationReason.trim() || staffCancellationSaving}
               icon={<XCircle className="h-4 w-4" />}
               onClick={async () => {
-                await onTransition(request.id, {
-                  type: "staff-cancel-request",
-                  cancellationReason: staffCancellationReason,
-                });
-                setStaffCancellationReason("");
+                const cancellationReason = staffCancellationReason.trim();
+
+                if (!cancellationReason) {
+                  return;
+                }
+
+                setStaffCancellationSaving(true);
+                setStaffCancellationError("");
+
+                try {
+                  await onTransition(request.id, {
+                    type: "staff-cancel-request",
+                    cancellationReason,
+                  });
+                  setStaffCancellationReason("");
+                } catch (error) {
+                  setStaffCancellationError(
+                    errorMessage(
+                      error,
+                      "The request could not be cancelled. Refresh the page and try again.",
+                    ),
+                  );
+                } finally {
+                  setStaffCancellationSaving(false);
+                }
               }}
               variant="danger"
             >
-              Cancel request
+              {staffCancellationSaving ? "Cancelling..." : "Cancel request"}
             </IconButton>
           </div>
         ) : null}
@@ -7651,6 +7681,7 @@ export default function Home() {
   const latestStateRef = useRef(state);
   const recoverableLocalStateRef = useRef<ProcurementState | null>(null);
   const lastLivePersistedStateRef = useRef<string | null>(null);
+  const liveWriteGuardRef = useRef(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -8014,8 +8045,14 @@ export default function Home() {
       return;
     }
 
+    const writeGuardAtSchedule = liveWriteGuardRef.current;
+
     const timeoutId = window.setTimeout(() => {
       void (async () => {
+        if (writeGuardAtSchedule !== liveWriteGuardRef.current) {
+          return;
+        }
+
         const localState = applyLaunchCleanup(state);
         const serializedLocalState = serializeState(localState);
         const latestSerializedState = serializeState(
@@ -8033,6 +8070,10 @@ export default function Home() {
               authUser,
               localState,
             );
+
+            if (writeGuardAtSchedule !== liveWriteGuardRef.current) {
+              return;
+            }
 
             if (delivery) {
               lastLivePersistedStateRef.current = serializeState(delivery.state);
@@ -8052,6 +8093,10 @@ export default function Home() {
           { expectedUpdatedAt: readLiveStateMetadata()?.updatedAt },
         );
 
+        if (writeGuardAtSchedule !== liveWriteGuardRef.current) {
+          return;
+        }
+
         if (saveResult.error) {
           setLiveSyncStatus("error");
           setLiveSyncError(saveResult.error);
@@ -8067,6 +8112,10 @@ export default function Home() {
             authUser,
             saveResult.state,
           );
+
+          if (writeGuardAtSchedule !== liveWriteGuardRef.current) {
+            return;
+          }
 
           if (delivery && serializeState(delivery.state) !== serializeState(state)) {
             lastLivePersistedStateRef.current = serializeState(delivery.state);
@@ -8107,6 +8156,18 @@ export default function Home() {
     (notification) => !notification.read && notification.userId === currentUser.id,
   ).length;
 
+  const finishSuccessfulWorkflowAction = (
+    requestId: string,
+    action: WorkflowTransitionAction,
+  ) => {
+    if (action.type !== "staff-cancel-request") {
+      return;
+    }
+
+    setSelectedRequestId((current) => (current === requestId ? undefined : current));
+    setView("trash");
+  };
+
   const persistWorkflowTransition: WorkflowTransitionHandler = async (
     requestId,
     action,
@@ -8115,6 +8176,8 @@ export default function Home() {
     setLiveActionError("");
 
     if (supabaseClient && authStatus === "signed-in" && authUser) {
+      liveWriteGuardRef.current += 1;
+      const writeGuardForAction = liveWriteGuardRef.current;
       const saveResult = await transitionLiveStateWithRetry(
         supabaseClient,
         requestId,
@@ -8124,6 +8187,10 @@ export default function Home() {
         latestStateRef.current,
       );
 
+      if (writeGuardForAction !== liveWriteGuardRef.current) {
+        return;
+      }
+
       if (saveResult.error || !saveResult.state) {
         const message =
           saveResult.error || "The action could not be saved to the live database.";
@@ -8131,6 +8198,21 @@ export default function Home() {
         setLiveSyncError(message);
         setLiveActionError(message);
         throw new Error(message);
+      }
+
+      if (action.type === "staff-cancel-request") {
+        const cancelledRequest = saveResult.state.requests.find(
+          (request) => request.id === requestId,
+        );
+
+        if (cancelledRequest?.status !== "Cancelled") {
+          const message =
+            "The request was not cancelled. Refresh the page and try again.";
+          setLiveSyncStatus("error");
+          setLiveSyncError(message);
+          setLiveActionError(message);
+          throw new Error(message);
+        }
       }
 
       lastLivePersistedStateRef.current = serializeState(saveResult.state);
@@ -8146,6 +8228,10 @@ export default function Home() {
           saveResult.state,
         );
 
+        if (writeGuardForAction !== liveWriteGuardRef.current) {
+          return;
+        }
+
         if (delivery) {
           lastLivePersistedStateRef.current = serializeState(delivery.state);
           writeLiveStateMetadata(delivery.updatedAt, delivery.state);
@@ -8157,10 +8243,12 @@ export default function Home() {
         }
       }
 
+      finishSuccessfulWorkflowAction(requestId, action);
       return;
     }
 
     setState((current) => transitionRequest(current, requestId, actorId, action));
+    finishSuccessfulWorkflowAction(requestId, action);
   };
 
   const signInWithGoogle = async () => {
