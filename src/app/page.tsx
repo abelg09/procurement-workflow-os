@@ -160,7 +160,7 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, "");
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
 const LIVE_STATE_ROW_ID = "default";
-const LIVE_DATABASE_TIMEOUT_MS = 20000;
+const LIVE_DATABASE_TIMEOUT_MS = 45000;
 const LIVE_NOTIFICATION_TIMEOUT_MS = 8000;
 const REQUEST_TABLE_PAGE_SIZE = 20;
 
@@ -209,6 +209,46 @@ type LiveStateMetadata = {
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+const DATABASE_RETRY_BASE_DELAY_MS = 500;
+
+function isTransientDatabaseError(message: string) {
+  const normalized = message.toLowerCase();
+  return [
+    "did not respond",
+    "timeout",
+    "timed out",
+    "network",
+    "fetch",
+    "failed to fetch",
+    "load failed",
+    "abort",
+    "connection",
+    "rate limit",
+    "500",
+    "502",
+    "503",
+    "504",
+  ].some((fragment) => normalized.includes(fragment));
+}
+
+async function waitForDatabaseRetry(attempt: number) {
+  const delayMs = Math.min(3500, DATABASE_RETRY_BASE_DELAY_MS * 2 ** attempt);
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function shouldRetryDatabaseError(
+  message: string,
+  attempt: number,
+  maxAttempts: number,
+) {
+  if (attempt >= maxAttempts - 1 || !isTransientDatabaseError(message)) {
+    return false;
+  }
+
+  await waitForDatabaseRetry(attempt);
+  return true;
 }
 
 async function withDatabaseTimeout<T>(
@@ -264,7 +304,10 @@ async function saveLiveStateWithRetry(
     }));
 
     if (updateError) {
-      return { error: updateError.message, state: localState };
+      lastError = updateError.message;
+      if (!(await shouldRetryDatabaseError(updateError.message, 0, maxAttempts))) {
+        return { error: updateError.message, state: localState };
+      }
     }
 
     if (Array.isArray(updatedRows) && updatedRows.length > 0) {
@@ -291,6 +334,11 @@ async function saveLiveStateWithRetry(
     }));
 
     if (fetchError) {
+      lastError = fetchError.message;
+      if (await shouldRetryDatabaseError(fetchError.message, attempt, maxAttempts)) {
+        continue;
+      }
+
       return { error: fetchError.message, state: localState };
     }
 
@@ -328,6 +376,9 @@ async function saveLiveStateWithRetry(
       }
 
       lastError = insertError.message;
+      if (await shouldRetryDatabaseError(insertError.message, attempt, maxAttempts)) {
+        continue;
+      }
       continue;
     }
 
@@ -345,6 +396,11 @@ async function saveLiveStateWithRetry(
     }));
 
     if (updateError) {
+      lastError = updateError.message;
+      if (await shouldRetryDatabaseError(updateError.message, attempt, maxAttempts)) {
+        continue;
+      }
+
       return { error: updateError.message, state: stateToSave };
     }
 
@@ -388,6 +444,11 @@ async function submitDraftToLiveState(
     }));
 
     if (fetchError) {
+      lastError = fetchError.message;
+      if (await shouldRetryDatabaseError(fetchError.message, attempt, maxAttempts)) {
+        continue;
+      }
+
       return { error: fetchError.message };
     }
 
@@ -428,6 +489,9 @@ async function submitDraftToLiveState(
       }
 
       lastError = insertError.message;
+      if (await shouldRetryDatabaseError(insertError.message, attempt, maxAttempts)) {
+        continue;
+      }
       continue;
     }
 
@@ -445,6 +509,11 @@ async function submitDraftToLiveState(
     }));
 
     if (updateError) {
+      lastError = updateError.message;
+      if (await shouldRetryDatabaseError(updateError.message, attempt, maxAttempts)) {
+        continue;
+      }
+
       return { error: updateError.message };
     }
 
@@ -494,6 +563,11 @@ async function transitionLiveStateWithRetry(
     }));
 
     if (fetchError) {
+      lastError = fetchError.message;
+      if (await shouldRetryDatabaseError(fetchError.message, attempt, maxAttempts)) {
+        continue;
+      }
+
       return { error: fetchError.message };
     }
 
@@ -541,6 +615,9 @@ async function transitionLiveStateWithRetry(
       }
 
       lastError = insertError.message;
+      if (await shouldRetryDatabaseError(insertError.message, attempt, maxAttempts)) {
+        continue;
+      }
       continue;
     }
 
@@ -563,6 +640,11 @@ async function transitionLiveStateWithRetry(
     }));
 
     if (updateError) {
+      lastError = updateError.message;
+      if (await shouldRetryDatabaseError(updateError.message, attempt, maxAttempts)) {
+        continue;
+      }
+
       return { error: updateError.message, state: transitionedState };
     }
 
@@ -605,6 +687,11 @@ async function recoverLocalRequestsToLiveState(
     }));
 
     if (fetchError) {
+      lastError = fetchError.message;
+      if (await shouldRetryDatabaseError(fetchError.message, attempt, maxAttempts)) {
+        continue;
+      }
+
       return { error: fetchError.message };
     }
 
@@ -654,6 +741,9 @@ async function recoverLocalRequestsToLiveState(
       }
 
       lastError = insertError.message;
+      if (await shouldRetryDatabaseError(insertError.message, attempt, maxAttempts)) {
+        continue;
+      }
       continue;
     }
 
@@ -671,6 +761,11 @@ async function recoverLocalRequestsToLiveState(
     }));
 
     if (updateError) {
+      lastError = updateError.message;
+      if (await shouldRetryDatabaseError(updateError.message, attempt, maxAttempts)) {
+        continue;
+      }
+
       return { error: updateError.message };
     }
 

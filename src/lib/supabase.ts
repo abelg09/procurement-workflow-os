@@ -34,6 +34,35 @@ type ProcurementDatabase = {
 
 let browserClient: SupabaseClient<ProcurementDatabase> | null = null;
 
+const SUPABASE_FETCH_TIMEOUT_MS = 45000;
+
+function createSupabaseFetch(timeoutMs = SUPABASE_FETCH_TIMEOUT_MS): typeof fetch {
+  return async (...args: Parameters<typeof fetch>) => {
+    const [input, init] = args;
+    const controller = new AbortController();
+    const upstreamSignal = init?.signal;
+    const abortFromUpstream = () => controller.abort();
+
+    if (upstreamSignal?.aborted) {
+      controller.abort();
+    } else {
+      upstreamSignal?.addEventListener("abort", abortFromUpstream, { once: true });
+    }
+
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      return await globalThis.fetch(input, {
+        ...init,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+      upstreamSignal?.removeEventListener("abort", abortFromUpstream);
+    }
+  };
+}
+
 export function getSupabaseBrowserClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -44,6 +73,9 @@ export function getSupabaseBrowserClient() {
 
   if (!browserClient) {
     browserClient = createClient<ProcurementDatabase>(url, anonKey, {
+      global: {
+        fetch: createSupabaseFetch(),
+      },
       auth: {
         autoRefreshToken: true,
         detectSessionInUrl: true,
@@ -64,6 +96,9 @@ export function getSupabaseServiceClient() {
   }
 
   return createClient(url, serviceRoleKey, {
+    global: {
+      fetch: createSupabaseFetch(),
+    },
     auth: {
       autoRefreshToken: false,
       persistSession: false,
