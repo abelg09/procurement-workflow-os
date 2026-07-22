@@ -51,6 +51,38 @@ test("does not refresh while a live write is in progress", () => {
   );
 });
 
+test("post-commit tasks do not block committed workflow actions", async () => {
+  const liveStateSync = await import("./live-state-sync.ts");
+  const runPostCommitTask = Reflect.get(liveStateSync, "runPostCommitTask");
+
+  assert.equal(typeof runPostCommitTask, "function");
+  if (typeof runPostCommitTask !== "function") {
+    return;
+  }
+
+  let releaseTask: (() => void) | undefined;
+  const pendingTask = new Promise<void>((resolve) => {
+    releaseTask = resolve;
+  });
+  let started = false;
+  let completed = false;
+
+  const result = runPostCommitTask(async () => {
+    started = true;
+    await pendingTask;
+    completed = true;
+  });
+
+  assert.equal(result, undefined);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(started, true);
+  assert.equal(completed, false);
+
+  releaseTask?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completed, true);
+});
+
 test("does not refresh without a remote timestamp", () => {
   assert.equal(
     shouldRefreshLiveState({

@@ -120,7 +120,10 @@ import {
   updateUserAvailability,
 } from "@/lib/procurement";
 import { getSupabaseBrowserClient } from "@/lib/supabase";
-import { shouldRefreshLiveState } from "@/lib/live-state-sync";
+import {
+  runPostCommitTask,
+  shouldRefreshLiveState,
+} from "@/lib/live-state-sync";
 import { submitAdminReassignment } from "@/lib/admin-actions";
 
 const STORAGE_KEY = "procurement-workflow-state-v1";
@@ -8474,30 +8477,39 @@ export default function Home() {
       setLiveSyncStatus("ready");
       setLiveSyncError("");
 
+      finishSuccessfulWorkflowAction(requestId, action);
+
       if (getQueuedOutboundNotificationCount(saveResult.state) > 0) {
-        const delivery = await flushQueuedOutboundNotifications(
-          supabaseClient,
-          authUser,
-          saveResult.state,
+        runPostCommitTask(
+          async () => {
+            const delivery = await flushQueuedOutboundNotifications(
+              supabaseClient,
+              authUser,
+              saveResult.state,
+            );
+
+            if (
+              !delivery ||
+              writeGuardForAction !== liveWriteGuardRef.current
+            ) {
+              return;
+            }
+
+            lastLivePersistedStateRef.current = serializeState(delivery.state);
+            lastLiveUpdatedAtRef.current = delivery.updatedAt ?? null;
+            writeLiveStateMetadata(delivery.updatedAt, delivery.state);
+            setState((current) =>
+              serializeState(delivery.state) !== serializeState(current)
+                ? delivery.state
+                : current,
+            );
+          },
+          (error) => {
+            console.warn("Post-save notification delivery failed.", error);
+          },
         );
-
-        if (writeGuardForAction !== liveWriteGuardRef.current) {
-          return;
-        }
-
-        if (delivery) {
-          lastLivePersistedStateRef.current = serializeState(delivery.state);
-          lastLiveUpdatedAtRef.current = delivery.updatedAt ?? null;
-          writeLiveStateMetadata(delivery.updatedAt, delivery.state);
-          setState((current) =>
-            serializeState(delivery.state) !== serializeState(current)
-              ? delivery.state
-              : current,
-          );
-        }
       }
 
-      finishSuccessfulWorkflowAction(requestId, action);
       return;
     }
 

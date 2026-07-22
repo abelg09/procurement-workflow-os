@@ -5,6 +5,13 @@ type LiveStateRefreshInput = {
   writeInProgress: boolean;
 };
 
+export function runPostCommitTask(
+  task: () => Promise<void>,
+  onError: (error: unknown) => void = () => undefined,
+): void {
+  void Promise.resolve().then(task).catch(onError);
+}
+
 export function shouldRefreshLiveState({
   remoteUpdatedAt,
   loadedUpdatedAt,
