@@ -595,8 +595,16 @@ async function transitionLiveStateWithRetry(
     const signedInRole = roleFromSignedInUser(authUser);
     const liveActor =
       baseState.users.find(
+        (user) =>
+          user.email.trim().toLowerCase() === normalizedAuthEmail &&
+          (signedInRole === "Employee" || user.role === signedInRole),
+      ) ??
+      (signedInRole !== "Employee"
+        ? baseState.users.find((user) => user.role === signedInRole)
+        : undefined) ??
+      baseState.users.find(
         (user) => user.email.trim().toLowerCase() === normalizedAuthEmail,
-      ) ?? baseState.users.find((user) => user.role === signedInRole);
+      );
     const effectiveActorId = liveActor?.id ?? actorId;
 
     const transitionedState = transitionRequest(
