@@ -166,6 +166,7 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const isGithubPagesBuild = process.env.NEXT_PUBLIC_GITHUB_PAGES === "true";
 const LIVE_STATE_ROW_ID = "default";
 const LIVE_DATABASE_TIMEOUT_MS = 45000;
+const LIVE_ACTION_TIMEOUT_MS = 12000;
 const LIVE_NOTIFICATION_TIMEOUT_MS = 8000;
 const LIVE_STATE_REFRESH_INTERVAL_MS = 30000;
 const REQUEST_TABLE_PAGE_SIZE = 20;
@@ -546,7 +547,7 @@ async function transitionLiveStateWithRetry(
   action: WorkflowTransitionAction,
   authUser: SignedInUser,
   fallbackState: ProcurementState,
-  maxAttempts = 4,
+  maxAttempts = 2,
 ) {
   let lastError = "";
 
@@ -558,6 +559,7 @@ async function transitionLiveStateWithRetry(
         .eq("id", LIVE_STATE_ROW_ID)
         .maybeSingle(),
       "The live database did not respond while saving this action. Refresh the page and try again.",
+      LIVE_ACTION_TIMEOUT_MS,
     ).catch((error) => ({
       data: null,
       error: {
@@ -589,12 +591,41 @@ async function transitionLiveStateWithRetry(
       baseState = mergeProcurementStates(baseState, fallbackState);
     }
 
+    const normalizedAuthEmail = authUser.email.trim().toLowerCase();
+    const signedInRole = roleFromSignedInUser(authUser);
+    const liveActor =
+      baseState.users.find(
+        (user) => user.email.trim().toLowerCase() === normalizedAuthEmail,
+      ) ?? baseState.users.find((user) => user.role === signedInRole);
+    const effectiveActorId = liveActor?.id ?? actorId;
+
     const transitionedState = transitionRequest(
       baseState,
       requestId,
-      actorId,
+      effectiveActorId,
       action,
     );
+    const previousRequest = baseState.requests.find(
+      (request) => request.id === requestId,
+    );
+    const nextRequest = transitionedState.requests.find(
+      (request) => request.id === requestId,
+    );
+
+    if (!previousRequest || !nextRequest) {
+      return {
+        error:
+          "The request could not be found in the live workspace. Refresh and try again.",
+      };
+    }
+
+    if (JSON.stringify(previousRequest) === JSON.stringify(nextRequest)) {
+      return {
+        error:
+          "This action was not applied. Your signed-in account is not matched to the assigned workflow role, or the request is no longer pending. Refresh and try again.",
+      };
+    }
+
     const updatedAt = nowIso();
     const payload = {
       id: LIVE_STATE_ROW_ID,
@@ -607,6 +638,7 @@ async function transitionLiveStateWithRetry(
       const { error: insertError } = await withDatabaseTimeout(
         supabaseClient.from("procurement_app_state").insert(payload),
         "The live database did not respond while saving this action. Refresh the page and try again.",
+        LIVE_ACTION_TIMEOUT_MS,
       ).catch((error) => ({
         error: {
           message: errorMessage(
@@ -635,6 +667,7 @@ async function transitionLiveStateWithRetry(
         .eq("updated_at", remoteRow.updated_at ?? "")
         .select("updated_at"),
       "The live database did not respond while saving this action. Refresh the page and try again.",
+      LIVE_ACTION_TIMEOUT_MS,
     ).catch((error) => ({
       data: null,
       error: {
@@ -1326,19 +1359,21 @@ const signedInUserFromSupabase = (user: SupabaseAuthUser): SignedInUser | null =
 const profileIdForSignedInUser = (user: SignedInUser) => `google-${user.id}`;
 
 const roleFromSignedInUser = (user: SignedInUser): Role => {
-  if (adminEmails.includes(user.email)) {
+  const normalizedEmail = user.email.trim().toLowerCase();
+
+  if (adminEmails.includes(normalizedEmail)) {
     return "Admin";
   }
 
-  if (user.email === PROCURE_APPROVAL_EMAIL.toLowerCase()) {
+  if (normalizedEmail === PROCURE_APPROVAL_EMAIL.toLowerCase()) {
     return "Edlyn";
   }
 
-  if (user.email === FINANCE_APPROVAL_EMAIL.toLowerCase()) {
+  if (normalizedEmail === FINANCE_APPROVAL_EMAIL.toLowerCase()) {
     return "Aileen";
   }
 
-  const identity = `${user.email} ${user.name}`.toLowerCase();
+  const identity = `${normalizedEmail} ${user.name}`.toLowerCase();
 
   if (identity.includes("mona")) return "Mona";
   if (identity.includes("rashid")) return "Rashid";
@@ -1356,9 +1391,10 @@ const getSignedInProfile = (
   state: ProcurementState,
   user: SignedInUser,
 ): UserProfile => {
+  const normalizedEmail = user.email.trim().toLowerCase();
   const inferredRole = roleFromSignedInUser(user);
   const existing = state.users.find(
-    (profile) => profile.email.toLowerCase() === user.email,
+    (profile) => profile.email.trim().toLowerCase() === normalizedEmail,
   );
   const effectiveRole =
     inferredRole === "Employee" && existing && existing.role !== "Employee"
@@ -1373,7 +1409,7 @@ const getSignedInProfile = (
     return {
       ...existing,
       name: displayName,
-      email: user.email,
+      email: normalizedEmail,
       role: effectiveRole,
     };
   }
@@ -1395,7 +1431,7 @@ const getSignedInProfile = (
   return {
     id: profileIdForSignedInUser(user),
     name: displayName,
-    email: user.email,
+    email: normalizedEmail,
     role: effectiveRole,
     department: "Operations",
     active: true,
@@ -6084,7 +6120,21 @@ function AdminPanel({
   const [requestId, setRequestId] = useState(state.requests[0]?.id ?? "");
   const [assigneeId, setAssigneeId] = useState(state.users[0]?.id ?? "");
   const [comment, setComment] = useState("");
+  const [reassignmentError, setReassignmentError] = useState("");
+  const [reassignmentSaving, setReassignmentSaving] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
+
+  const reassignableRequests = state.requests.filter(
+    (request) => request.status !== "Cancelled" && request.status !== "Completed",
+  );
+  const activeUsers = state.users.filter((user) => user.active);
+  const reassignableUsers = activeUsers.length > 0 ? activeUsers : state.users;
+  const selectedRequestId = reassignableRequests.some((request) => request.id === requestId)
+    ? requestId
+    : reassignableRequests[0]?.id ?? "";
+  const selectedAssigneeId = reassignableUsers.some((user) => user.id === assigneeId)
+    ? assigneeId
+    : reassignableUsers[0]?.id ?? "";
 
   const exportCsv = () => {
     const rows = rowsForExport(state);
@@ -6377,15 +6427,15 @@ function AdminPanel({
             <h3 className="text-base font-bold text-slate-950">Manual reassignment</h3>
           </div>
           <div className="mt-4 grid gap-3">
-            <SelectInput value={requestId} onChange={(event) => setRequestId(event.target.value)}>
-              {state.requests.map((request) => (
+    <SelectInput value={selectedRequestId} onChange={(event) => setRequestId(event.target.value)}>
+      {reassignableRequests.map((request) => (
                 <option key={request.id} value={request.id}>
                   {request.id} - {request.itemName}
                 </option>
               ))}
             </SelectInput>
-            <SelectInput value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)}>
-              {state.users.map((user) => (
+    <SelectInput value={selectedAssigneeId} onChange={(event) => setAssigneeId(event.target.value)}>
+      {reassignableUsers.map((user) => (
                 <option key={user.id} value={user.id}>
                   {user.name} ({getRoleDisplayName(user.role)})
                 </option>
@@ -6394,18 +6444,32 @@ function AdminPanel({
             <TextArea placeholder="Reassignment reason" value={comment} onChange={(event) => setComment(event.target.value)} />
             <IconButton
               icon={<ArrowRightLeft className="h-4 w-4" />}
-              onClick={async () => {
-                await submitAdminReassignment(onTransition, {
-                  requestId,
-                  assigneeId,
-                  actorId,
-                  comment,
-                });
-                setComment("");
-              }}
-            >
-              Reassign request
-            </IconButton>
+      onClick={async () => {
+        setReassignmentError("");
+        setReassignmentSaving(true);
+        try {
+          await submitAdminReassignment(onTransition, {
+            requestId: selectedRequestId,
+            assigneeId: selectedAssigneeId,
+            actorId,
+            comment,
+          });
+          setComment("");
+        } catch (error) {
+          setReassignmentError(errorMessage(error, "Reassignment failed. Please try again."));
+        } finally {
+          setReassignmentSaving(false);
+        }
+      }}
+      disabled={reassignmentSaving || !selectedRequestId || !selectedAssigneeId}
+    >
+      Reassign request
+    </IconButton>
+    {reassignmentError ? (
+      <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-800">
+        {reassignmentError}
+      </div>
+    ) : null}
           </div>
         </div>
 
@@ -8415,12 +8479,17 @@ export default function Home() {
     requestId: string,
     action: WorkflowTransitionAction,
   ) => {
-    if (action.type !== "staff-cancel-request") {
-      return;
-    }
+  if (
+    action.type !== "staff-cancel-request" &&
+    action.type !== "employee-cancel-request"
+  ) {
+    return;
+  }
 
-    setSelectedRequestId((current) => (current === requestId ? undefined : current));
+  setSelectedRequestId((current) => (current === requestId ? undefined : current));
+  if (action.type === "staff-cancel-request") {
     setView("trash");
+  }
   };
 
   const persistWorkflowTransition: WorkflowTransitionHandler = async (
@@ -8455,7 +8524,10 @@ export default function Home() {
         throw new Error(message);
       }
 
-      if (action.type === "staff-cancel-request") {
+  if (
+    action.type === "staff-cancel-request" ||
+    action.type === "employee-cancel-request"
+  ) {
         const cancelledRequest = saveResult.state.requests.find(
           (request) => request.id === requestId,
         );
