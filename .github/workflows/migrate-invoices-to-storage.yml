@@ -1,0 +1,84 @@
+name: Migrate Embedded Invoices To Storage
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "APPLY changes? Leave false for a safe dry run first."
+        type: boolean
+        default: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Setup pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.6.0 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve Supabase service role key
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF || secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -n "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::add-mask::$SUPABASE_SERVICE_ROLE_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$SUPABASE_PROJECT_REF" ]; then
+            echo "SUPABASE_SERVICE_ROLE_KEY is not configured and SUPABASE_ACCESS_TOKEN/SUPABASE_PROJECT_REF fallback is unavailable."
+            exit 1
+          fi
+
+          response="$(curl -fsS \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Accept: application/json" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/api-keys?reveal=true")"
+
+          resolved_key="$(node -e '
+            const keys = JSON.parse(process.argv[1]);
+            const serviceKey = keys.find((key) =>
+              key.api_key &&
+              (key.name === "service_role" ||
+                key.name === "service_role key" ||
+                key.name?.toLowerCase().includes("service"))
+            )?.api_key;
+            if (!serviceKey) {
+              console.error("Supabase service_role API key was not returned by the Management API.");
+              process.exit(1);
+            }
+            process.stdout.write(serviceKey);
+          ' "$response")"
+
+          echo "::add-mask::$resolved_key"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$resolved_key" >> "$GITHUB_ENV"
+
+      - name: Run invoice migration
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          APPLY: ${{ inputs.apply }}
+          BACKUP_DIR: invoice-migration-backup
+        run: node scripts/migrate-embedded-invoices-to-storage.mjs
+
+      - name: Upload pre-migration backup
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: invoice-migration-backup
+          path: invoice-migration-backup/
+          if-no-files-found: warn
