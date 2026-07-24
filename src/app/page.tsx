@@ -6199,6 +6199,8 @@ function AdminPanel({
       ...(typeof updates.slackUserId === "string"
         ? { slackUserId: updates.slackUserId.trim().toUpperCase() }
         : {}),
+      // Stamp the edit so this change wins over any stale tab on merge.
+      updatedAt: nowIso(),
     };
     setState((current) => ({
       ...current,

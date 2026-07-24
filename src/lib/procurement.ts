@@ -211,6 +211,10 @@ export type UserProfile = {
   emailNotificationsEnabled?: boolean;
   slackNotificationsEnabled?: boolean;
   reminderNotificationsEnabled?: boolean;
+  // Stamped whenever an admin edits this user (role, Slack ID, availability,
+  // notification prefs). Used by the state merge so the most recent edit wins
+  // and a stale browser tab can't silently revert it.
+  updatedAt?: string;
 };
 
 export type AttachmentReference = {
@@ -598,6 +602,35 @@ function remapRequestReference<T extends { requestId?: string | null }>(
   });
 }
 
+// Decide which copy of a user to keep when the same id exists on both the
+// server and a client that is saving. Admin edits stamp `updatedAt`, so the
+// most recently edited copy wins outright — an admin can set or deliberately
+// clear a field (Slack ID, role, availability) and have it stick, never
+// silently reverted by another client's cached copy.
+//
+// When neither copy is newer (both are legacy/unstamped — e.g. a browser tab
+// opened before Slack IDs existed), last-write-wins is preserved for every
+// field EXCEPT that a blank can never overwrite a set Slack ID. That empty-over-
+// value wipe from a stale tab was the "my Slack IDs went away" bug.
+function chooseUserProfile(
+  remoteItem: UserProfile,
+  localItem: UserProfile,
+): UserProfile {
+  const remoteTime = latestTimestampValue(remoteItem.updatedAt);
+  const localTime = latestTimestampValue(localItem.updatedAt);
+
+  if (localTime !== remoteTime) {
+    return localTime > remoteTime ? localItem : remoteItem;
+  }
+
+  return {
+    ...localItem,
+    slackUserId: localItem.slackUserId?.trim()
+      ? localItem.slackUserId
+      : remoteItem.slackUserId,
+  };
+}
+
 export function mergeProcurementStates(
   remoteState: ProcurementState,
   localState: ProcurementState,
@@ -623,7 +656,7 @@ export function mergeProcurementStates(
   return {
     ...remoteState,
     ...localState,
-    users: mergeUniqueById(remoteState.users, localState.users),
+    users: mergeUniqueById(remoteState.users, localState.users, chooseUserProfile),
     requests: mergedRequests.requests,
     auditLogs: mergeUniqueById(remoteState.auditLogs, localAuditLogs).sort(
       compareByDateDesc((auditLog) => auditLog.dateTime),
@@ -3388,7 +3421,7 @@ export function updateUserAvailability(
 
   const dateTime = nowIso();
   const users = state.users.map((user) =>
-    user.id === userId ? { ...user, active } : user,
+    user.id === userId ? { ...user, active, updatedAt: dateTime } : user,
   );
   const nextState: ProcurementState = {
     ...state,
