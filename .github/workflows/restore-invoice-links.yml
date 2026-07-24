@@ -1,4 +1,4 @@
-name: Migrate Embedded Invoices To Storage
+name: Restore Invoice Download Links
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         default: false
 
 jobs:
-  migrate:
+  restore:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -68,17 +68,17 @@ jobs:
           echo "::add-mask::$resolved_key"
           echo "SUPABASE_SERVICE_ROLE_KEY=$resolved_key" >> "$GITHUB_ENV"
 
-      - name: Run invoice migration
+      - name: Restore invoice download links
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
           APPLY: ${{ inputs.apply }}
-          BACKUP_DIR: invoice-migration-backup
-        run: node scripts/migrate-embedded-invoices-to-storage.mjs
+          BACKUP_DIR: invoice-restore-backup
+        run: node scripts/restore-archived-invoices-to-storage.mjs
 
-      - name: Upload pre-migration backup
+      - name: Upload pre-restore backup
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: invoice-migration-backup
-          path: invoice-migration-backup/
+          name: invoice-restore-backup
+          path: invoice-restore-backup/
           if-no-files-found: warn
