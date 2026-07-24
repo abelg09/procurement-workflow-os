@@ -8596,11 +8596,18 @@ export default function Home() {
         latestStateRef.current,
       );
 
-      if (writeGuardForAction !== liveWriteGuardRef.current) {
-        return;
-      }
+      // If a newer local write bumped the guard while this was saving, only bail
+      // when this action ALSO failed. Bailing on a *successful* save was the bug:
+      // the approval was written to the database, but the approver's screen never
+      // updated — so they clicked again, each click bumping the guard and
+      // cancelling the previous screen update. Within one browser the saveResult
+      // is the latest DB state, so applying it cannot revert another user's change.
+      const superseded = writeGuardForAction !== liveWriteGuardRef.current;
 
       if (saveResult.error || !saveResult.state) {
+        if (superseded) {
+          return;
+        }
         const message =
           saveResult.error || "The action could not be saved to the live database.";
         setLiveSyncStatus("error");
