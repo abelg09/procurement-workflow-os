@@ -108,6 +108,7 @@ import {
   isRequesterCancellable,
   isUserBlockedTask,
   makeId,
+  markAllNotificationsRead,
   markNotificationRead,
   mergeProcurementStates,
   nowIso,
@@ -5574,17 +5575,28 @@ function NotificationsCenter({
   state,
   onOpenRequest,
   onRead,
+  onMarkAllRead,
   onRunReminder,
 }: {
   currentUser: UserProfile;
   state: ProcurementState;
   onOpenRequest: (requestId: string | null | undefined, notificationId: string) => void;
   onRead: (id: string) => void;
+  onMarkAllRead: () => void;
   onRunReminder: () => void;
 }) {
-  const notifications = state.notifications.filter(
-    (notification) => notification.userId === currentUser.id,
-  );
+  const notifications = state.notifications
+    .filter((notification) => notification.userId === currentUser.id)
+    .slice()
+    .sort((a, b) => {
+      // Unread first so read alerts drop to the bottom. Input is already
+      // newest-first and Array.sort is stable, so order holds within each group.
+      if (Boolean(a.read) !== Boolean(b.read)) {
+        return a.read ? 1 : -1;
+      }
+      return 0;
+    });
+  const hasUnread = notifications.some((notification) => !notification.read);
 
   return (
     <section className={classNames(panelClass, "overflow-hidden")}>
@@ -5598,13 +5610,24 @@ function NotificationsCenter({
             Internal alerts with queued Slack delivery for task assignments and reminders.
           </p>
         </div>
-        <IconButton
-          icon={<Clock className="h-4 w-4" />}
-          onClick={onRunReminder}
-          variant="secondary"
-        >
-          Run 3 PM reminders
-        </IconButton>
+        <div className="flex flex-wrap items-center gap-2">
+          {hasUnread ? (
+            <IconButton
+              icon={<CheckCircle2 className="h-4 w-4" />}
+              onClick={onMarkAllRead}
+              variant="secondary"
+            >
+              Mark all as read
+            </IconButton>
+          ) : null}
+          <IconButton
+            icon={<Clock className="h-4 w-4" />}
+            onClick={onRunReminder}
+            variant="secondary"
+          >
+            Run 3 PM reminders
+          </IconButton>
+        </div>
       </div>
       <div className="grid gap-3 p-5">
         {notifications.length === 0 ? (
@@ -8515,6 +8538,45 @@ export default function Home() {
   }
   };
 
+  const persistNotificationRead = async (
+    updater: (current: ProcurementState) => ProcurementState,
+  ) => {
+    const optimisticState = updater(latestStateRef.current);
+    setState(optimisticState);
+
+    if (!supabaseClient || authStatus !== "signed-in" || !authUser) {
+      return;
+    }
+
+    // Persist immediately through the same optimistic-lock retry path workflow
+    // actions use, instead of relying on the debounced auto-save (which a
+    // concurrent approval cancels via the write guard). Bumping the guard also
+    // stops an in-flight auto-save from writing a stale, still-unread snapshot
+    // on top — this is what made read notifications reappear as unread.
+    liveWriteGuardRef.current += 1;
+    const writeGuardForRead = liveWriteGuardRef.current;
+    const saveResult = await saveLiveStateWithRetry(
+      supabaseClient,
+      optimisticState,
+      authUser,
+      { expectedUpdatedAt: readLiveStateMetadata()?.updatedAt },
+    );
+
+    if (writeGuardForRead !== liveWriteGuardRef.current) {
+      return;
+    }
+
+    if (saveResult.error || !saveResult.state) {
+      // Non-fatal: keep the optimistic read locally; the next save will retry.
+      return;
+    }
+
+    lastLivePersistedStateRef.current = serializeState(saveResult.state);
+    lastLiveUpdatedAtRef.current = saveResult.updatedAt ?? null;
+    writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
+    setState(saveResult.state);
+  };
+
   const persistWorkflowTransition: WorkflowTransitionHandler = async (
     requestId,
     action,
@@ -9264,10 +9326,21 @@ export default function Home() {
               if (requestId) {
                 setSelectedRequestId(requestId);
               }
-              setState((current) => markNotificationRead(current, notificationId));
+              void persistNotificationRead((current) =>
+                markNotificationRead(current, notificationId),
+              );
               setView("dashboard");
             }}
-            onRead={(id) => setState((current) => markNotificationRead(current, id))}
+            onRead={(id) =>
+              void persistNotificationRead((current) =>
+                markNotificationRead(current, id),
+              )
+            }
+            onMarkAllRead={() =>
+              void persistNotificationRead((current) =>
+                markAllNotificationsRead(current, currentUser.id),
+              )
+            }
             onRunReminder={() =>
               setState((current) => createDailyReminderNotifications(current))
             }

@@ -631,6 +631,14 @@ export function mergeProcurementStates(
     notifications: mergeUniqueById(
       remoteState.notifications,
       localNotifications,
+      // "read" is monotonic: once a notification is read on any device it stays
+      // read. Without this, a stale copy from another client, a live refresh, or
+      // the notification edge function could resurrect it as unread — the
+      // "I keep marking them read but they show unread again" bug.
+      (remoteItem, localItem) => ({
+        ...localItem,
+        read: Boolean(remoteItem.read) || Boolean(localItem.read),
+      }),
     ).sort(compareByDateDesc((notification) => notification.createdAt)),
     outboundNotifications: mergeUniqueById(
       remoteState.outboundNotifications ?? [],
@@ -3473,6 +3481,20 @@ export function markNotificationRead(
     ...state,
     notifications: state.notifications.map((notification) =>
       notification.id === notificationId
+        ? { ...notification, read: true }
+        : notification,
+    ),
+  };
+}
+
+export function markAllNotificationsRead(
+  state: ProcurementState,
+  userId: string,
+) {
+  return {
+    ...state,
+    notifications: state.notifications.map((notification) =>
+      notification.userId === userId && !notification.read
         ? { ...notification, read: true }
         : notification,
     ),
