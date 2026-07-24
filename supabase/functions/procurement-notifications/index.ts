@@ -56,6 +56,14 @@ const corsHeaders = {
 const stateRowId = "default";
 const defaultAppBaseUrl = "https://procurement.sulmi.ai/";
 const maxDeliveriesPerRun = 25;
+// A transient Slack error (rate-limit, 5xx, network blip) marks a delivery
+// "failed". Retry it a bounded number of times before giving up, instead of
+// dropping it permanently on the first hiccup.
+const maxSlackAttempts = 3;
+// Persisting the send outcomes can hit the optimistic-lock (updated_at) guard
+// when a client saved meanwhile. Retry the write (re-reading each time) so the
+// "sent" status is recorded and the delivery is not re-sent as a duplicate.
+const maxPersistAttempts = 6;
 
 function requiredEnv(name: string) {
   const value = Deno.env.get(name);
@@ -264,7 +272,12 @@ Deno.serve(async (request) => {
     const state = liveStateRow?.state as ProcurementState;
     const deliveries = [...(state.outboundNotifications ?? [])];
     const queued = deliveries
-      .filter((delivery) => delivery.status === "queued")
+      .filter(
+        (delivery) =>
+          delivery.status === "queued" ||
+          (delivery.status === "failed" &&
+            (delivery.attempts ?? 0) < maxSlackAttempts),
+      )
       .slice(0, maxDeliveriesPerRun);
     const results = [];
 
@@ -306,28 +319,92 @@ Deno.serve(async (request) => {
     }
 
     state.outboundNotifications = deliveries;
-    const { data: updatedRows, error: updateError } = await supabase
-      .from("procurement_app_state")
-      .update({
-        state,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", rowId)
-      .eq("updated_at", liveStateRow?.updated_at ?? "")
-      .select("updated_at");
 
-    if (updateError) {
-      return new Response(JSON.stringify({ ok: false, error: updateError.message }), {
+    // Slack was already delivered above. Record the send outcomes durably even
+    // if the row changed while we were sending: on an optimistic-lock conflict,
+    // re-read the latest state and re-apply ONLY our per-delivery results by id
+    // (preserving every other concurrent change), then retry — rather than
+    // dropping the batch, which would leave deliveries "queued" and re-send them
+    // as duplicates on the next flush.
+    const processedById = new Map(
+      queued.map((delivery) => [delivery.id, delivery] as const),
+    );
+    const applyResults = (target: ProcurementState) => {
+      target.outboundNotifications = (target.outboundNotifications ?? []).map((delivery) => {
+        const processed = processedById.get(delivery.id);
+        if (!processed) {
+          return delivery;
+        }
+        return {
+          ...delivery,
+          status: processed.status,
+          attempts: processed.attempts,
+          updatedAt: processed.updatedAt,
+          sentAt: processed.sentAt,
+          error: processed.error,
+          providerMessageId: processed.providerMessageId,
+        };
+      });
+    };
+
+    let persistState: ProcurementState = state;
+    let lockUpdatedAt = liveStateRow?.updated_at ?? "";
+    let updatedAt: string | null = null;
+    let persistError: string | null = null;
+
+    for (let attempt = 0; attempt < maxPersistAttempts; attempt++) {
+      const { data: updatedRows, error: updateError } = await supabase
+        .from("procurement_app_state")
+        .update({
+          state: persistState,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", rowId)
+        .eq("updated_at", lockUpdatedAt)
+        .select("updated_at");
+
+      if (updateError) {
+        persistError = updateError.message;
+        break;
+      }
+
+      if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+        updatedAt = updatedRows[0]?.updated_at ?? null;
+        break;
+      }
+
+      const { data: freshRow, error: refetchError } = await supabase
+        .from("procurement_app_state")
+        .select("state,updated_at")
+        .eq("id", rowId)
+        .maybeSingle();
+
+      if (refetchError || !freshRow || !freshRow.state) {
+        persistError =
+          refetchError?.message ??
+          "Workspace state was not found while recording notifications.";
+        break;
+      }
+
+      const freshState = freshRow.state as ProcurementState;
+      applyResults(freshState);
+      persistState = freshState;
+      lockUpdatedAt = freshRow.updated_at ?? "";
+    }
+
+    if (persistError) {
+      return new Response(JSON.stringify({ ok: false, error: persistError }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
         status: 500,
       });
     }
 
-    if (!Array.isArray(updatedRows) || updatedRows.length === 0) {
+    if (updatedAt === null) {
       return new Response(
         JSON.stringify({
           ok: false,
-          error: "Workspace state changed while sending notifications. Retry the notification job.",
+          error:
+            "Workspace state kept changing while recording notifications. The messages were sent; retry to record their status.",
         }),
         {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -335,8 +412,6 @@ Deno.serve(async (request) => {
         },
       );
     }
-
-    const updatedAt = updatedRows[0]?.updated_at ?? null;
     return new Response(
       JSON.stringify(
         responseMode === "delivery-updates"
@@ -350,7 +425,7 @@ Deno.serve(async (request) => {
               ok: true,
               processed: results.length,
               results,
-              state,
+              state: persistState,
               updatedAt,
             },
       ),

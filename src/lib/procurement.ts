@@ -1737,6 +1737,47 @@ function outboundBodyForNotification(
   return details.join("\n");
 }
 
+// Operational delivery LOGS (Slack/email send receipts) accumulate one row per
+// notification per channel and are never user-facing. Left unbounded they bloat
+// the single shared state blob and slow every load/save. This prune keeps EVERY
+// active delivery (queued or failed — failed ones are retried) and only trims the
+// OLDEST already-delivered/skipped receipts once there are more than the cap. It
+// never touches requests, audit history, or the in-app notification bell.
+const MAX_TERMINAL_OUTBOUND_NOTIFICATIONS = 400;
+const TERMINAL_OUTBOUND_STATUSES = new Set<OutboundNotificationStatus>([
+  "sent",
+  "skipped",
+]);
+
+function pruneOutboundNotifications(deliveries: OutboundNotificationLog[]) {
+  const terminal = deliveries.filter((delivery) =>
+    TERMINAL_OUTBOUND_STATUSES.has(delivery.status),
+  );
+
+  if (terminal.length <= MAX_TERMINAL_OUTBOUND_NOTIFICATIONS) {
+    return deliveries;
+  }
+
+  const keptTerminalIds = new Set(
+    terminal
+      .slice()
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt ?? b.createdAt).getTime() -
+          new Date(a.updatedAt ?? a.createdAt).getTime(),
+      )
+      .slice(0, MAX_TERMINAL_OUTBOUND_NOTIFICATIONS)
+      .map((delivery) => delivery.id),
+  );
+
+  // Preserve original ordering; keep all non-terminal + the most-recent terminal.
+  return deliveries.filter(
+    (delivery) =>
+      !TERMINAL_OUTBOUND_STATUSES.has(delivery.status) ||
+      keptTerminalIds.has(delivery.id),
+  );
+}
+
 function queueOutboundNotificationsForNewInternalNotifications(
   state: ProcurementState,
   existingNotificationIds: Set<string>,
@@ -1799,7 +1840,7 @@ function queueOutboundNotificationsForNewInternalNotifications(
       });
     });
 
-  state.outboundNotifications = queuedDeliveries;
+  state.outboundNotifications = pruneOutboundNotifications(queuedDeliveries);
 }
 
 export function getQueuedOutboundNotificationCount(state: ProcurementState) {

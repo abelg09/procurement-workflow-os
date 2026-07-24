@@ -7856,6 +7856,7 @@ export default function Home() {
   const lastLiveUpdatedAtRef = useRef<string | null>(null);
   const liveRefreshInFlightRef = useRef(false);
   const liveWriteGuardRef = useRef(0);
+  const blockedSignInNoticeRef = useRef("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -7918,16 +7919,30 @@ export default function Home() {
       setAuthError("");
 
       if (!signedInUser) {
+        if (blockedSignInNoticeRef.current) {
+          // A disallowed account was just force-signed-out below; keep showing
+          // why instead of falling back to a blank signed-out screen.
+          setAuthStatus("blocked");
+          setAuthError(blockedSignInNoticeRef.current);
+          return;
+        }
         setAuthStatus("signed-out");
         return;
       }
 
       if (!isAllowedEmail(signedInUser.email)) {
+        const notice = `Use a Sulmi Google account (${allowedEmailDomains.map((domain) => `@${domain}`).join(", ")}).`;
+        blockedSignInNoticeRef.current = notice;
         setAuthStatus("blocked");
-        setAuthError(`Use a Sulmi Google account (${allowedEmailDomains.map((domain) => `@${domain}`).join(", ")}).`);
+        setAuthError(notice);
+        // Revoke the Supabase session so a disallowed account cannot retain a
+        // valid JWT for direct database access (workflow authorization is only
+        // enforced client-side, so a lingering token is a real exposure).
+        void supabaseClient.auth.signOut();
         return;
       }
 
+      blockedSignInNoticeRef.current = "";
       setAuthStatus("signed-in");
     };
 
@@ -8599,6 +8614,7 @@ export default function Home() {
 
   const signInWithGoogle = async () => {
     setAuthError("");
+    blockedSignInNoticeRef.current = "";
 
     if (!supabaseClient) {
       setAuthStatus("missing-config");
@@ -8626,6 +8642,7 @@ export default function Home() {
   };
 
   const signOut = async () => {
+    blockedSignInNoticeRef.current = "";
     if (supabaseClient) {
       await supabaseClient.auth.signOut();
     }
