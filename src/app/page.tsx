@@ -3106,6 +3106,35 @@ function RequestForm({
   );
 }
 
+// Render `text` with every case-insensitive occurrence of `term` wrapped in a
+// highlight, so a searcher can spot the match instantly. Falls back to plain
+// text when there is no search term or no match.
+function HighlightText({ text, term }: { text: string; term: string }) {
+  const query = term.trim();
+  if (!query || !text) {
+    return <>{text}</>;
+  }
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const segments = text.split(new RegExp(`(${escaped})`, "gi"));
+  const lowerQuery = query.toLowerCase();
+  return (
+    <>
+      {segments.map((segment, index) =>
+        segment.toLowerCase() === lowerQuery ? (
+          <mark
+            key={index}
+            className="rounded-[3px] bg-yellow-200 px-0.5 text-slate-950"
+          >
+            {segment}
+          </mark>
+        ) : (
+          <Fragment key={index}>{segment}</Fragment>
+        ),
+      )}
+    </>
+  );
+}
+
 function RequestsTable({
   requests,
   users,
@@ -3483,9 +3512,12 @@ function RequestsTable({
                       onClick={() => onSelect(request.id)}
                     >
                       <td className="px-4 py-3">
-                        <p className="font-bold text-slate-950">{request.id}</p>
+                        <p className="font-bold text-slate-950">
+                          <HighlightText text={request.id} term={search} />
+                        </p>
                         <p className="mt-1 max-w-52 truncate text-slate-500">
-                          {request.employeeName} - {request.itemName}
+                          <HighlightText text={request.employeeName} term={search} /> -{" "}
+                          <HighlightText text={request.itemName} term={search} />
                         </p>
                         {overdue ? (
                           <p className="mt-1 text-xs font-semibold text-red-700">
@@ -3493,7 +3525,9 @@ function RequestsTable({
                           </p>
                         ) : null}
                       </td>
-                      <td className="px-4 py-3">{request.project}</td>
+                      <td className="px-4 py-3">
+                        <HighlightText text={request.project} term={search} />
+                      </td>
                       <td className="px-4 py-3">
                         {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
                       </td>
