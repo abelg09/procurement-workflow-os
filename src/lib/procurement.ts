@@ -4024,8 +4024,38 @@ export function answerProcurementQuestion(
   return `I can answer questions such as: status of my request, pending with Mona, pending with Rashid, pending with Dr. Majed, pending with Amro, invoices pending with Finance, over ${OVERDUE_REQUEST_HOURS} hours, order placed, request PR-102 stage, or completed requests this month.`;
 }
 
+// Remove embedded invoice file bytes (base64 "data:" URLs) from a state. Invoice
+// files live in Supabase Storage (referenced by uploadedInvoiceStoragePath); the
+// inline base64 copy is redundant and is what bloated the single state row to
+// 10 MB, timing out every read (500) and blocking all saves. Stripping it here —
+// on every serialize (DB/localStorage write) and every parse (load) — means the
+// blob can never be persisted or reintroduced by a stale cache again.
+export function stripEmbeddedInvoiceBlobs(state: ProcurementState): ProcurementState {
+  const cleanInvoice = <T extends InvoiceDetails | undefined | null>(invoice: T): T => {
+    if (!invoice || typeof invoice !== "object" || !invoice.uploadedInvoiceDataUrl) {
+      return invoice;
+    }
+    const rest = { ...invoice };
+    delete rest.uploadedInvoiceDataUrl;
+    return rest as T;
+  };
+
+  let changed = false;
+  const requests = state.requests.map((request) => {
+    const invoice = cleanInvoice(request.invoice);
+    const invoices = request.invoices?.map(cleanInvoice);
+    if (invoice === request.invoice && invoices === request.invoices) {
+      return request;
+    }
+    changed = true;
+    return { ...request, invoice, invoices };
+  });
+
+  return changed ? { ...state, requests } : state;
+}
+
 export function serializeState(state: ProcurementState) {
-  return JSON.stringify(state);
+  return JSON.stringify(stripEmbeddedInvoiceBlobs(state));
 }
 
 export function parseState(serialized: string | null) {
@@ -4362,23 +4392,25 @@ export function parseState(serialized: string | null) {
   };
 
   if (!serialized) {
-    return migrateState(initialState);
+    return stripEmbeddedInvoiceBlobs(migrateState(initialState));
   }
 
   try {
     const parsed = JSON.parse(serialized) as ProcurementState & { projectOptions?: string[] };
     if (!Array.isArray(parsed.requests) || !Array.isArray(parsed.users)) {
-      return migrateState(initialState);
+      return stripEmbeddedInvoiceBlobs(migrateState(initialState));
     }
-    return migrateState({
-      ...parsed,
-      auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
-      notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
-      chatbotMessages: Array.isArray(parsed.chatbotMessages)
-        ? parsed.chatbotMessages
-        : [],
-    });
+    return stripEmbeddedInvoiceBlobs(
+      migrateState({
+        ...parsed,
+        auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
+        notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
+        chatbotMessages: Array.isArray(parsed.chatbotMessages)
+          ? parsed.chatbotMessages
+          : [],
+      }),
+    );
   } catch {
-    return migrateState(initialState);
+    return stripEmbeddedInvoiceBlobs(migrateState(initialState));
   }
 }
