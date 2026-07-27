@@ -629,9 +629,17 @@ async function transitionLiveStateWithRetry(
     }
 
     if (JSON.stringify(previousRequest) === JSON.stringify(nextRequest)) {
+      // The transition produced no change — almost always because the request
+      // already advanced (a slow first click that DID land, then a second click;
+      // or another device acted). Sync the screen to the freshly-read remote
+      // state instead of freezing on a stale "still pending" view or showing a
+      // misleading "not matched to your role" error. This is the "clicked
+      // Approve and nothing happened" report: the click worked, the screen just
+      // never caught up.
       return {
-        error:
-          "This action was not applied. Your signed-in account is not matched to the assigned workflow role, or the request is no longer pending. Refresh and try again.",
+        state: baseState,
+        updatedAt: remoteRow?.updated_at ?? null,
+        unchanged: true,
       };
     }
 
@@ -8543,8 +8551,14 @@ export default function Home() {
   const persistNotificationRead = async (
     updater: (current: ProcurementState) => ProcurementState,
   ) => {
+    // Compose the read update on top of the LATEST committed state (functional
+    // setState) and keep latestStateRef in sync immediately. Previously this set
+    // a precomputed snapshot; if a workflow action (e.g. an approval) had just
+    // advanced a request but the latestStateRef sync effect hadn't run yet, the
+    // snapshot was stale and silently reverted that approval on screen.
     const optimisticState = updater(latestStateRef.current);
-    setState(optimisticState);
+    latestStateRef.current = optimisticState;
+    setState((current) => updater(current));
 
     if (!supabaseClient || authStatus !== "signed-in" || !authUser) {
       return;
@@ -8576,6 +8590,7 @@ export default function Home() {
     lastLivePersistedStateRef.current = serializeState(saveResult.state);
     lastLiveUpdatedAtRef.current = saveResult.updatedAt ?? null;
     writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
+    latestStateRef.current = saveResult.state;
     setState(saveResult.state);
   };
 
@@ -8639,6 +8654,7 @@ export default function Home() {
       lastLivePersistedStateRef.current = serializeState(saveResult.state);
       lastLiveUpdatedAtRef.current = saveResult.updatedAt ?? null;
       writeLiveStateMetadata(saveResult.updatedAt, saveResult.state);
+      latestStateRef.current = saveResult.state;
       setState(saveResult.state);
       setLiveSyncStatus("ready");
       setLiveSyncError("");
