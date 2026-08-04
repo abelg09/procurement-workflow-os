@@ -5143,8 +5143,11 @@ function RequestDetails({
 
       <div className="grid min-w-0 gap-5">
         <div className="grid min-w-0 gap-5">
-          <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
-            <h3 className="text-base font-bold text-slate-950">Request details</h3>
+          <details className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+              <h3 className="text-base font-bold text-slate-950">Request details</h3>
+              <span className="text-xs font-semibold text-blue-700">Show / hide</span>
+            </summary>
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <Detail label="Item" value={request.itemName} />
               <Detail label="Line items" value={String(lineItems.length)} />
@@ -5162,7 +5165,7 @@ function RequestDetails({
                 <Detail label="Reason" value={request.reasonForPurchase} />
               </div>
             </div>
-          </div>
+          </details>
 
           <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
             <h3 className="text-base font-bold text-slate-950">Line items</h3>
@@ -5951,6 +5954,27 @@ function invoiceRowsForExport(state: ProcurementState) {
   );
 }
 
+async function exportProcurementExcel(state: ProcurementState) {
+  const XLSX = await import("xlsx");
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet(rowsForExport(state)),
+    "Procurement",
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet(lineItemRowsForExport(state)),
+    "Line Items",
+  );
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet(invoiceRowsForExport(state)),
+    "Invoices",
+  );
+  XLSX.writeFile(workbook, "procurement-report.xlsx");
+}
+
 function downloadBlob(content: BlobPart, filename: string, type: string) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -6223,17 +6247,7 @@ function AdminPanel({
     downloadBlob(csv, "procurement-report.csv", "text/csv;charset=utf-8");
   };
 
-  const exportExcel = async () => {
-    const XLSX = await import("xlsx");
-    const worksheet = XLSX.utils.json_to_sheet(rowsForExport(state));
-    const itemWorksheet = XLSX.utils.json_to_sheet(lineItemRowsForExport(state));
-    const invoiceWorksheet = XLSX.utils.json_to_sheet(invoiceRowsForExport(state));
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Procurement");
-    XLSX.utils.book_append_sheet(workbook, itemWorksheet, "Line Items");
-    XLSX.utils.book_append_sheet(workbook, invoiceWorksheet, "Invoices");
-    XLSX.writeFile(workbook, "procurement-report.xlsx");
-  };
+  const exportExcel = () => exportProcurementExcel(state);
 
   const updateUser = (userId: string, updates: Partial<UserProfile>) => {
     const cleanUpdates = {
@@ -7836,6 +7850,19 @@ function Dashboard({
       </div>
 
       <div className="grid min-w-0 gap-5">
+        {["Admin", "Mona", "Edlyn"].includes(currentUser.role) ? (
+          <div className="flex justify-end">
+            <IconButton
+              icon={<FileSpreadsheet className="h-4 w-4" />}
+              onClick={() =>
+                exportProcurementExcel({ ...state, requests: visibleRequests })
+              }
+              variant="secondary"
+            >
+              Export to Excel
+            </IconButton>
+          </div>
+        ) : null}
         <RequestsTable
           currentUser={currentUser}
           onSelect={(id) =>
