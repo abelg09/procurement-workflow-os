@@ -4934,6 +4934,50 @@ function ActionPanel({
           </div>
         ) : null}
 
+        {(request.status === "Delivery Tracking" || request.status === "Order Confirmed") &&
+        canUse("Edlyn") ? (
+          <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Per-item delivery status</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Update each item as it arrives. When every item is Delivered (or Cancelled), the
+                request moves to final closure automatically.
+              </p>
+            </div>
+            <div className="grid gap-2">
+              {getRequestLineItems(request).map((item) => (
+                <div
+                  className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-2 sm:flex-row sm:items-center sm:justify-between"
+                  key={item.id}
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900">{item.itemName}</p>
+                    <p className="mt-1 text-xs text-slate-500">Qty {item.quantity}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <LineItemStatusBadge status={item.status} />
+                    <SelectInput
+                      className="sm:w-48"
+                      value={item.status ?? "Pending"}
+                      onChange={(event) => {
+                        void onTransition(request.id, {
+                          type: "edlyn-set-item-status",
+                          lineItemId: item.id,
+                          status: event.target.value as (typeof LINE_ITEM_STATUSES)[number],
+                        });
+                      }}
+                    >
+                      {LINE_ITEM_STATUSES.map((status) => (
+                        <option key={status}>{status}</option>
+                      ))}
+                    </SelectInput>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         {request.status === "Delivery Tracking" && canUse("Edlyn") ? (
           <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
             {logisticsFields}

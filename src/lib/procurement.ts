@@ -781,6 +781,7 @@ export type WorkflowAction =
   | { type: "edlyn-start-delivery-tracking"; logistics?: LogisticsDetails; comment?: string }
   | { type: "edlyn-update-logistics"; logistics: LogisticsDetails; comment?: string }
   | { type: "edlyn-receive-item"; comment?: string }
+  | { type: "edlyn-set-item-status"; lineItemId: string; status: LineItemStatus; note?: string; comment?: string }
   | { type: "employee-cancel-request"; cancellationReason: string }
   | { type: "edlyn-confirm-cancellation"; comment?: string }
   | { type: "staff-cancel-request"; cancellationReason: string }
@@ -3280,6 +3281,79 @@ export function transitionRequest(
         },
         dateTime,
       );
+      break;
+    }
+    case "edlyn-set-item-status": {
+      // Procure updates a single line item's status during the purchase/delivery
+      // phase, so bulk requests can track items that arrive at different times.
+      if (!canProcureWorkOnPurchase() && actor.role !== "Admin") {
+        return state;
+      }
+      const items = getRequestLineItems(editable);
+      const target = items.find((item) => item.id === workflowAction.lineItemId);
+      if (!target || !isLineItemStatus(workflowAction.status)) {
+        return state;
+      }
+      const nextStatus = workflowAction.status;
+      const note = workflowAction.note?.trim() ?? "";
+      const updatedItems = items.map((item) =>
+        item.id === workflowAction.lineItemId
+          ? {
+              ...item,
+              status: nextStatus,
+              deliveredAt:
+                nextStatus === "Delivered" ? (item.deliveredAt ?? dateTime) : item.deliveredAt,
+              holdReason: nextStatus === "On hold" ? note || item.holdReason || "" : "",
+            }
+          : item,
+      );
+      applyLineItemUpdate(editable, updatedItems);
+      editable.stage = "edlyn";
+      editable.assigneeId = actor.id;
+      editable.previousResponsibleId = actor.id;
+      actionLabel = `${actor.name} set "${target.itemName}" to ${nextStatus}`;
+      comment = workflowAction.comment;
+
+      // When every item is delivered (or cancelled), auto-advance the request to
+      // final closure — the same destination as the manual "receive item" step.
+      const allResolved = updatedItems.every(
+        (item) => item.status === "Delivered" || item.status === "Cancelled",
+      );
+      const anyDelivered = updatedItems.some((item) => item.status === "Delivered");
+      if (allResolved && anyDelivered && !isClosed(editable.status)) {
+        const financeAssignee = assignTo("Aileen", { notify: false });
+        editable.status = "Item Received";
+        editable.stage = "aileen";
+        editable.itemReceivedAt = dateTime;
+        editable.logistics = mergeLogistics(
+          editable.logistics,
+          { deliveryStatus: "Delivered", lastCheckpoint: "All items delivered" },
+          dateTime,
+        );
+        actionLabel = `All items delivered — ${editable.id} ready for final closure`;
+        addNotification(
+          nextState.notifications,
+          {
+            userId: financeAssignee.id,
+            requestId,
+            title: "Case ready to close",
+            body: `${editable.id}: all items delivered and ready for final closure.`,
+            type: "received",
+          },
+          dateTime,
+        );
+        addNotification(
+          nextState.notifications,
+          {
+            userId: editable.submittedById,
+            requestId,
+            title: "All items delivered",
+            body: `All items in ${editable.id} have been delivered.`,
+            type: "received",
+          },
+          dateTime,
+        );
+      }
       break;
     }
     case "edlyn-confirm-cancellation": {
