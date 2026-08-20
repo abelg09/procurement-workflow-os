@@ -5143,6 +5143,8 @@ function RequestDetails({
   currentUser: UserProfile;
   onTransition: WorkflowTransitionHandler;
 }) {
+  const [detailItem, setDetailItem] = useState<ProcurementLineItem | null>(null);
+
   if (!request) {
     return (
       <section className={classNames(panelClass, "min-w-0 p-8 text-center text-slate-500")}>
@@ -5280,7 +5282,12 @@ function RequestDetails({
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {lineItems.map((item, index) => (
-                    <tr key={item.id}>
+                    <tr
+                      className="cursor-pointer transition hover:bg-blue-50/60"
+                      key={item.id}
+                      onClick={() => setDetailItem(item)}
+                      title="Click to open item details"
+                    >
                       <td className="px-3 py-2 font-semibold text-slate-600">
                         Item {index + 1}
                       </td>
@@ -5301,7 +5308,7 @@ function RequestDetails({
                       <td className="px-3 py-2">{item.quantity}</td>
                       <td className="px-3 py-2">{money(item.unitPrice, item.currency)}</td>
                       <td className="px-3 py-2">{money(item.originalTotal, item.currency)}</td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2" onClick={(event) => event.stopPropagation()}>
                         <LineItemLink productUrl={item.productUrl} compact />
                       </td>
                       <td className="px-3 py-2">
@@ -5380,6 +5387,48 @@ function RequestDetails({
       </div>
 
       <AuditTrail logs={logs} />
+
+      {detailItem ? (
+        <Modal
+          onClose={() => setDetailItem(null)}
+          title={`Item details — ${detailItem.itemName}`}
+        >
+          <div className="grid gap-3 text-sm">
+            <div>
+              <LineItemStatusBadge status={detailItem.status} />
+            </div>
+            <Detail label="Description" value={detailItem.itemDescription || "Not provided"} />
+            <div className="grid grid-cols-2 gap-3">
+              <Detail label="Quantity" value={String(detailItem.quantity)} />
+              <Detail label="Vendor" value={detailItem.vendorName || "Not provided"} />
+              <Detail label="Unit price" value={money(detailItem.unitPrice, detailItem.currency)} />
+              <Detail
+                label="Original total"
+                value={money(detailItem.originalTotal, detailItem.currency)}
+              />
+              <Detail label="AED total" value={money(detailItem.aedTotal, "AED")} />
+              <Detail
+                label="FX to AED"
+                value={`${detailItem.fxRateToAed.toFixed(4)} · ${detailItem.exchangeRateDate}`}
+              />
+            </div>
+            <LineItemLink productUrl={detailItem.productUrl} />
+            {detailItem.holdReason ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-2">
+                <Detail label="Hold / progress note" value={detailItem.holdReason} />
+              </div>
+            ) : null}
+            {lineItemClarificationMap.get(detailItem.id) ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-2">
+                <Detail
+                  label="Clarification note"
+                  value={lineItemClarificationMap.get(detailItem.id) ?? ""}
+                />
+              </div>
+            ) : null}
+          </div>
+        </Modal>
+      ) : null}
     </section>
   );
 }
@@ -5409,6 +5458,54 @@ function CollapsibleCard({
       </summary>
       {children}
     </details>
+  );
+}
+
+// A centered pop-up dialog. Closes on the X, a backdrop click, or Escape — used
+// to show per-item details without scrolling the whole request page.
+function Modal({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        aria-modal="true"
+        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="text-base font-bold text-slate-950">{title}</h3>
+          <button
+            aria-label="Close"
+            className="shrink-0 rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+            onClick={onClose}
+            type="button"
+          >
+            <XCircle className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="mt-4">{children}</div>
+      </div>
+    </div>
   );
 }
 
