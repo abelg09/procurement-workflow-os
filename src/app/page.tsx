@@ -6,7 +6,6 @@ import {
   AlertCircle,
   ArrowRightLeft,
   Bell,
-  Bot,
   Check,
   CheckCircle2,
   CircleDollarSign,
@@ -78,7 +77,6 @@ import {
   UserProfile,
   WORKFLOW_STAGES,
   applyLaunchCleanup,
-  answerProcurementQuestion,
   createDailyReminderNotifications,
   getAssigneeName,
   getCancelledRequests,
@@ -95,8 +93,6 @@ import {
   getRequestTotalAed,
   getQueuedOutboundNotificationCount,
   getStageIndex,
-  getStuckRequests,
-  getUserBlockedTasks,
   getUserById,
   getVisibleRequests,
   initialState,
@@ -170,6 +166,19 @@ const LIVE_STATE_ROW_ID = "default";
 const LIVE_DATABASE_TIMEOUT_MS = 45000;
 const LIVE_ACTION_TIMEOUT_MS = 12000;
 const LIVE_NOTIFICATION_TIMEOUT_MS = 8000;
+
+// Notifications older than this are auto-cleared from the Notification Center —
+// hidden from the list and the unread count. The record itself is kept (nothing
+// is deleted). Mona to confirm the exact window; 15–30 days is the intended
+// range.
+const NOTIFICATION_MAX_AGE_DAYS = 30;
+
+function isNotificationWithinWindow(createdAt?: string): boolean {
+  if (!createdAt) return true;
+  const time = new Date(createdAt).getTime();
+  if (!Number.isFinite(time)) return true;
+  return Date.now() - time <= NOTIFICATION_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+}
 const LIVE_STATE_REFRESH_INTERVAL_MS = 30000;
 const REQUEST_TABLE_PAGE_SIZE = 20;
 
@@ -3111,17 +3120,19 @@ function RequestForm({
 // highlight, so a searcher can spot the match instantly. Falls back to plain
 // text when there is no search term or no match.
 function HighlightText({ text, term }: { text: string; term: string }) {
-  const query = term.trim();
-  if (!query || !text) {
+  const words = term.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0 || !text) {
     return <>{text}</>;
   }
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = words
+    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
   const segments = text.split(new RegExp(`(${escaped})`, "gi"));
-  const lowerQuery = query.toLowerCase();
+  const lowerWords = new Set(words.map((word) => word.toLowerCase()));
   return (
     <>
       {segments.map((segment, index) =>
-        segment.toLowerCase() === lowerQuery ? (
+        lowerWords.has(segment.toLowerCase()) ? (
           <mark
             key={index}
             className="rounded-[3px] bg-yellow-200 px-0.5 text-slate-950"
@@ -3194,7 +3205,7 @@ function RequestsTable({
   );
 
   const filtered = useMemo(() => {
-    const searchTerm = search.trim().toLowerCase();
+    const searchTerms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const minAmountNumber = Number(minAmount);
     const maxAmountNumber = Number(maxAmount);
     const shouldCheckMinAmount =
@@ -3203,15 +3214,21 @@ function RequestsTable({
       !hideFinancials && maxAmount.trim() !== "" && Number.isFinite(maxAmountNumber);
 
     return requests.filter((request) => {
-      if (searchTerm) {
+      if (searchTerms.length > 0) {
         const haystack = [
           request.id,
           request.employeeName,
+          request.department,
           request.project,
           request.itemName,
+          request.itemDescription,
+          request.reasonForPurchase,
           request.vendorName,
+          request.priority,
+          displayStatus(request.status),
           ...getRequestLineItems(request).flatMap((item) => [
             item.itemName,
+            item.itemDescription,
             item.vendorName,
             item.productUrl ?? "",
           ]),
@@ -3219,7 +3236,10 @@ function RequestsTable({
           .join(" ")
           .toLowerCase();
 
-        if (!haystack.includes(searchTerm)) {
+        // Each typed word must appear somewhere (AND match), so a single word
+        // like "scan" matches descriptions, and multi-word queries such as
+        // "scan invoice" work even when the words are in different fields.
+        if (!searchTerms.every((term) => haystack.includes(term))) {
           return false;
         }
       }
@@ -5826,7 +5846,11 @@ function NotificationsCenter({
   onRunReminder: () => void;
 }) {
   const notifications = state.notifications
-    .filter((notification) => notification.userId === currentUser.id)
+    .filter(
+      (notification) =>
+        notification.userId === currentUser.id &&
+        isNotificationWithinWindow(notification.createdAt),
+    )
     .slice()
     .sort((a, b) => {
       // Unread first so read alerts drop to the bottom. Input is already
@@ -6818,117 +6842,6 @@ function AdminPanel({
 
       <AuditTrail logs={state.auditLogs} />
     </section>
-  );
-}
-
-function ProcurementAssistant({
-  state,
-  setState,
-  currentUser,
-}: {
-  state: ProcurementState;
-  setState: (updater: (state: ProcurementState) => ProcurementState) => void;
-  currentUser: UserProfile;
-}) {
-  const [question, setQuestion] = useState("");
-  const messages = state.chatbotMessages.filter((message) => message.userId === currentUser.id);
-
-  const ask = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const trimmed = question.trim();
-    if (!trimmed) return;
-    const answer = answerProcurementQuestion(trimmed, state, currentUser);
-    const dateTime = nowIso();
-    setState((current) => ({
-      ...current,
-      chatbotMessages: [
-        ...current.chatbotMessages,
-        {
-          id: makeId("chat"),
-          userId: currentUser.id,
-          role: "user",
-          content: trimmed,
-          createdAt: dateTime,
-        },
-        {
-          id: makeId("chat"),
-          userId: currentUser.id,
-          role: "assistant",
-          content: answer,
-          createdAt: dateTime,
-        },
-      ],
-    }));
-    setQuestion("");
-  };
-
-  const prompt = (value: string) => {
-    setQuestion(value);
-  };
-
-  return (
-    <aside className={classNames(panelClass, "min-w-0 overflow-hidden")}>
-      <div className="border-b border-slate-200 p-4">
-        <div className="flex items-center gap-2">
-          <Bot className="h-5 w-5 text-purple-700" />
-          <h2 className="text-base font-bold text-slate-950">Procurement Assistant</h2>
-        </div>
-        <p className="mt-1 text-sm text-slate-500">
-          Procurement data answers for status, approvals, invoices, and requests over 24 hours.
-        </p>
-      </div>
-      <div className="grid max-h-[460px] gap-3 overflow-y-auto p-4">
-        {messages.length === 0 ? (
-          <div className="rounded-xl border border-purple-100 bg-purple-50 p-3 text-sm text-purple-900">
-            Ask: Which stage is request PR-102 in?
-          </div>
-        ) : (
-          messages.map((message) => (
-            <div
-              className={classNames(
-                "rounded-lg p-3 text-sm leading-6",
-                message.role === "user"
-                  ? "ml-8 bg-slate-900 text-white"
-                  : "mr-8 border border-slate-200 bg-slate-50 text-slate-700",
-              )}
-              key={message.id}
-            >
-              <p className="whitespace-pre-line">{message.content}</p>
-            </div>
-          ))
-        )}
-      </div>
-      <div className="flex gap-2 overflow-x-auto border-t border-slate-200 p-3">
-        {[
-          "Which requests are pending with Rashid?",
-          "Which requests are pending with Amro?",
-          "Which invoices are pending with Finance?",
-          `Show me requests over ${OVERDUE_REQUEST_HOURS} hours.`,
-          "Show all completed requests this month.",
-        ].map((item) => (
-          <button
-            className="shrink-0 rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
-            key={item}
-            onClick={() => prompt(item)}
-            type="button"
-          >
-            {item}
-          </button>
-        ))}
-      </div>
-      <form className="grid gap-2 border-t border-slate-200 p-3 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={ask}>
-        <TextInput
-          aria-label="Ask Procurement Assistant"
-          className="min-w-0"
-          placeholder="Ask about PR-102, invoices, approvals"
-          value={question}
-          onChange={(event) => setQuestion(event.target.value)}
-        />
-        <IconButton icon={<Send className="h-4 w-4" />} type="submit">
-          Ask
-        </IconButton>
-      </form>
-    </aside>
   );
 }
 
@@ -7955,7 +7868,6 @@ function Dashboard({
   currentUser,
   selectedRequestId,
   setSelectedRequestId,
-  setState,
   onTransition,
   requestScope = "visible",
 }: {
@@ -7975,9 +7887,6 @@ function Dashboard({
     [currentUser, requestScope, state],
   );
   const metrics = getMetrics(visibleRequests);
-  const blockedTasks = getUserBlockedTasks(state.requests, currentUser, state.users);
-  const watchlistRequests = blockedTasks.length > 0 ? blockedTasks : getStuckRequests(state.requests);
-  const showingPersonalBlockages = blockedTasks.length > 0;
 
   const metricCards = [
     {
@@ -8075,46 +7984,6 @@ function Dashboard({
           selectedRequestId={selectedRequestId}
           users={state.users}
         />
-        <div className="grid min-w-0 gap-5 xl:grid-cols-2">
-          <ProcurementAssistant
-            currentUser={currentUser}
-            setState={setState}
-            state={state}
-          />
-          <section className={classNames(panelClass, "min-w-0 p-4")}>
-          <div className="flex items-center gap-2">
-            <Filter className="h-5 w-5 text-slate-700" />
-            <h2 className="text-base font-bold text-slate-950">Watchlist</h2>
-          </div>
-          <div className="mt-3 grid gap-2">
-            {watchlistRequests.length === 0 ? (
-              <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                No overdue tasks assigned to you.
-              </div>
-            ) : null}
-            {watchlistRequests.map((request) => (
-              <button
-                className={classNames(
-                  "rounded-md border p-3 text-left text-sm",
-                  showingPersonalBlockages
-                    ? "border-red-200 bg-red-50 text-red-900"
-                    : "border-orange-200 bg-orange-50 text-orange-900",
-                )}
-                key={request.id}
-                onClick={() => setSelectedRequestId(request.id)}
-                type="button"
-              >
-                <strong>{request.id}</strong> has been over {OVERDUE_REQUEST_HOURS}h since{" "}
-                {formatDateTime(request.updatedAt)}
-                <span className="mt-1 block text-xs">
-                  {showingPersonalBlockages ? "Overdue on you" : getAssigneeName(request, state.users)} -{" "}
-                  {getPendingAction(request)}
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>
-        </div>
       </div>
     </div>
   );
@@ -8784,7 +8653,10 @@ export default function Home() {
   const isSignedIn = authStatus === "signed-in" || authStatus === "local-dev";
   const canUseLocalWorkspace = !isGithubPagesBuild && authStatus === "missing-config";
   const unread = state.notifications.filter(
-    (notification) => !notification.read && notification.userId === currentUser.id,
+    (notification) =>
+      !notification.read &&
+      notification.userId === currentUser.id &&
+      isNotificationWithinWindow(notification.createdAt),
   ).length;
 
   const finishSuccessfulWorkflowAction = (
