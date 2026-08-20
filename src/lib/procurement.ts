@@ -2330,6 +2330,27 @@ export function submitProcurementRequest(
   return nextState;
 }
 
+// Statuses during which Procure (Edlyn) may work on a request's purchase /
+// delivery — including updating each line item's status. Shared by the reducer
+// gate and the UI so they can never drift apart.
+export const PROCURE_PURCHASE_STATUSES: RequestStatus[] = [
+  "Edlyn Confirmation",
+  "Rashid Auto Approved",
+  "Purchase in Progress",
+  "Invoice Uploaded",
+  "Aileen Finance Review",
+  "Invoice Cleared",
+  "Edlyn Order Confirmation",
+  "Delivery Tracking",
+  "Order Confirmed",
+];
+
+export function canProcureManageItemStatus(request: ProcurementRequest, role: Role): boolean {
+  if (isClosed(request.status)) return false;
+  if (role === "Admin") return true;
+  return role === "Edlyn" && PROCURE_PURCHASE_STATUSES.includes(request.status);
+}
+
 export function transitionRequest(
   state: ProcurementState,
   requestId: string,
@@ -2386,17 +2407,7 @@ export function transitionRequest(
   const canProcureWorkOnPurchase = () =>
     actor.role === "Edlyn" &&
     !isClosed(editable.status) &&
-    [
-      "Edlyn Confirmation",
-      "Rashid Auto Approved",
-      "Purchase in Progress",
-      "Invoice Uploaded",
-      "Aileen Finance Review",
-      "Invoice Cleared",
-      "Edlyn Order Confirmation",
-      "Delivery Tracking",
-      "Order Confirmed",
-    ].includes(editable.status);
+    PROCURE_PURCHASE_STATUSES.includes(editable.status);
   const hasText = (value?: string) => Boolean(value?.trim());
 
   const assignTo = (role: Role, options: { notify?: boolean } = {}) => {

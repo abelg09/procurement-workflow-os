@@ -57,6 +57,7 @@ import {
   DEFAULT_PROJECT_OPTIONS,
   FINANCE_APPROVAL_EMAIL,
   InvoiceDetails,
+  canProcureManageItemStatus,
   LINE_ITEM_STATUSES,
   LogisticsDetails,
   NotificationRecord,
@@ -5143,7 +5144,7 @@ function RequestDetails({
   currentUser: UserProfile;
   onTransition: WorkflowTransitionHandler;
 }) {
-  const [detailItem, setDetailItem] = useState<ProcurementLineItem | null>(null);
+  const [detailItemId, setDetailItemId] = useState<string | null>(null);
 
   if (!request) {
     return (
@@ -5159,6 +5160,12 @@ function RequestDetails({
   const lineItemClarificationMap = new Map(
     (request.lineItemClarifications ?? []).map((item) => [item.lineItemId, item.comment]),
   );
+  // Look the open item up by id (not a snapshot) so the pop-up reflects status
+  // changes made from inside it.
+  const detailItem = detailItemId
+    ? lineItems.find((item) => item.id === detailItemId) ?? null
+    : null;
+  const canEditItemStatus = canProcureManageItemStatus(request, currentUser.role);
 
   return (
     <section className="grid min-w-0 gap-5">
@@ -5285,7 +5292,7 @@ function RequestDetails({
                     <tr
                       className="cursor-pointer transition hover:bg-blue-50/60"
                       key={item.id}
-                      onClick={() => setDetailItem(item)}
+                      onClick={() => setDetailItemId(item.id)}
                       title="Click to open item details"
                     >
                       <td className="px-3 py-2 font-semibold text-slate-600">
@@ -5390,13 +5397,40 @@ function RequestDetails({
 
       {detailItem ? (
         <Modal
-          onClose={() => setDetailItem(null)}
+          onClose={() => setDetailItemId(null)}
           title={`Item details — ${detailItem.itemName}`}
         >
           <div className="grid gap-3 text-sm">
-            <div>
-              <LineItemStatusBadge status={detailItem.status} />
-            </div>
+            {canEditItemStatus ? (
+              <div>
+                <p className="text-xs font-semibold uppercase text-slate-500">Item status</p>
+                <SelectInput
+                  className="mt-1"
+                  value={detailItem.status ?? "Pending"}
+                  onChange={(event) => {
+                    void onTransition(request.id, {
+                      type: "edlyn-set-item-status",
+                      lineItemId: detailItem.id,
+                      status: event.target.value as (typeof LINE_ITEM_STATUSES)[number],
+                    });
+                  }}
+                >
+                  {LINE_ITEM_STATUSES.map((status) => (
+                    <option key={status}>{status}</option>
+                  ))}
+                </SelectInput>
+                <p className="mt-1 text-xs text-slate-500">
+                  When every item is delivered, the request advances to closure automatically.
+                </p>
+              </div>
+            ) : (
+              <div>
+                <p className="text-xs font-semibold uppercase text-slate-500">Status</p>
+                <div className="mt-1">
+                  <LineItemStatusBadge status={detailItem.status} />
+                </div>
+              </div>
+            )}
             <Detail label="Description" value={detailItem.itemDescription || "Not provided"} />
             <div className="grid grid-cols-2 gap-3">
               <Detail label="Quantity" value={String(detailItem.quantity)} />
