@@ -5211,8 +5211,7 @@ function RequestDetails({
             </div>
           </details>
 
-          <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
-            <h3 className="text-base font-bold text-slate-950">Line items</h3>
+          <CollapsibleCard title="Line items">
             <div className="mt-4 grid gap-3 md:hidden">
               {lineItems.map((item, index) => (
                 <div className={classNames(insetPanelClass, "p-3")} key={item.id}>
@@ -5327,11 +5326,10 @@ function RequestDetails({
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleCard>
 
           <div className="grid min-w-0 gap-5 lg:grid-cols-3">
-            <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
-              <h3 className="text-base font-bold text-slate-950">Vendor profile</h3>
+            <CollapsibleCard title="Vendor profile">
               <div className="mt-4 grid gap-3 text-sm">
                 <Detail label="Contact person" value={request.vendor.contactPerson || "Not provided"} />
                 <Detail label="Company" value={request.vendor.companyName || request.vendorName || "Not provided"} />
@@ -5341,15 +5339,13 @@ function RequestDetails({
                 <Detail label="Bank details" value={request.vendor.bankDetails || "Not provided"} />
                 <Detail label="Location" value={request.vendor.businessLocation || "Not provided"} />
               </div>
-            </div>
+            </CollapsibleCard>
 
-            <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
-              <h3 className="text-base font-bold text-slate-950">Invoice documentation</h3>
+            <CollapsibleCard title="Invoice documentation">
               <InvoiceList request={request} />
-            </div>
+            </CollapsibleCard>
 
-            <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
-              <h3 className="text-base font-bold text-slate-950">Logistics tracking</h3>
+            <CollapsibleCard title="Logistics tracking">
               {request.logistics ? (
                 <div className="mt-4 grid gap-3 text-sm">
                   <Detail label="Delivery status" value={request.logistics.deliveryStatus} />
@@ -5364,7 +5360,7 @@ function RequestDetails({
                   Delivery tracking starts once Procure confirms the order.
                 </div>
               )}
-            </div>
+            </CollapsibleCard>
           </div>
 
           {latestDecline ? (
@@ -5385,6 +5381,34 @@ function RequestDetails({
 
       <AuditTrail logs={logs} />
     </section>
+  );
+}
+
+// A panel that is collapsed by default and expands on a single click of its
+// header — keeps the request view compact, especially during the procurement
+// stage where several detail cards stack up.
+function CollapsibleCard({
+  title,
+  icon,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  icon?: ReactNode;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details className={classNames(panelClass, "min-w-0 p-4 sm:p-5")} open={defaultOpen}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+        <span className="flex items-center gap-2">
+          {icon}
+          <h3 className="text-base font-bold text-slate-950">{title}</h3>
+        </span>
+        <span className="shrink-0 text-xs font-semibold text-blue-700">Show / hide</span>
+      </summary>
+      {children}
+    </details>
   );
 }
 
@@ -5621,11 +5645,7 @@ function InvoiceList({ request }: { request: ProcurementRequest }) {
 
 function AuditTrail({ logs }: { logs: AuditLog[] }) {
   return (
-    <div className={classNames(panelClass, "min-w-0 p-4 sm:p-5")}>
-      <div className="flex items-center gap-2">
-        <History className="h-5 w-5 text-slate-700" />
-        <h3 className="text-base font-bold text-slate-950">Audit trail</h3>
-      </div>
+    <CollapsibleCard title="Audit trail" icon={<History className="h-5 w-5 text-slate-700" />}>
       <div className="mt-4 grid gap-3">
         {logs.length === 0 ? (
           <p className="text-sm text-slate-500">No audit entries yet.</p>
@@ -5655,7 +5675,7 @@ function AuditTrail({ logs }: { logs: AuditLog[] }) {
           ))
         )}
       </div>
-    </div>
+    </CollapsibleCard>
   );
 }
 
