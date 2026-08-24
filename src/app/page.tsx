@@ -18,6 +18,8 @@ import {
   Filter,
   History,
   LayoutDashboard,
+  PanelLeftClose,
+  PanelLeftOpen,
   LogOut,
   PackageCheck,
   Pencil,
@@ -7995,6 +7997,7 @@ export default function Home() {
   const [browserStateLoaded, setBrowserStateLoaded] = useState(false);
   const [currentUserId, setCurrentUserId] = useState("user-admin");
   const [view, setView] = useState<View>("dashboard");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedRequestId, setSelectedRequestId] = useState<string | undefined>("PR-102");
   const [authStatus, setAuthStatus] = useState<AuthStatus>(
     hasSupabaseClientConfig ? "checking" : "missing-config",
@@ -9133,7 +9136,12 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#f6f8fb] text-slate-900">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-72 flex-col border-r border-slate-200/80 bg-white lg:flex">
+      <aside
+        className={classNames(
+          "fixed inset-y-0 left-0 z-30 hidden w-72 flex-col border-r border-slate-200/80 bg-white",
+          sidebarCollapsed ? "lg:hidden" : "lg:flex",
+        )}
+      >
         <div className="flex h-[76px] items-center gap-3 border-b border-slate-200/80 px-5">
           <div className="flex h-11 w-32 shrink-0 items-center justify-center rounded-xl bg-black px-4 shadow-sm">
             <Image
@@ -9220,7 +9228,7 @@ export default function Home() {
         </nav>
       </aside>
 
-      <div className="min-w-0 lg:pl-72">
+      <div className={classNames("min-w-0", sidebarCollapsed ? "" : "lg:pl-72")}>
         <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur">
           <div className="mx-auto flex max-w-[1680px] flex-col gap-3 px-3 py-3 sm:px-5 lg:h-[76px] lg:flex-row lg:items-center lg:justify-between lg:px-7 lg:py-0">
             <div className="flex min-w-0 items-center gap-3 lg:hidden">
@@ -9240,13 +9248,27 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="hidden min-w-0 lg:block">
-              <h1 className="text-2xl font-bold tracking-tight text-slate-950">
-                {currentViewCopy.title}
-              </h1>
-              <p className="mt-0.5 text-sm text-slate-500">
-                {currentViewCopy.subtitle}
-              </p>
+            <div className="hidden min-w-0 items-center gap-3 lg:flex">
+              <button
+                aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+                className="shrink-0 rounded-lg border border-slate-200 p-2 text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                onClick={() => setSidebarCollapsed((value) => !value)}
+                type="button"
+              >
+                {sidebarCollapsed ? (
+                  <PanelLeftOpen className="h-5 w-5" />
+                ) : (
+                  <PanelLeftClose className="h-5 w-5" />
+                )}
+              </button>
+              <div className="min-w-0">
+                <h1 className="text-2xl font-bold tracking-tight text-slate-950">
+                  {currentViewCopy.title}
+                </h1>
+                <p className="mt-0.5 text-sm text-slate-500">
+                  {currentViewCopy.subtitle}
+                </p>
+              </div>
             </div>
 
             <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
