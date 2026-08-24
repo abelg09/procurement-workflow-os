@@ -3900,6 +3900,33 @@ function ActionPanel({
     (["Invoice Cleared", "Edlyn Order Confirmation"].includes(request.status) ||
       (["Purchase in Progress", "Aileen Finance Review", "Invoice Uploaded"].includes(request.status) &&
         invoices.length > 0));
+  // One-line "do this next" cue for the Procure specialist. Many action
+  // sections are available at once (research, invoice, delivery), so this
+  // names the expected step for the current status to cut down on hunting.
+  const procureStepGuidance =
+    role === "Edlyn" && !isClosed(request.status)
+      ? (
+          {
+            "Edlyn Confirmation":
+              "Step 1 of 4 — Review the items and researched prices, then Confirm item details. Adjust prices only if needed; upload the invoice later, after you have purchased.",
+            "Rashid Auto Approved":
+              "Step 1 of 4 — Review the items and prices, then Confirm item details.",
+            "Purchase in Progress":
+              "Step 2 of 4 — Place the order, then upload the supplier invoice to send it to Finance.",
+            "Invoice Uploaded":
+              "Waiting on Finance to clear the invoice. You can upload more invoices, or start delivery tracking.",
+            "Aileen Finance Review":
+              "Waiting on Finance to clear the invoice. You can upload more invoices, or start delivery tracking.",
+            "Invoice Cleared":
+              "Step 3 of 4 — Finance cleared the invoice. Confirm the order and start delivery tracking.",
+            "Edlyn Order Confirmation":
+              "Step 3 of 4 — Confirm the order and start delivery tracking.",
+            "Delivery Tracking":
+              "Step 4 of 4 — Update each item's delivery status as it arrives. The request closes automatically once every item is Delivered.",
+            "Order Confirmed": "Step 4 of 4 — Mark items received as they arrive.",
+          } as Record<string, string>
+        )[request.status] ?? null
+      : null;
 
   const invoicePayload = (storage?: {
     bucket?: string;
@@ -4046,6 +4073,16 @@ function ActionPanel({
       </div>
       <p className="mt-2 text-sm text-slate-500">{getPendingAction(request)}</p>
 
+      {procureStepGuidance ? (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+          <ClipboardList className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
+          <p>
+            <span className="font-semibold">What to do now: </span>
+            {procureStepGuidance}
+          </p>
+        </div>
+      ) : null}
+
       <div className="mt-4 grid gap-3">
         <Field label="Action note / clarification message" htmlFor={actionNoteId}>
           <TextArea
@@ -4057,16 +4094,16 @@ function ActionPanel({
         </Field>
 
         {canProcureClarify ? (
-          <div className={classNames(insetPanelClass, "grid gap-3 p-3")}>
-            <div>
-              <p className="text-sm font-semibold text-slate-950">
-                Line item clarification notes
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Add notes only beside the items that need clarification.
-              </p>
-            </div>
-            <div className="grid gap-3">
+          <details className={classNames(insetPanelClass, "grid gap-3 p-3")}>
+            <summary className="cursor-pointer text-sm font-semibold text-slate-950">
+              Need to ask the employee something? Add clarification notes
+              <span className="ml-1 font-normal text-slate-500">(optional)</span>
+            </summary>
+            <p className="text-xs text-slate-500">
+              Add notes only beside the items that need clarification, then use
+              &ldquo;Request clarification&rdquo; below.
+            </p>
+            <div className="mt-2 grid gap-3">
               {lineItems.map((item, index) => (
                 <div
                   className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3"
@@ -4099,7 +4136,7 @@ function ActionPanel({
                 </div>
               ))}
             </div>
-          </div>
+          </details>
         ) : null}
 
         {canProcureResearchPrices ? (
