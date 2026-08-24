@@ -3740,9 +3740,12 @@ function ActionPanel({
   const [financeNotes, setFinanceNotes] = useState(request.invoice?.financeNotes ?? "");
   const [replaceInvoiceId, setReplaceInvoiceId] = useState("new");
   const [financeInvoiceId, setFinanceInvoiceId] = useState(initialPendingInvoices[0]?.id ?? "");
+  const invoicedLineItemIds = new Set(
+    initialInvoices.flatMap((invoice) => invoice.lineItemIds ?? []),
+  );
   const [selectedInvoiceLineItemIds, setSelectedInvoiceLineItemIds] = useState<string[]>(() =>
     initialLineItems
-      .filter((item) => item.status !== "Cancelled")
+      .filter((item) => item.status !== "Cancelled" && !invoicedLineItemIds.has(item.id))
       .map((item) => item.id),
   );
   const [deliveryStatus, setDeliveryStatus] = useState<LogisticsDetails["deliveryStatus"]>(
@@ -4782,7 +4785,7 @@ function ActionPanel({
               <div className="rounded-xl border border-slate-200 bg-white p-3">
                 <p className="text-sm font-semibold text-slate-950">Covered line items</p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Select the item(s) covered by this invoice. You can upload more invoices for the remaining items later.
+                  Each item can have its own invoice. Items already invoiced are marked and left unticked — tick the item(s) this invoice covers, then upload more for the rest.
                 </p>
                 <div className="mt-3 grid gap-2">
                   {lineItems.map((item, index) => (
@@ -4808,6 +4811,11 @@ function ActionPanel({
                         </span>
                         <span className="block text-xs text-slate-500">
                           {money(item.aedTotal, "AED")} - {item.status ?? "Pending"}
+                          {invoicedLineItemIds.has(item.id) ? (
+                            <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 font-semibold text-emerald-700">
+                              Invoiced
+                            </span>
+                          ) : null}
                         </span>
                       </span>
                     </label>
