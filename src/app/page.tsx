@@ -4100,7 +4100,7 @@ function ActionPanel({
         ) : null}
 
         {canProcureResearchPrices ? (
-          <details className={classNames(insetPanelClass, "grid gap-3 p-3")}>
+          <details className={classNames(insetPanelClass, "grid gap-3 p-3")} open>
             <summary className="cursor-pointer text-sm font-semibold text-slate-950">
               Update researched prices and item details
             </summary>
