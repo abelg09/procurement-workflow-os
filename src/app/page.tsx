@@ -4919,6 +4919,12 @@ function ActionPanel({
 
         {financeCanClearInvoice ? (
           <div className="grid gap-3">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <p className="mb-2 text-xs font-semibold uppercase text-slate-500">
+                Invoice to review
+              </p>
+              <InvoiceList request={request} />
+            </div>
             {pendingFinanceInvoices.length > 1 ? (
               <Field label="Invoice to clear">
                 <SelectInput
