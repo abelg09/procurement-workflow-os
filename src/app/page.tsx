@@ -3154,6 +3154,7 @@ function RequestsTable({
   users,
   selectedRequestId,
   onSelect,
+  onOpenActions,
   renderSelectedDetails,
   currentUser,
   title = "All procurement requests",
@@ -3165,6 +3166,7 @@ function RequestsTable({
   users: UserProfile[];
   selectedRequestId?: string;
   onSelect: (id: string) => void;
+  onOpenActions?: (id: string) => void;
   renderSelectedDetails?: (request: ProcurementRequest) => ReactNode;
   currentUser?: UserProfile;
   title?: string;
@@ -3467,9 +3469,22 @@ function RequestsTable({
                         {getInvoiceSummary(request)}
                       </span>
                     </div>
-                    <div className="rounded-lg bg-slate-50 p-2 text-slate-700">
-                      {getPendingAction(request)}
-                    </div>
+                    {onOpenActions ? (
+                      <button
+                        className="w-full rounded-lg bg-blue-50 p-2 text-left font-medium text-blue-700"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenActions(request.id);
+                        }}
+                        type="button"
+                      >
+                        {getPendingAction(request)}
+                      </button>
+                    ) : (
+                      <div className="rounded-lg bg-slate-50 p-2 text-slate-700">
+                        {getPendingAction(request)}
+                      </div>
+                    )}
                     <p className="text-xs text-slate-500">
                       Last updated {formatDateTime(request.updatedAt)}
                     </p>
@@ -3574,9 +3589,26 @@ function RequestsTable({
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span className={classNames("line-clamp-2 max-w-72", needsAttention ? "font-semibold text-red-800" : "text-slate-600")}>
-                          {getPendingAction(request)}
-                        </span>
+                        {onOpenActions ? (
+                          <button
+                            className={classNames(
+                              "line-clamp-2 max-w-72 text-left underline decoration-dotted underline-offset-2 transition hover:decoration-solid",
+                              needsAttention ? "font-semibold text-red-800" : "text-blue-700",
+                            )}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onOpenActions(request.id);
+                            }}
+                            title="Open stage actions"
+                            type="button"
+                          >
+                            {getPendingAction(request)}
+                          </button>
+                        ) : (
+                          <span className={classNames("line-clamp-2 max-w-72", needsAttention ? "font-semibold text-red-800" : "text-slate-600")}>
+                            {getPendingAction(request)}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-slate-500">
                         {formatDateTime(request.updatedAt)}
@@ -5406,13 +5438,11 @@ function RequestDetails({
           ) : null}
         </div>
 
-        <ActionPanel
-          currentUser={currentUser}
-          key={`${request.id}-${request.status}-${request.updatedAt}-${currentUser.id}`}
-          onTransition={onTransition}
-          request={request}
-          state={state}
-        />
+        <div className={classNames(insetPanelClass, "p-3 text-sm text-slate-600")}>
+          To act on this request, click its{" "}
+          <span className="font-semibold text-blue-700">Pending action</span> in the table to open
+          Stage actions.
+        </div>
       </div>
 
       <AuditTrail logs={logs} />
@@ -5523,10 +5553,12 @@ function Modal({
   title,
   onClose,
   children,
+  wide = false,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  wide?: boolean;
 }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -5544,7 +5576,10 @@ function Modal({
     >
       <div
         aria-modal="true"
-        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-xl"
+        className={classNames(
+          "max-h-[85vh] w-full overflow-y-auto rounded-2xl bg-white p-5 shadow-xl",
+          wide ? "max-w-2xl" : "max-w-lg",
+        )}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
       >
@@ -7889,6 +7924,10 @@ function Dashboard({
     [currentUser, requestScope, state],
   );
   const metrics = getMetrics(visibleRequests);
+  const [actionRequestId, setActionRequestId] = useState<string | null>(null);
+  const actionRequest = actionRequestId
+    ? state.requests.find((request) => request.id === actionRequestId) ?? null
+    : null;
 
   const metricCards = [
     {
@@ -7971,6 +8010,7 @@ function Dashboard({
         ) : null}
         <RequestsTable
           currentUser={currentUser}
+          onOpenActions={setActionRequestId}
           onSelect={(id) =>
             setSelectedRequestId((current) => (current === id ? undefined : id))
           }
@@ -7987,6 +8027,21 @@ function Dashboard({
           users={state.users}
         />
       </div>
+      {actionRequest ? (
+        <Modal
+          onClose={() => setActionRequestId(null)}
+          title={`Stage actions — ${actionRequest.id}`}
+          wide
+        >
+          <ActionPanel
+            currentUser={currentUser}
+            key={`${actionRequest.id}-${actionRequest.status}-${actionRequest.updatedAt}`}
+            onTransition={onTransition}
+            request={actionRequest}
+            state={state}
+          />
+        </Modal>
+      ) : null}
     </div>
   );
 }
