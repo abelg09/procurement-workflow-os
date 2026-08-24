@@ -3155,6 +3155,7 @@ function RequestsTable({
   selectedRequestId,
   onSelect,
   onOpenActions,
+  onOpenInvoice,
   renderSelectedDetails,
   currentUser,
   title = "All procurement requests",
@@ -3167,6 +3168,7 @@ function RequestsTable({
   selectedRequestId?: string;
   onSelect: (id: string) => void;
   onOpenActions?: (id: string) => void;
+  onOpenInvoice?: (id: string) => void;
   renderSelectedDetails?: (request: ProcurementRequest) => ReactNode;
   currentUser?: UserProfile;
   title?: string;
@@ -3465,9 +3467,22 @@ function RequestsTable({
                     ) : null}
                     <div className="flex justify-between gap-3">
                       <span className="text-slate-500">Invoice</span>
-                      <span className="min-w-0 break-words text-right font-medium text-slate-800">
-                        {getInvoiceSummary(request)}
-                      </span>
+                      {onOpenInvoice && getRequestInvoices(request).length > 0 ? (
+                        <button
+                          className="min-w-0 break-words text-right font-medium text-emerald-700 underline decoration-dotted underline-offset-2"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onOpenInvoice(request.id);
+                          }}
+                          type="button"
+                        >
+                          {getInvoiceSummary(request)}
+                        </button>
+                      ) : (
+                        <span className="min-w-0 break-words text-right font-medium text-slate-800">
+                          {getInvoiceSummary(request)}
+                        </span>
+                      )}
                     </div>
                     {onOpenActions ? (
                       <button
@@ -3583,7 +3598,21 @@ function RequestsTable({
                       </td>
                       <td className="px-4 py-3">
                         {getRequestInvoices(request).length > 0 ? (
-                          <span className="text-emerald-700">{getInvoiceSummary(request)}</span>
+                          onOpenInvoice ? (
+                            <button
+                              className="text-left font-medium text-emerald-700 underline decoration-dotted underline-offset-2 transition hover:decoration-solid"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onOpenInvoice(request.id);
+                              }}
+                              title="View uploaded invoice"
+                              type="button"
+                            >
+                              {getInvoiceSummary(request)}
+                            </button>
+                          ) : (
+                            <span className="text-emerald-700">{getInvoiceSummary(request)}</span>
+                          )
                         ) : (
                           <span className="text-amber-700">Pending</span>
                         )}
@@ -7934,6 +7963,10 @@ function Dashboard({
   const actionRequest = actionRequestId
     ? state.requests.find((request) => request.id === actionRequestId) ?? null
     : null;
+  const [invoiceRequestId, setInvoiceRequestId] = useState<string | null>(null);
+  const invoiceRequest = invoiceRequestId
+    ? state.requests.find((request) => request.id === invoiceRequestId) ?? null
+    : null;
 
   const metricCards = [
     {
@@ -8017,6 +8050,7 @@ function Dashboard({
         <RequestsTable
           currentUser={currentUser}
           onOpenActions={setActionRequestId}
+          onOpenInvoice={setInvoiceRequestId}
           onSelect={(id) =>
             setSelectedRequestId((current) => (current === id ? undefined : id))
           }
@@ -8046,6 +8080,14 @@ function Dashboard({
             request={actionRequest}
             state={state}
           />
+        </Modal>
+      ) : null}
+      {invoiceRequest ? (
+        <Modal
+          onClose={() => setInvoiceRequestId(null)}
+          title={`Invoice — ${invoiceRequest.id}`}
+        >
+          <InvoiceList request={invoiceRequest} />
         </Modal>
       ) : null}
     </div>
