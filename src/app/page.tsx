@@ -5257,6 +5257,20 @@ function RequestDetails({
   const lineItemClarificationMap = new Map(
     (request.lineItemClarifications ?? []).map((item) => [item.lineItemId, item.comment]),
   );
+  // Map each line item to the invoice(s) that cover it, so the invoice is
+  // visible inline against the item. An invoice with no explicit lineItemIds
+  // (legacy single-invoice) is treated as covering every item.
+  const requestInvoices = getRequestInvoices(request);
+  const invoicesByLineItemId = new Map<string, InvoiceDetails[]>();
+  for (const item of lineItems) {
+    const covering = requestInvoices.filter(
+      (invoice) =>
+        !invoice.lineItemIds ||
+        invoice.lineItemIds.length === 0 ||
+        invoice.lineItemIds.includes(item.id),
+    );
+    if (covering.length > 0) invoicesByLineItemId.set(item.id, covering);
+  }
   // Look the open item up by id (not a snapshot) so the pop-up reflects status
   // changes made from inside it.
   const detailItem = detailItemId
@@ -5360,6 +5374,21 @@ function RequestDetails({
                     <div className="col-span-2">
                       <Detail label="Vendor" value={item.vendorName || "Not provided"} />
                     </div>
+                    {invoicesByLineItemId.get(item.id) ? (
+                      <div className="col-span-2">
+                        <p className="text-xs font-semibold uppercase text-slate-500">Invoice</p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {invoicesByLineItemId.get(item.id)!.map((invoice) => (
+                            <InvoiceFileLink
+                              compact
+                              invoice={invoice}
+                              key={invoice.id}
+                              label={invoice.invoiceNumber || "Open invoice"}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="col-span-2">
                       <LineItemLink productUrl={item.productUrl} />
                     </div>
@@ -5408,6 +5437,21 @@ function RequestDetails({
                         <p className="mt-1 line-clamp-1 text-xs text-slate-500">
                           {item.itemDescription}
                         </p>
+                        {invoicesByLineItemId.get(item.id) ? (
+                          <div
+                            className="mt-1.5 flex flex-wrap gap-1"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            {invoicesByLineItemId.get(item.id)!.map((invoice) => (
+                              <InvoiceFileLink
+                                compact
+                                invoice={invoice}
+                                key={invoice.id}
+                                label={invoice.invoiceNumber || "Open invoice"}
+                              />
+                            ))}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2">{item.quantity}</td>
                       <td className="px-3 py-2">{money(item.unitPrice, item.currency)}</td>
@@ -5542,6 +5586,21 @@ function RequestDetails({
               />
             </div>
             <LineItemLink productUrl={detailItem.productUrl} />
+            {invoicesByLineItemId.get(detailItem.id) ? (
+              <div>
+                <p className="text-xs font-semibold uppercase text-slate-500">Invoice</p>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {invoicesByLineItemId.get(detailItem.id)!.map((invoice) => (
+                    <InvoiceFileLink
+                      compact
+                      invoice={invoice}
+                      key={invoice.id}
+                      label={invoice.invoiceNumber || "Open invoice"}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {detailItem.holdReason ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-2">
                 <Detail label="Hold / progress note" value={detailItem.holdReason} />
@@ -5686,7 +5745,15 @@ function LineItemLink({
   );
 }
 
-function InvoiceFileLink({ invoice }: { invoice: InvoiceDetails }) {
+function InvoiceFileLink({
+  invoice,
+  compact = false,
+  label,
+}: {
+  invoice: InvoiceDetails;
+  compact?: boolean;
+  label?: string;
+}) {
   const [fileLink, setFileLink] = useState({
     signedPath: "",
     signedUrl: "",
@@ -5764,24 +5831,34 @@ function InvoiceFileLink({ invoice }: { invoice: InvoiceDetails }) {
 
   return (
     <div>
-      <p className="text-xs font-semibold uppercase text-slate-500">Uploaded file</p>
+      {compact ? null : (
+        <p className="text-xs font-semibold uppercase text-slate-500">Uploaded file</p>
+      )}
       {canOpenFile ? (
         <button
-          className="mt-1 inline-flex max-w-full items-center gap-1 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-sm font-semibold text-blue-700 transition hover:border-blue-200 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+          className={
+            compact
+              ? "inline-flex max-w-full items-center gap-1 rounded-md border border-blue-100 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700 transition hover:border-blue-200 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+              : "mt-1 inline-flex max-w-full items-center gap-1 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-sm font-semibold text-blue-700 transition hover:border-blue-200 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+          }
           disabled={loading}
           onClick={openInvoiceFile}
           title={invoice.uploadedInvoiceFile}
           type="button"
         >
           <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{loading ? "Preparing file..." : "Open invoice file"}</span>
+          <span className="truncate">
+            {loading ? "Preparing..." : label ?? "Open invoice file"}
+          </span>
         </button>
+      ) : compact ? (
+        <span className="text-xs text-slate-400">{label ?? invoice.uploadedInvoiceFile}</span>
       ) : (
         <p className="mt-1 break-words text-sm text-slate-900">
           {invoice.uploadedInvoiceFile}
         </p>
       )}
-      {signedUrl && storagePath ? (
+      {signedUrl && storagePath && !compact ? (
         <a
           className="mt-1 block text-xs font-medium text-blue-700 underline-offset-2 hover:underline"
           href={invoiceUrl}
