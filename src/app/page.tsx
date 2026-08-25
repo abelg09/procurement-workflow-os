@@ -6712,7 +6712,38 @@ function InvoicesInbox({
       ...base,
       uploadedInvoiceStorageBucket: INVOICE_STORAGE_BUCKET,
       uploadedInvoiceStoragePath: path,
+      ocrStatus: "pending",
     };
+  };
+
+  // Ask the ocr-invoice Edge Function to read the PDF and fill in the fields.
+  // Degrades silently to manual entry if OCR is not configured/deployed.
+  const runOcr = async (entry: InboxInvoice) => {
+    const supabaseClient = getSupabaseBrowserClient();
+    if (!supabaseClient || !entry.uploadedInvoiceStoragePath) return;
+    try {
+      const { data, error } = await supabaseClient.functions.invoke("ocr-invoice", {
+        body: {
+          bucket: entry.uploadedInvoiceStorageBucket ?? INVOICE_STORAGE_BUCKET,
+          path: entry.uploadedInvoiceStoragePath,
+        },
+      });
+      const result = data as
+        | { invoiceNumber?: string; amount?: number; date?: string; vendor?: string; error?: string }
+        | null;
+      if (error || !result || result.error) {
+        await onPersist((current) => updateInboxInvoice(current, entry.id, { ocrStatus: "failed" }));
+        return;
+      }
+      const patch: Partial<InboxInvoice> = { ocrStatus: "done", ocrConfirmed: false };
+      if (result.invoiceNumber) patch.invoiceNumber = String(result.invoiceNumber);
+      if (typeof result.amount === "number") patch.invoiceAmount = result.amount;
+      if (result.date) patch.invoiceDate = String(result.date);
+      if (result.vendor) patch.vendor = String(result.vendor);
+      await onPersist((current) => updateInboxInvoice(current, entry.id, patch));
+    } catch {
+      await onPersist((current) => updateInboxInvoice(current, entry.id, { ocrStatus: "failed" }));
+    }
   };
 
   const handleFiles = async (fileList: FileList | null) => {
@@ -6725,6 +6756,10 @@ function InvoicesInbox({
         created.push(await uploadOne(file));
       }
       await onPersist((current) => addInboxInvoices(current, created));
+      // Fire OCR in the background; each result fills the entry's fields.
+      for (const entry of created) {
+        if (entry.uploadedInvoiceStoragePath) void runOcr(entry);
+      }
     } catch (error) {
       setUploadError(error instanceof Error ? error.message : "Could not upload invoice(s).");
     } finally {
@@ -6816,8 +6851,8 @@ function InvoicesInbox({
           </p>
         ) : null}
         <p className="mt-3 text-xs text-slate-500">
-          Auto-reading the invoice number and amount from the PDF (OCR) is being connected next — for
-          now, type the invoice number and amount below so matching and finance review work.
+          New uploads are scanned automatically to fill in the invoice number, amount, date and
+          vendor — check them below before moving. Anything the scan misses, just type in.
         </p>
       </div>
 
@@ -6854,10 +6889,22 @@ function InvoicesInbox({
                     label="Open PDF"
                   />
                 </div>
+                {entry.ocrStatus === "pending" ? (
+                  <p className="mt-3 text-xs font-semibold text-amber-700">Scanning invoice…</p>
+                ) : entry.ocrStatus === "done" ? (
+                  <p className="mt-3 text-xs font-semibold text-emerald-700">
+                    Auto-read from the PDF — please confirm the fields below.
+                  </p>
+                ) : entry.ocrStatus === "failed" ? (
+                  <p className="mt-3 text-xs font-medium text-slate-500">
+                    Couldn&rsquo;t auto-read this file — enter the details below.
+                  </p>
+                ) : null}
                 <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <Field label="Invoice number">
                     <TextInput
                       defaultValue={entry.invoiceNumber ?? ""}
+                      key={`num-${entry.invoiceNumber ?? ""}`}
                       placeholder="INV-1234"
                       onBlur={(event) =>
                         void onPersist((current) =>
@@ -6871,6 +6918,7 @@ function InvoicesInbox({
                   <Field label="Amount (AED)">
                     <TextInput
                       defaultValue={entry.invoiceAmount ?? ""}
+                      key={`amt-${entry.invoiceAmount ?? ""}`}
                       min={0}
                       step="any"
                       type="number"
@@ -6888,6 +6936,7 @@ function InvoicesInbox({
                   <Field label="Invoice date">
                     <TextInput
                       defaultValue={entry.invoiceDate ?? ""}
+                      key={`date-${entry.invoiceDate ?? ""}`}
                       type="date"
                       onBlur={(event) =>
                         void onPersist((current) =>
@@ -6901,6 +6950,7 @@ function InvoicesInbox({
                   <Field label="Vendor">
                     <TextInput
                       defaultValue={entry.vendor ?? ""}
+                      key={`vendor-${entry.vendor ?? ""}`}
                       placeholder="Vendor name"
                       onBlur={(event) =>
                         void onPersist((current) =>
