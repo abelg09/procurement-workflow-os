@@ -2630,7 +2630,7 @@ function RequestForm({
       });
       setFormError("");
       setSuccessMessage(
-        `${requestId ?? "Request"} submitted to Mona for first review. Total AED ${totalAed.toFixed(2)}.`,
+        `${requestId ?? "Request"} submitted to the Project Manager for first review. Total AED ${totalAed.toFixed(2)}.`,
       );
       setItemName("");
       setProject(availableProjects[0] ?? "Beta");
@@ -3143,7 +3143,7 @@ function RequestForm({
           icon={<Plus className="h-4 w-4" />}
           type="submit"
         >
-          {submitting ? "Submitting..." : "Submit to Mona"}
+          {submitting ? "Submitting..." : "Submit to Project Manager"}
         </IconButton>
       </div>
     </form>
@@ -7186,7 +7186,7 @@ function EmployeeMonaClarificationPanel({
         <p className="font-semibold text-amber-950">Clarification needed by Mona</p>
         <p className="mt-1 text-sm text-amber-800">
           Update the same request here. You can edit quantities, prices, item details,
-          vendors, and links, or upload a corrected bulk file before sending it back to Mona.
+          vendors, and links, or upload a corrected bulk file before sending it back to the Project Manager.
         </p>
       </div>
 
@@ -7352,7 +7352,7 @@ function EmployeeMonaClarificationPanel({
         ))}
       </div>
 
-      <Field label="Reply to Mona">
+      <Field label="Reply to Project Manager">
         <TextArea
           placeholder="Optional: explain what you updated"
           value={response}
@@ -7386,7 +7386,7 @@ function EmployeeMonaClarificationPanel({
           }
         }}
       >
-        {saving ? "Saving updates..." : "Send updated request to Mona"}
+        {saving ? "Saving updates..." : "Send updated request to Project Manager"}
       </IconButton>
     </div>
   );
@@ -9205,7 +9205,7 @@ export default function Home() {
     },
     "new-request": {
       title: "New procurement request",
-      subtitle: "Create a request for Mona review.",
+      subtitle: "Create a request for Project Manager review.",
     },
     notifications: {
       title: "Notifications",
