@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  getRequestInvoices,
   initialState,
   transitionRequest,
+  type InvoiceDetails,
   type ProcurementLineItem,
   type ProcurementRequest,
   type ProcurementState,
@@ -11,6 +13,18 @@ import {
 
 const edlyn = initialState.users.find((user) => user.role === "Edlyn")!;
 const mona = initialState.users.find((user) => user.role === "Mona")!;
+const aileen = initialState.users.find((user) => user.role === "Aileen")!;
+
+const makeInvoice = (): InvoiceDetails => ({
+  invoiceNumber: "INV-1",
+  invoiceAmount: 20,
+  invoiceDate: "2026-08-01",
+  vendor: "Acme",
+  uploadedInvoiceFile: "invoice.pdf",
+  uploadedInvoiceStoragePath: "invoices/PR-900/invoice.pdf",
+  paymentTerms: "COD",
+  financeNotes: "",
+});
 
 const makeItem = (
   id: string,
@@ -120,4 +134,38 @@ test("a non-Procure actor cannot change item status", () => {
     status: "Delivered",
   });
   assert.equal(next, state);
+});
+
+test("Procure can upload a late invoice after all items are delivered (Item Received)", () => {
+  const base = makeRequest([makeItem("a", "Delivered"), makeItem("b", "Delivered")]);
+  const request: ProcurementRequest = {
+    ...base,
+    status: "Item Received",
+    stage: "aileen",
+    assigneeId: aileen.id,
+  };
+  const next = transitionRequest(stateWith(request), "PR-900", edlyn.id, {
+    type: "edlyn-upload-invoice",
+    invoice: makeInvoice(),
+  });
+  const updated = next.requests.find((candidate) => candidate.id === "PR-900")!;
+  // The late invoice is recorded...
+  const invoices = getRequestInvoices(updated);
+  assert.equal(invoices.length, 1);
+  assert.equal(invoices[0].invoiceNumber, "INV-1");
+  // ...but the request stays with Finance for closure, not pulled back to Procure.
+  assert.equal(updated.status, "Item Received");
+  assert.equal(updated.stage, "aileen");
+  assert.equal(updated.assigneeId, aileen.id);
+});
+
+test("uploading an invoice during Delivery Tracking does not disrupt delivery", () => {
+  const request = makeRequest([makeItem("a", "Delivered"), makeItem("b", "Purchased")]);
+  const next = transitionRequest(stateWith(request), "PR-900", edlyn.id, {
+    type: "edlyn-upload-invoice",
+    invoice: makeInvoice(),
+  });
+  const updated = next.requests.find((candidate) => candidate.id === "PR-900")!;
+  assert.equal(getRequestInvoices(updated).length, 1);
+  assert.equal(updated.status, "Delivery Tracking");
 });

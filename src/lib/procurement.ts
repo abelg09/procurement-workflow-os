@@ -3068,8 +3068,15 @@ export function transitionRequest(
       break;
     }
     case "edlyn-upload-invoice": {
+      // Invoices sometimes arrive after every item has been delivered, when the
+      // request has already moved to Finance for closure ("Item Received").
+      // Allow Procure to upload a late invoice there too — only for invoice
+      // upload, without otherwise reopening purchase editing.
+      const canUploadInvoiceHere =
+        canProcureWorkOnPurchase() ||
+        (actor.role === "Edlyn" && editable.status === "Item Received");
       if (
-        !canProcureWorkOnPurchase() ||
+        !canUploadInvoiceHere ||
         !hasText(workflowAction.invoice.invoiceNumber) ||
         !hasText(workflowAction.invoice.uploadedInvoiceFile) ||
         (!hasText(workflowAction.invoice.uploadedInvoiceStoragePath) &&
@@ -3083,8 +3090,13 @@ export function transitionRequest(
       if (["Edlyn Confirmation", "Rashid Auto Approved"].includes(editable.status)) {
         editable.status = "Purchase in Progress";
       }
-      editable.stage = "edlyn";
-      editable.assigneeId = actor.id;
+      // A late invoice uploaded after full delivery keeps the request in
+      // Finance's closure queue; the new pending invoice simply blocks closure
+      // until Finance clears it. Otherwise, reclaim it into the Procure stage.
+      if (editable.status !== "Item Received") {
+        editable.stage = "edlyn";
+        editable.assigneeId = actor.id;
+      }
       editable.previousResponsibleId = actor.id;
       const upserted = upsertRequestInvoice(editable, workflowAction.invoice, dateTime);
       actionLabel = upserted.replaced ? "Replaced invoice" : "Uploaded invoice";

@@ -1939,6 +1939,38 @@ function StatusBadge({ status }: { status: RequestStatus }) {
   );
 }
 
+// Short stage names for the dashboard list. The STATUS column shows the stage
+// (which desk currently holds the request) instead of the granular item-level
+// status, so the list stays readable; per-item detail lives inside the request.
+const STAGE_SHORT_LABEL: Record<string, string> = {
+  mona: "Mona Review",
+  "dr-majed": "Department Review",
+  rashid: "Rashid Approval",
+  edlyn: "Procurement",
+  aileen: "Finance",
+};
+
+function StageStatusBadge({ request }: { request: ProcurementRequest }) {
+  // A finished request shows its outcome (Completed / Cancelled / Rejected);
+  // otherwise the badge names the stage that currently owns it.
+  const label = isClosed(request.status)
+    ? displayStatus(request.status)
+    : STAGE_SHORT_LABEL[request.stage] ??
+      WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label ??
+      request.stage;
+  const tone = statusTone(request.status);
+  return (
+    <span
+      className={classNames(
+        "inline-flex max-w-full items-center justify-center whitespace-normal rounded-full border px-2.5 py-1 text-center text-xs font-semibold leading-4",
+        statusClass[tone],
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
 function LineItemStatusBadge({ status }: { status?: ProcurementLineItem["status"] }) {
   const label = status ?? "Pending";
   const classes =
@@ -3430,7 +3462,7 @@ function RequestsTable({
                       </p>
                     </div>
                     <span className="min-w-0 min-[420px]:shrink-0">
-                      <StatusBadge status={request.status} />
+                      <StageStatusBadge request={request} />
                     </span>
                   </div>
                   {overdue ? (
@@ -3439,12 +3471,6 @@ function RequestsTable({
                     </div>
                   ) : null}
                   <div className="mt-3 grid gap-2 text-sm text-slate-600">
-                    <div className="flex justify-between gap-3">
-                      <span className="text-slate-500">Stage</span>
-                      <span className="min-w-0 break-words text-right font-medium text-slate-800">
-                        {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
-                      </span>
-                    </div>
                     <div className="flex justify-between gap-3">
                       <span className="text-slate-500">Assignee</span>
                       <span className="min-w-0 break-words text-right font-medium text-slate-800">
@@ -3525,7 +3551,6 @@ function RequestsTable({
             <tr>
               <th className="px-4 py-3">Request</th>
               <th className="px-4 py-3">Project</th>
-              <th className="px-4 py-3">Stage</th>
               <th className="px-4 py-3">Assignee</th>
               {!hideFinancials ? <th className="px-4 py-3">Total AED</th> : null}
               <th className="px-4 py-3">Status</th>
@@ -3537,7 +3562,7 @@ function RequestsTable({
           <tbody className="divide-y divide-slate-100">
             {filtered.length === 0 ? (
               <tr>
-                <td className="px-4 py-8 text-center text-sm text-slate-500" colSpan={hideFinancials ? 8 : 9}>
+                <td className="px-4 py-8 text-center text-sm text-slate-500" colSpan={hideFinancials ? 7 : 8}>
                   No procurement requests match the current filters.
                 </td>
               </tr>
@@ -3547,7 +3572,7 @@ function RequestsTable({
                 const overdue = isRequestOverdue(request);
                 const needsAttention = blocked || overdue;
                 const isSelected = selectedRequestId === request.id;
-                const columnCount = hideFinancials ? 8 : 9;
+                const columnCount = hideFinancials ? 7 : 8;
 
                 return (
                   <Fragment key={request.id}>
@@ -3581,9 +3606,6 @@ function RequestsTable({
                       <td className="px-4 py-3">
                         <HighlightText text={request.project} term={search} />
                       </td>
-                      <td className="px-4 py-3">
-                        {WORKFLOW_STAGES.find((item) => item.key === request.stage)?.label}
-                      </td>
                       <td className="px-4 py-3">{getAssigneeName(request, users)}</td>
                       {!hideFinancials ? (
                         <td className="px-4 py-3 font-semibold">
@@ -3594,7 +3616,7 @@ function RequestsTable({
                         </td>
                       ) : null}
                       <td className="px-4 py-3">
-                        <StatusBadge status={request.status} />
+                        <StageStatusBadge request={request} />
                       </td>
                       <td className="px-4 py-3">
                         {getRequestInvoices(request).length > 0 ? (
@@ -3887,8 +3909,9 @@ function ActionPanel({
       (request.status === "Rashid Auto Approved" && request.stage === "edlyn"));
   const canStaffCancel = role !== "Employee" && !isClosed(request.status);
   const financeCanClearInvoice = canUse("Aileen") && isInvoiceFinancePending(request);
-  // Invoice upload appears from purchase through order confirmation only — not
-  // before the order is placed, and not once delivery tracking has begun.
+  // Invoice upload appears from purchase onward — not before the order is
+  // placed. It stays available through delivery and even after all items are
+  // received, because supplier invoices often arrive after delivery.
   const procureCanUploadInvoice =
     canUse("Edlyn") &&
     !isClosed(request.status) &&
@@ -3898,6 +3921,9 @@ function ActionPanel({
       "Aileen Finance Review",
       "Invoice Cleared",
       "Edlyn Order Confirmation",
+      "Delivery Tracking",
+      "Order Confirmed",
+      "Item Received",
     ].includes(request.status);
   const procureCanStartDelivery =
     canUse("Edlyn") &&
@@ -3928,6 +3954,8 @@ function ActionPanel({
             "Delivery Tracking":
               "Step 4 of 4 — Update each item's delivery status as it arrives. The request closes automatically once every item is Delivered.",
             "Order Confirmed": "Step 4 of 4 — Mark items received as they arrive.",
+            "Item Received":
+              "All items delivered — now with Finance for closure. If a supplier invoice still needs filing, upload it here and Finance will clear it before closing.",
           } as Record<string, string>
         )[request.status] ?? null
       : null;
@@ -5248,7 +5276,7 @@ function ActionPanel({
             departmentReviewRole &&
             request.stage === "dr-majed" &&
             canUse(departmentReviewRole)) ||
-          (["Edlyn Confirmation", "Purchase in Progress", "Invoice Cleared", "Edlyn Order Confirmation", "Delivery Tracking", "Order Confirmed"].includes(
+          (["Edlyn Confirmation", "Purchase in Progress", "Invoice Cleared", "Edlyn Order Confirmation", "Delivery Tracking", "Order Confirmed", "Item Received"].includes(
             request.status,
           ) &&
             canUse("Edlyn")) ||
