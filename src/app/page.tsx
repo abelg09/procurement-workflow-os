@@ -58,6 +58,7 @@ import {
   DEFAULT_PROJECT_OPTIONS,
   FINANCE_APPROVAL_EMAIL,
   InvoiceDetails,
+  InboxInvoice,
   canProcureManageItemStatus,
   LINE_ITEM_STATUSES,
   LogisticsDetails,
@@ -78,6 +79,11 @@ import {
   STATUSES,
   UserProfile,
   WORKFLOW_STAGES,
+  addInboxInvoices,
+  assignInboxInvoiceToRequest,
+  getInboxInvoices,
+  removeInboxInvoice,
+  updateInboxInvoice,
   applyLaunchCleanup,
   createDailyReminderNotifications,
   getAssigneeName,
@@ -188,6 +194,7 @@ type View =
   | "dashboard"
   | "work-queue"
   | "company-dashboard"
+  | "invoices"
   | "new-request"
   | "notifications"
   | "admin"
@@ -6638,6 +6645,432 @@ function SlackReadiness({ users, liveSyncStatus }: { users: UserProfile[]; liveS
   );
 }
 
+// Central invoice inbox: upload invoices in one place, then match/move each one
+// onto the right request. Available to Procure, Finance, and Admin.
+function InvoicesInbox({
+  state,
+  currentUser,
+  onPersist,
+}: {
+  state: ProcurementState;
+  currentUser: UserProfile;
+  onPersist: (updater: (current: ProcurementState) => ProcurementState) => void | Promise<void>;
+}) {
+  const inbox = getInboxInvoices(state);
+  const unassigned = inbox.filter((entry) => entry.status === "unassigned");
+  const assigned = inbox.filter((entry) => entry.status === "assigned");
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [moveTargetId, setMoveTargetId] = useState<string | null>(null);
+  const [requestSearch, setRequestSearch] = useState("");
+  const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const [moveError, setMoveError] = useState("");
+
+  const moveTarget = moveTargetId
+    ? inbox.find((entry) => entry.id === moveTargetId) ?? null
+    : null;
+
+  const closeMove = () => {
+    setMoveTargetId(null);
+    setRequestSearch("");
+    setSelectedRequestId(null);
+    setSelectedItemIds([]);
+    setMoveError("");
+  };
+
+  const uploadOne = async (file: File): Promise<InboxInvoice> => {
+    if (file.size > MAX_INVOICE_FILE_BYTES) {
+      throw new Error(`${file.name} is larger than 10 MB.`);
+    }
+    const base: InboxInvoice = {
+      id: makeId("inbox"),
+      fileName: file.name,
+      uploadedInvoiceFileSize: file.size,
+      uploadedInvoiceFileType: file.type,
+      uploadedAt: nowIso(),
+      uploadedById: currentUser.id,
+      status: "unassigned",
+      ocrStatus: "skipped",
+    };
+    const supabaseClient = getSupabaseBrowserClient();
+    if (!supabaseClient) {
+      return { ...base, uploadedInvoiceDataUrl: await fileToDataUrl(file) };
+    }
+    const path = ["invoices", "inbox", `${Date.now()}-${safeStorageFileName(file.name)}`].join("/");
+    const { error } = await supabaseClient.storage
+      .from(INVOICE_STORAGE_BUCKET)
+      .upload(path, file, {
+        cacheControl: "3600",
+        contentType: file.type || undefined,
+        upsert: false,
+      });
+    if (error) {
+      throw new Error(`${file.name}: ${error.message}`);
+    }
+    return {
+      ...base,
+      uploadedInvoiceStorageBucket: INVOICE_STORAGE_BUCKET,
+      uploadedInvoiceStoragePath: path,
+    };
+  };
+
+  const handleFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setUploading(true);
+    setUploadError("");
+    try {
+      const created: InboxInvoice[] = [];
+      for (const file of Array.from(fileList)) {
+        created.push(await uploadOne(file));
+      }
+      await onPersist((current) => addInboxInvoices(current, created));
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "Could not upload invoice(s).");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const rankedRequests = state.requests
+    .filter((request) => !isClosed(request.status))
+    .map((request) => {
+      const hay =
+        `${request.id} ${request.employeeName} ${request.itemName} ${request.vendorName} ${request.project}`.toLowerCase();
+      const terms = requestSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const matchesSearch = terms.every((term) => hay.includes(term));
+      let score = 0;
+      if (
+        moveTarget?.vendor &&
+        request.vendorName &&
+        request.vendorName.toLowerCase().includes(moveTarget.vendor.toLowerCase())
+      ) {
+        score += 2;
+      }
+      if (
+        moveTarget?.invoiceAmount &&
+        Math.abs(getRequestTotalAed(request) - moveTarget.invoiceAmount) < 0.5
+      ) {
+        score += 3;
+      }
+      return { request, score, matchesSearch };
+    })
+    .filter((entry) => entry.matchesSearch)
+    .sort((a, b) => b.score - a.score || b.request.updatedAt.localeCompare(a.request.updatedAt))
+    .slice(0, 25);
+
+  const selectedRequest = selectedRequestId
+    ? state.requests.find((request) => request.id === selectedRequestId) ?? null
+    : null;
+  const selectedRequestItems = selectedRequest ? getRequestLineItems(selectedRequest) : [];
+
+  const confirmMove = async () => {
+    if (!moveTarget || !selectedRequest) return;
+    const amount = Number.isFinite(moveTarget.invoiceAmount) ? Number(moveTarget.invoiceAmount) : 0;
+    if (!(amount > 0)) {
+      setMoveError("Enter the invoice amount (greater than 0) before moving it.");
+      return;
+    }
+    await onPersist((current) =>
+      assignInboxInvoiceToRequest(current, {
+        inboxId: moveTarget.id,
+        requestId: selectedRequest.id,
+        lineItemIds: selectedItemIds,
+        actorId: currentUser.id,
+      }),
+    );
+    closeMove();
+  };
+
+  return (
+    <section className="grid gap-5">
+      <div className={classNames(panelClass, "p-5")}>
+        <div className="flex items-center gap-2">
+          <FileText className="h-5 w-5 text-blue-700" />
+          <h3 className="text-base font-bold text-slate-950">Upload invoices</h3>
+        </div>
+        <p className="mt-2 text-sm text-slate-500">
+          Keep every invoice in one place, then match each to its request. You can upload several at
+          once.
+        </p>
+        <div className="mt-4">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100">
+            <Upload className="h-4 w-4" />
+            {uploading ? "Uploading..." : "Choose invoice files"}
+            <input
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.xls,.xlsx"
+              className="hidden"
+              disabled={uploading}
+              multiple
+              onChange={(event) => {
+                void handleFiles(event.target.files);
+                event.target.value = "";
+              }}
+              type="file"
+            />
+          </label>
+        </div>
+        {uploadError ? (
+          <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-2 text-sm font-semibold text-red-800">
+            {uploadError}
+          </p>
+        ) : null}
+        <p className="mt-3 text-xs text-slate-500">
+          Auto-reading the invoice number and amount from the PDF (OCR) is being connected next — for
+          now, type the invoice number and amount below so matching and finance review work.
+        </p>
+      </div>
+
+      <div className={classNames(panelClass, "p-5")}>
+        <h3 className="text-base font-bold text-slate-950">To match ({unassigned.length})</h3>
+        {unassigned.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-500">
+            No unmatched invoices. Upload some above to get started.
+          </p>
+        ) : (
+          <div className="mt-4 grid gap-3">
+            {unassigned.map((entry) => (
+              <div className={classNames(insetPanelClass, "p-3")} key={entry.id}>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="break-words font-semibold text-slate-950">{entry.fileName}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Uploaded {formatDateTime(entry.uploadedAt)}
+                      {fileSizeLabel(entry.uploadedInvoiceFileSize)
+                        ? ` · ${fileSizeLabel(entry.uploadedInvoiceFileSize)}`
+                        : ""}
+                    </p>
+                  </div>
+                  <InvoiceFileLink
+                    compact
+                    invoice={
+                      {
+                        uploadedInvoiceFile: entry.fileName,
+                        uploadedInvoiceStorageBucket: entry.uploadedInvoiceStorageBucket,
+                        uploadedInvoiceStoragePath: entry.uploadedInvoiceStoragePath,
+                        uploadedInvoiceDataUrl: entry.uploadedInvoiceDataUrl,
+                      } as InvoiceDetails
+                    }
+                    label="Open PDF"
+                  />
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <Field label="Invoice number">
+                    <TextInput
+                      defaultValue={entry.invoiceNumber ?? ""}
+                      placeholder="INV-1234"
+                      onBlur={(event) =>
+                        void onPersist((current) =>
+                          updateInboxInvoice(current, entry.id, {
+                            invoiceNumber: event.target.value.trim(),
+                          }),
+                        )
+                      }
+                    />
+                  </Field>
+                  <Field label="Amount (AED)">
+                    <TextInput
+                      defaultValue={entry.invoiceAmount ?? ""}
+                      min={0}
+                      step="any"
+                      type="number"
+                      onBlur={(event) =>
+                        void onPersist((current) =>
+                          updateInboxInvoice(current, entry.id, {
+                            invoiceAmount: event.target.value
+                              ? Number(event.target.value)
+                              : undefined,
+                          }),
+                        )
+                      }
+                    />
+                  </Field>
+                  <Field label="Invoice date">
+                    <TextInput
+                      defaultValue={entry.invoiceDate ?? ""}
+                      type="date"
+                      onBlur={(event) =>
+                        void onPersist((current) =>
+                          updateInboxInvoice(current, entry.id, {
+                            invoiceDate: event.target.value,
+                          }),
+                        )
+                      }
+                    />
+                  </Field>
+                  <Field label="Vendor">
+                    <TextInput
+                      defaultValue={entry.vendor ?? ""}
+                      placeholder="Vendor name"
+                      onBlur={(event) =>
+                        void onPersist((current) =>
+                          updateInboxInvoice(current, entry.id, {
+                            vendor: event.target.value.trim(),
+                          }),
+                        )
+                      }
+                    />
+                  </Field>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <IconButton
+                    icon={<Send className="h-4 w-4" />}
+                    onClick={() => {
+                      setMoveTargetId(entry.id);
+                      setRequestSearch("");
+                      setSelectedRequestId(null);
+                      setSelectedItemIds([]);
+                      setMoveError("");
+                    }}
+                  >
+                    Move to request
+                  </IconButton>
+                  <IconButton
+                    icon={<XCircle className="h-4 w-4" />}
+                    onClick={() => {
+                      if (window.confirm(`Remove ${entry.fileName} from the inbox?`)) {
+                        void onPersist((current) => removeInboxInvoice(current, entry.id));
+                      }
+                    }}
+                    variant="secondary"
+                  >
+                    Delete
+                  </IconButton>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {assigned.length > 0 ? (
+        <CollapsibleCard title={`Moved into requests (${assigned.length})`}>
+          <div className="mt-4 grid gap-2">
+            {assigned.map((entry) => (
+              <div
+                className="flex flex-col gap-1 rounded-lg border border-slate-200 bg-white p-2 text-sm sm:flex-row sm:items-center sm:justify-between"
+                key={entry.id}
+              >
+                <span className="min-w-0 break-words font-medium text-slate-800">
+                  {entry.fileName}
+                  {entry.invoiceNumber ? ` · ${entry.invoiceNumber}` : ""}
+                </span>
+                <span className="text-xs text-slate-500">
+                  Moved to {entry.assignedRequestId}
+                  {entry.assignedAt ? ` · ${formatDateTime(entry.assignedAt)}` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </CollapsibleCard>
+      ) : null}
+
+      {moveTarget ? (
+        <Modal onClose={closeMove} title={`Move ${moveTarget.fileName}`} wide>
+          <p className="text-sm text-slate-500">
+            Pick the request this invoice belongs to. Requests matching the vendor or amount are shown
+            first.
+          </p>
+          <div className="mt-3">
+            <TextInput
+              placeholder="Search by request ID, employee, item, or vendor"
+              value={requestSearch}
+              onChange={(event) => setRequestSearch(event.target.value)}
+            />
+          </div>
+          <div className="mt-3 grid max-h-64 gap-2 overflow-y-auto">
+            {rankedRequests.length === 0 ? (
+              <p className="text-sm text-slate-500">No open requests match your search.</p>
+            ) : (
+              rankedRequests.map(({ request, score }) => (
+                <button
+                  className={classNames(
+                    "rounded-lg border p-2 text-left text-sm transition",
+                    selectedRequestId === request.id
+                      ? "border-blue-400 bg-blue-50"
+                      : "border-slate-200 bg-white hover:bg-slate-50",
+                  )}
+                  key={request.id}
+                  onClick={() => {
+                    setSelectedRequestId(request.id);
+                    setSelectedItemIds([]);
+                  }}
+                  type="button"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-slate-950">{request.id}</span>
+                    <span className="text-xs text-slate-500">
+                      {money(getRequestTotalAed(request), "AED")}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate text-xs text-slate-500">
+                    {request.employeeName} · {request.itemName} · {request.vendorName || "No vendor"}
+                  </p>
+                  {score > 0 ? (
+                    <span className="mt-1 inline-flex rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-semibold text-emerald-700">
+                      Likely match
+                    </span>
+                  ) : null}
+                </button>
+              ))
+            )}
+          </div>
+          {selectedRequest && selectedRequestItems.length > 1 ? (
+            <div className="mt-4">
+              <p className="text-sm font-semibold text-slate-950">Which items does it cover?</p>
+              <p className="mt-1 text-xs text-slate-500">Leave all unticked to cover every item.</p>
+              <div className="mt-2 grid gap-2">
+                {selectedRequestItems.map((item, index) => (
+                  <label
+                    className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-sm"
+                    key={item.id}
+                  >
+                    <input
+                      checked={selectedItemIds.includes(item.id)}
+                      onChange={(event) =>
+                        setSelectedItemIds((current) =>
+                          event.target.checked
+                            ? [...current, item.id]
+                            : current.filter((id) => id !== item.id),
+                        )
+                      }
+                      type="checkbox"
+                    />
+                    <span>
+                      Item {index + 1}: {item.itemName}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {moveError ? (
+            <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-2 text-sm font-semibold text-red-800">
+              {moveError}
+            </p>
+          ) : null}
+          <div className="mt-4 flex justify-end gap-2">
+            <IconButton
+              icon={<XCircle className="h-4 w-4" />}
+              onClick={closeMove}
+              variant="secondary"
+            >
+              Cancel
+            </IconButton>
+            <IconButton
+              disabled={!selectedRequest}
+              icon={<Check className="h-4 w-4" />}
+              onClick={() => void confirmMove()}
+            >
+              Move invoice here
+            </IconButton>
+          </div>
+        </Modal>
+      ) : null}
+    </section>
+  );
+}
+
 function AdminPanel({
   state,
   setState,
@@ -8907,6 +9340,7 @@ export default function Home() {
   const isEmployee = currentUser.role === "Employee";
   const hasWorkflowRole = !["Employee", "Admin"].includes(currentUser.role);
   const canViewCompanyDashboard = currentUser.role === "Admin" || hasWorkflowRole;
+  const canUseInvoiceInbox = ["Edlyn", "Aileen", "Admin"].includes(currentUser.role);
   const usesPersonalDashboard =
     isEmployee || authStatus === "signed-in";
   const canSwitchRoles = authStatus === "local-dev";
@@ -9174,6 +9608,15 @@ export default function Home() {
                 },
               ]
             : []),
+          ...(canUseInvoiceInbox
+            ? [
+                {
+                  id: "invoices" as View,
+                  label: "Invoices",
+                  icon: <FileText className="h-4 w-4" />,
+                },
+              ]
+            : []),
           { id: "new-request", label: "New request", icon: <Plus className="h-4 w-4" /> },
           { id: "notifications", label: "Notifications", icon: <Bell className="h-4 w-4" /> },
           { id: "trash", label: "Trash", icon: <XCircle className="h-4 w-4" /> },
@@ -9203,6 +9646,11 @@ export default function Home() {
       title: "Company dashboard",
       subtitle: "Company-wide procurement performance, approvals, and closures.",
     },
+    invoices: {
+      title: "Invoices",
+      subtitle:
+        "Upload invoices centrally, then match or move each one onto the right request.",
+    },
     "new-request": {
       title: "New procurement request",
       subtitle: "Create a request for Project Manager review.",
@@ -9226,9 +9674,12 @@ export default function Home() {
       view === "admin" ||
       view === "trash" ||
       view === "company-dashboard" ||
+      view === "invoices" ||
       view === "work-queue")
       ? "dashboard"
       : view === "company-dashboard" && !canViewCompanyDashboard
+      ? "dashboard"
+      : view === "invoices" && !canUseInvoiceInbox
       ? "dashboard"
       : view;
   const currentViewCopy = viewCopy[activeView];
@@ -9740,6 +10191,14 @@ export default function Home() {
               state={state}
             />
           ) : null}
+
+        {activeView === "invoices" && canUseInvoiceInbox ? (
+          <InvoicesInbox
+            currentUser={currentUser}
+            onPersist={persistNotificationRead}
+            state={state}
+          />
+        ) : null}
 
         {activeView === "new-request" ? (
           <RequestForm

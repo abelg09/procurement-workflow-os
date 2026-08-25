@@ -260,6 +260,36 @@ export type InvoiceDetails = {
   replacedById?: string;
 };
 
+// A centrally-uploaded invoice that has not yet been matched to a request.
+// Lives in state.invoiceInbox until it is "moved" onto a specific request,
+// at which point it becomes a normal InvoiceDetails on that request.
+export type InboxInvoiceStatus = "unassigned" | "assigned";
+
+export type InboxInvoice = {
+  id: string;
+  fileName: string;
+  uploadedInvoiceFileSize?: number;
+  uploadedInvoiceFileType?: string;
+  uploadedInvoiceStorageBucket?: string;
+  uploadedInvoiceStoragePath?: string;
+  uploadedInvoiceDataUrl?: string;
+  uploadedAt: string;
+  uploadedById: string;
+  // Extracted (OCR) or manually entered metadata used for matching.
+  invoiceNumber?: string;
+  invoiceAmount?: number;
+  invoiceDate?: string;
+  vendor?: string;
+  ocrStatus?: "pending" | "done" | "failed" | "skipped";
+  ocrConfirmed?: boolean;
+  // Assignment state.
+  status: InboxInvoiceStatus;
+  assignedRequestId?: string;
+  assignedInvoiceId?: string;
+  assignedAt?: string;
+  assignedById?: string;
+};
+
 export type LogisticsDetails = {
   deliveryStatus: DeliveryStatus;
   provider: string;
@@ -420,6 +450,7 @@ export type ProcurementState = {
   outboundNotifications: OutboundNotificationLog[];
   chatbotMessages: ChatbotMessage[];
   projectOptions: string[];
+  invoiceInbox?: InboxInvoice[];
   maintenance?: {
     launchCleanupVersion?: string;
     launchCleanupAt?: string;
@@ -4127,6 +4158,163 @@ export function answerProcurementQuestion(
 // 10 MB, timing out every read (500) and blocking all saves. Stripping it here —
 // on every serialize (DB/localStorage write) and every parse (load) — means the
 // blob can never be persisted or reintroduced by a stale cache again.
+// ---------------------------------------------------------------------------
+// Invoice inbox — upload centrally, then match/move onto a request.
+// ---------------------------------------------------------------------------
+
+export function getInboxInvoices(state: ProcurementState): InboxInvoice[] {
+  return Array.isArray(state.invoiceInbox) ? state.invoiceInbox : [];
+}
+
+const normalizeInvoiceNumberKey = (value?: string) =>
+  (value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+export function addInboxInvoices(
+  state: ProcurementState,
+  invoices: InboxInvoice[],
+): ProcurementState {
+  if (invoices.length === 0) return state;
+  return { ...state, invoiceInbox: [...invoices, ...getInboxInvoices(state)] };
+}
+
+export function updateInboxInvoice(
+  state: ProcurementState,
+  id: string,
+  patch: Partial<InboxInvoice>,
+): ProcurementState {
+  const inbox = getInboxInvoices(state);
+  if (!inbox.some((entry) => entry.id === id)) return state;
+  return {
+    ...state,
+    invoiceInbox: inbox.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)),
+  };
+}
+
+export function removeInboxInvoice(state: ProcurementState, id: string): ProcurementState {
+  const inbox = getInboxInvoices(state);
+  if (!inbox.some((entry) => entry.id === id)) return state;
+  return { ...state, invoiceInbox: inbox.filter((entry) => entry.id !== id) };
+}
+
+// Find an unassigned inbox invoice whose number matches (ignoring case, spaces,
+// and punctuation) — used to auto-match when a number is typed on a request.
+export function findInboxMatchByNumber(
+  state: ProcurementState,
+  invoiceNumber: string,
+): InboxInvoice | undefined {
+  const key = normalizeInvoiceNumberKey(invoiceNumber);
+  if (!key) return undefined;
+  return getInboxInvoices(state).find(
+    (entry) =>
+      entry.status === "unassigned" && normalizeInvoiceNumberKey(entry.invoiceNumber) === key,
+  );
+}
+
+const INBOX_ASSIGN_ROLES: Role[] = ["Edlyn", "Aileen", "Admin"];
+
+// Move an inbox invoice onto a request: attach it as a normal InvoiceDetails
+// (pending Finance), notify Finance, log it, and mark the inbox entry assigned.
+// Deliberately does NOT change the request's status/stage/assignee, so it never
+// disrupts the request's position in the workflow.
+export function assignInboxInvoiceToRequest(
+  state: ProcurementState,
+  params: { inboxId: string; requestId: string; lineItemIds?: string[]; actorId: string },
+): ProcurementState {
+  const actor = getUserById(state.users, params.actorId);
+  const entry = getInboxInvoices(state).find((candidate) => candidate.id === params.inboxId);
+  const request = state.requests.find((candidate) => candidate.id === params.requestId);
+  if (!actor || !entry || !request) return state;
+  if (!INBOX_ASSIGN_ROLES.includes(actor.role)) return state;
+  if (entry.status === "assigned") return state;
+
+  const dateTime = nowIso();
+  const amount = Number.isFinite(entry.invoiceAmount) ? Number(entry.invoiceAmount) : 0;
+  if (!(amount > 0) || !entry.fileName.trim()) return state;
+  if (!entry.uploadedInvoiceStoragePath && !entry.uploadedInvoiceDataUrl) return state;
+
+  const invoice: InvoiceDetails = {
+    invoiceNumber: entry.invoiceNumber?.trim() || `${request.id}-INV`,
+    invoiceAmount: amount,
+    invoiceDate: entry.invoiceDate || dateTime.slice(0, 10),
+    vendor: entry.vendor?.trim() || request.vendorName || request.vendor.companyName,
+    lineItemIds:
+      params.lineItemIds && params.lineItemIds.length > 0 ? params.lineItemIds : undefined,
+    uploadedInvoiceFile: entry.fileName,
+    uploadedInvoiceFileSize: entry.uploadedInvoiceFileSize,
+    uploadedInvoiceFileType: entry.uploadedInvoiceFileType,
+    uploadedInvoiceUploadedAt: entry.uploadedAt,
+    uploadedInvoiceStorageBucket: entry.uploadedInvoiceStorageBucket,
+    uploadedInvoiceStoragePath: entry.uploadedInvoiceStoragePath,
+    uploadedInvoiceDataUrl: entry.uploadedInvoiceDataUrl,
+    paymentTerms: "COD",
+    financeNotes: "",
+  };
+
+  // Clone the target request before upsertRequestInvoice mutates it.
+  const editable: ProcurementRequest = {
+    ...request,
+    invoices: request.invoices?.map((existing) => ({ ...existing })),
+    invoice: request.invoice ? { ...request.invoice } : request.invoice,
+    logistics: request.logistics ? { ...request.logistics } : request.logistics,
+  };
+  const upserted = upsertRequestInvoice(editable, invoice, dateTime);
+  editable.updatedAt = dateTime;
+
+  const notifications = [...state.notifications];
+  const financeUser = state.users.find((user) => user.role === "Aileen");
+  if (financeUser) {
+    addNotification(
+      notifications,
+      {
+        userId: financeUser.id,
+        requestId: request.id,
+        title: "Invoice moved from inbox",
+        body: `${request.id}: invoice ${upserted.invoice.invoiceNumber} attached and ready for finance documentation.`,
+        type: "invoice",
+      },
+      dateTime,
+    );
+  }
+
+  const auditLogs: AuditLog[] = [
+    {
+      id: makeId("log"),
+      requestId: request.id,
+      userId: actor.id,
+      userName: actor.name,
+      action: `Moved invoice ${upserted.invoice.invoiceNumber} from the invoice inbox`,
+      dateTime,
+      previousStatus: request.status,
+      newStatus: request.status,
+      uploadedInvoiceReference: upserted.invoice.uploadedInvoiceFile,
+    },
+    ...state.auditLogs,
+  ];
+
+  const invoiceInbox = getInboxInvoices(state).map((candidate) =>
+    candidate.id === params.inboxId
+      ? {
+          ...candidate,
+          status: "assigned" as const,
+          assignedRequestId: request.id,
+          assignedInvoiceId: upserted.invoice.id,
+          assignedAt: dateTime,
+          assignedById: actor.id,
+        }
+      : candidate,
+  );
+
+  return {
+    ...state,
+    requests: state.requests.map((candidate) =>
+      candidate.id === request.id ? editable : candidate,
+    ),
+    notifications,
+    auditLogs,
+    invoiceInbox,
+  };
+}
+
 export function stripEmbeddedInvoiceBlobs(state: ProcurementState): ProcurementState {
   const cleanInvoice = <T extends InvoiceDetails | undefined | null>(invoice: T): T => {
     if (!invoice || typeof invoice !== "object" || !invoice.uploadedInvoiceDataUrl) {
@@ -4148,7 +4336,19 @@ export function stripEmbeddedInvoiceBlobs(state: ProcurementState): ProcurementS
     return { ...request, invoice, invoices };
   });
 
-  return changed ? { ...state, requests } : state;
+  // The inbox can hold base64 fallbacks too; strip them so they never re-bloat
+  // the single-row state (the root cause of the earlier save outage).
+  let inboxChanged = false;
+  const invoiceInbox = state.invoiceInbox?.map((entry) => {
+    if (!entry.uploadedInvoiceDataUrl) return entry;
+    inboxChanged = true;
+    const rest = { ...entry };
+    delete rest.uploadedInvoiceDataUrl;
+    return rest;
+  });
+
+  if (!changed && !inboxChanged) return state;
+  return { ...state, requests, ...(inboxChanged ? { invoiceInbox } : {}) };
 }
 
 export function serializeState(state: ProcurementState) {
