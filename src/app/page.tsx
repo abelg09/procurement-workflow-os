@@ -3878,22 +3878,26 @@ function ActionPanel({
     (["Edlyn Confirmation", "Purchase in Progress"].includes(request.status) ||
       (request.status === "Rashid Auto Approved" && request.stage === "edlyn") ||
       ["Invoice Uploaded", "Aileen Finance Review", "Invoice Cleared", "Edlyn Order Confirmation", "Delivery Tracking", "Order Confirmed"].includes(request.status));
-  const canProcureResearchPrices = canProcureClarify;
+  // Price research only makes sense while confirming or actively purchasing —
+  // not once the invoice/delivery phase has started. (Clarification stays
+  // broadly available but is collapsed by default.)
+  const canProcureResearchPrices =
+    canUse("Edlyn") &&
+    (["Edlyn Confirmation", "Purchase in Progress"].includes(request.status) ||
+      (request.status === "Rashid Auto Approved" && request.stage === "edlyn"));
   const canStaffCancel = role !== "Employee" && !isClosed(request.status);
   const financeCanClearInvoice = canUse("Aileen") && isInvoiceFinancePending(request);
+  // Invoice upload appears from purchase through order confirmation only — not
+  // before the order is placed, and not once delivery tracking has begun.
   const procureCanUploadInvoice =
     canUse("Edlyn") &&
     !isClosed(request.status) &&
     [
-      "Edlyn Confirmation",
-      "Rashid Auto Approved",
       "Purchase in Progress",
       "Invoice Uploaded",
       "Aileen Finance Review",
       "Invoice Cleared",
       "Edlyn Order Confirmation",
-      "Delivery Tracking",
-      "Order Confirmed",
     ].includes(request.status);
   const procureCanStartDelivery =
     canUse("Edlyn") &&
