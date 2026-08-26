@@ -891,11 +891,20 @@ function applyOutboundDeliveryUpdates(
   return changed ? { ...state, outboundNotifications } : state;
 }
 
+// Guards against the same tab firing overlapping notification flushes. Each
+// call reads the "queued" deliveries and posts them, so two concurrent flushes
+// (many UI events trigger one) would double-post to Slack. One flush at a time.
+let outboundFlushInFlight = false;
+
 async function flushQueuedOutboundNotifications(
   supabaseClient: SupabaseBrowserClient,
   authUser: SignedInUser,
   localState: ProcurementState,
 ) {
+  if (outboundFlushInFlight) {
+    return null;
+  }
+  outboundFlushInFlight = true;
   try {
     if (!supabaseUrl || !supabaseAnonKey) {
       return null;
@@ -963,6 +972,8 @@ async function flushQueuedOutboundNotifications(
       message: errorMessage(error, "Notification delivery timed out."),
     });
     return null;
+  } finally {
+    outboundFlushInFlight = false;
   }
 }
 

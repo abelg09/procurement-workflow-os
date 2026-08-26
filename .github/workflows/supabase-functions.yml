@@ -28,6 +28,13 @@ jobs:
         run: |
           supabase functions deploy procurement-notifications --project-ref "$SUPABASE_PROJECT_REF"
 
+      - name: Deploy invoice OCR function
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF || secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          supabase functions deploy ocr-invoice --project-ref "$SUPABASE_PROJECT_REF"
+
       - name: Resolve Supabase service role key
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -74,6 +81,7 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF || secrets.SUPABASE_PROJECT_REF }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GOOGLE_VISION_API_KEY: ${{ secrets.GOOGLE_VISION_API_KEY }}
           APP_BASE_URL: ${{ vars.APP_BASE_URL || vars.PROCUREMENT_DASHBOARD_URL || 'https://procurement.sulmi.ai/' }}
           PROCUREMENT_DASHBOARD_URL: ${{ vars.PROCUREMENT_DASHBOARD_URL || 'https://procurement.sulmi.ai/' }}
         run: |
@@ -81,6 +89,7 @@ jobs:
           [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] && args+=("SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY")
           [ -n "$SLACK_BOT_TOKEN" ] && args+=("SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN")
           [ -n "$SLACK_WEBHOOK_URL" ] && args+=("SLACK_WEBHOOK_URL=$SLACK_WEBHOOK_URL")
+          [ -n "$GOOGLE_VISION_API_KEY" ] && args+=("GOOGLE_VISION_API_KEY=$GOOGLE_VISION_API_KEY")
           [ -n "$APP_BASE_URL" ] && args+=("APP_BASE_URL=$APP_BASE_URL")
           [ -n "$PROCUREMENT_DASHBOARD_URL" ] && args+=("PROCUREMENT_DASHBOARD_URL=$PROCUREMENT_DASHBOARD_URL")
 
