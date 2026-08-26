@@ -144,58 +144,63 @@ async function sendSlack(
     appBaseUrl,
     delivery.requestId,
   )}`;
+  const blocks = slackBlocks(delivery, appBaseUrl);
+
+  // Deliver to BOTH channels the notification is configured for: DM the specific
+  // person (bot token + their Slack ID) AND mirror to the shared channel
+  // (webhook). "sent" if at least one succeeds; the DM's message id is kept.
+  const outcomes: Array<{ ok: boolean; error?: string }> = [];
+  let providerMessageId = "";
 
   if (botToken && user.slackUserId) {
-    const response = await fetch("https://slack.com/api/chat.postMessage", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${botToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        channel: user.slackUserId,
-        text,
-        blocks: slackBlocks(delivery, appBaseUrl),
-      }),
-    });
-    const responseJson = await response.json().catch(() => ({}));
-
-    if (!response.ok || responseJson.ok === false) {
-      return {
-        status: "failed" as const,
-        error:
-          responseJson.error ??
-          `Slack returned HTTP ${response.status}.`,
-      };
+    try {
+      const response = await fetch("https://slack.com/api/chat.postMessage", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${botToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ channel: user.slackUserId, text, blocks }),
+      });
+      const responseJson = await response.json().catch(() => ({}));
+      if (!response.ok || responseJson.ok === false) {
+        outcomes.push({ ok: false, error: responseJson.error ?? `Slack DM HTTP ${response.status}.` });
+      } else {
+        outcomes.push({ ok: true });
+        if (responseJson.ts) providerMessageId = String(responseJson.ts);
+      }
+    } catch (error) {
+      outcomes.push({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }
-
-    return {
-      status: "sent" as const,
-      providerMessageId: responseJson.ts ? String(responseJson.ts) : "",
-    };
   }
 
   if (webhookUrl) {
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text,
-        blocks: slackBlocks(delivery, appBaseUrl),
-      }),
-    });
-
-    if (!response.ok) {
-      return {
-        status: "failed" as const,
-        error: await response.text(),
-      };
+    try {
+      const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, blocks }),
+      });
+      if (!response.ok) {
+        outcomes.push({ ok: false, error: await response.text() });
+      } else {
+        outcomes.push({ ok: true });
+      }
+    } catch (error) {
+      outcomes.push({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }
-
-    return { status: "sent" as const };
   }
 
-  return { status: "skipped" as const, error: "Slack provider is not configured." };
+  if (outcomes.length === 0) {
+    return { status: "skipped" as const, error: "Slack provider is not configured." };
+  }
+  if (outcomes.some((outcome) => outcome.ok)) {
+    return { status: "sent" as const, providerMessageId };
+  }
+  return {
+    status: "failed" as const,
+    error: outcomes.map((outcome) => outcome.error).filter(Boolean).join("; ") || "Slack send failed.",
+  };
 }
 
 function deliveryUpdate(delivery: OutboundNotificationLog) {
